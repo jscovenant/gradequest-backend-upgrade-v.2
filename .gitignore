@@ -1,0 +1,28 @@
+# Environment
+.env
+
+# Dependencies
+/vendor
+/node_modules
+
+# Laravel
+/storage
+/bootstrap/cache
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build
+/public/build
+
+# Server / cPanel junk
+backend.zip
+cookies.txt
+php.ini
+.user.ini
+
+# OS
+.DS_Store
+Thumbs.db

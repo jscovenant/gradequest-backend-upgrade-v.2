@@ -1,0 +1,425 @@
+[12-Feb-2025 20:49:55 UTC] PHP Fatal error:  Cannot redeclare App\Http\Controllers\Backend\StudentController::DeleteStudent() in /home/gradeque/public_html/app/Http/Controllers/Backend/StudentController.php on line 278
+[11-Mar-2025 17:43:30 UTC] PHP Fatal error:  Uncaught Error: Undefined constant "GlobalSettingsMiddleware" in /home/gradeque/public_html/bootstrap/app.php:22
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 22
+[11-Mar-2025 17:43:37 UTC] PHP Fatal error:  Uncaught Error: Undefined constant "GlobalSettingsMiddleware" in /home/gradeque/public_html/bootstrap/app.php:22
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 22
+[11-Mar-2025 17:43:40 UTC] PHP Fatal error:  Uncaught Error: Undefined constant "GlobalSettingsMiddleware" in /home/gradeque/public_html/bootstrap/app.php:22
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 22
+[11-Mar-2025 17:45:42 UTC] PHP Fatal error:  Uncaught Error: Undefined constant "GlobalSettingsMiddleware" in /home/gradeque/public_html/bootstrap/app.php:22
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 22
+[11-Mar-2025 17:48:46 UTC] PHP Parse error:  syntax error, unexpected token "=>", expecting ")" in /home/gradeque/public_html/bootstrap/app.php on line 17
+[11-Mar-2025 17:50:24 UTC] PHP Parse error:  syntax error, unexpected token "=>", expecting ")" in /home/gradeque/public_html/bootstrap/app.php on line 17
+[11-Mar-2025 17:50:24 UTC] PHP Parse error:  syntax error, unexpected token "=>", expecting ")" in /home/gradeque/public_html/bootstrap/app.php on line 17
+[11-Mar-2025 17:50:24 UTC] PHP Parse error:  syntax error, unexpected token "=>", expecting ")" in /home/gradeque/public_html/bootstrap/app.php on line 17
+[11-Mar-2025 17:50:24 UTC] PHP Parse error:  syntax error, unexpected token "=>", expecting ")" in /home/gradeque/public_html/bootstrap/app.php on line 17
+[26-Jun-2025 16:19:01 UTC] PHP Fatal error:  Trait "App\Models\HasApiTokens" not found in /home/gradeque/public_html/app/Models/User.php on line 12
+[26-Jun-2025 17:02:05 UTC] PHP Fatal error:  Uncaught Error: Call to undefined method Illuminate\Foundation\Configuration\Middleware::appendToMiddlewareStack() in /home/gradeque/public_html/bootstrap/app.php:19
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 19
+[26-Jun-2025 17:14:16 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:19:51 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:23:33 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:31:07 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:31:26 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:35:02 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:37:22 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:37:39 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:40:02 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:48:58 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:51:34 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 17:56:41 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 18:00:25 UTC] PHP Fatal error:  Cannot use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful as EnsureFrontendRequestsAreStateful because the name is already in use in /home/gradeque/public_html/bootstrap/app.php on line 11
+[26-Jun-2025 18:02:50 UTC] PHP Fatal error:  Uncaught Error: Call to undefined method Illuminate\Foundation\Configuration\Middleware::middleware() in /home/gradeque/public_html/bootstrap/app.php:19
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 19
+[26-Jun-2025 18:12:57 UTC] PHP Fatal error:  Uncaught Error: Call to a member function handleRequest() on int in /home/gradeque/public_html/public/index.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/public/index.php on line 17
+[26-Jun-2025 18:13:10 UTC] PHP Fatal error:  Uncaught Error: Call to a member function handleRequest() on int in /home/gradeque/public_html/public/index.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/public/index.php on line 17
+[26-Jun-2025 18:14:38 UTC] PHP Fatal error:  Uncaught Error: Call to a member function handleRequest() on int in /home/gradeque/public_html/public/index.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/public/index.php on line 17
+[26-Jun-2025 18:14:42 UTC] PHP Fatal error:  Uncaught Error: Call to a member function handleRequest() on int in /home/gradeque/public_html/public/index.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/public/index.php on line 17
+[26-Jun-2025 18:14:43 UTC] PHP Fatal error:  Uncaught Error: Call to a member function handleRequest() on int in /home/gradeque/public_html/public/index.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/public/index.php on line 17
+[26-Jun-2025 18:15:31 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:9
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 9
+[26-Jun-2025 18:15:31 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:9
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 9
+[26-Jun-2025 18:16:02 UTC] PHP Fatal error:  Uncaught Error: Call to undefined method Illuminate\Foundation\Configuration\Middleware::middleware() in /home/gradeque/public_html/bootstrap/app.php:19
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 19
+[26-Jun-2025 18:16:06 UTC] PHP Fatal error:  Uncaught Error: Call to undefined method Illuminate\Foundation\Configuration\Middleware::middleware() in /home/gradeque/public_html/bootstrap/app.php:19
+Stack trace:
+#0 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Configuration/ApplicationBuilder.php(250): {closure}()
+#1 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1407): Illuminate\Foundation\Configuration\ApplicationBuilder->Illuminate\Foundation\Configuration\{closure}()
+#2 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1343): Illuminate\Container\Container->fireCallbackArray()
+#3 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(1329): Illuminate\Container\Container->fireAfterResolvingCallbacks()
+#4 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(833): Illuminate\Container\Container->fireResolvingCallbacks()
+#5 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1046): Illuminate\Container\Container->resolve()
+#6 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Container/Container.php(751): Illuminate\Foundation\Application->resolve()
+#7 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1028): Illuminate\Container\Container->make()
+#8 /home/gradeque/public_html/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1186): Illuminate\Foundation\Application->make()
+#9 /home/gradeque/public_html/public/index.php(17): Illuminate\Foundation\Application->handleRequest()
+#10 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 19
+[26-Jun-2025 21:20:55 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\Auth as Auth because the name is already in use in /home/gradeque/public_html/routes/api.php on line 50
+[26-Jun-2025 22:15:13 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\Auth as Auth because the name is already in use in /home/gradeque/public_html/routes/api.php on line 50
+[26-Jun-2025 22:19:35 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\Auth as Auth because the name is already in use in /home/gradeque/public_html/routes/api.php on line 50
+[27-Jun-2025 06:57:00 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 06:58:02 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:00:08 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:04:35 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:07:26 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:17:29 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:19:40 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:55:03 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:58:21 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:58:57 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 07:59:37 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 08:03:03 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 08:03:06 UTC] PHP Fatal error:  Uncaught Error: Class "Application" not found in /home/gradeque/public_html/bootstrap/app.php:7
+Stack trace:
+#0 /home/gradeque/public_html/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/bootstrap/app.php on line 7
+[27-Jun-2025 11:51:42 UTC] PHP Warning:  require(/home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/../symfony/polyfill-mbstring/bootstrap.php): Failed to open stream: No such file or directory in /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/autoload_real.php on line 41
+[27-Jun-2025 11:51:42 UTC] PHP Fatal error:  Uncaught Error: Failed opening required '/home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/../symfony/polyfill-mbstring/bootstrap.php' (include_path='.:/opt/alt/php82/usr/share/pear:/opt/alt/php82/usr/share/php:/usr/share/pear:/usr/share/php') in /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/autoload_real.php:41
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/autoload_real.php(45): {closure}()
+#1 /home/gradeque/public_html/app.gradequest.com.ng/vendor/autoload.php(25): ComposerAutoloaderInit7e8c3c14ff33b199b4a0838993eb8423::getLoader()
+#2 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(13): require('/home/gradeque/...')
+#3 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/autoload_real.php on line 41
+[27-Jun-2025 12:50:17 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 12:50:18 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 12:50:20 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 12:50:20 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 12:50:20 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 13:14:24 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 13:14:57 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 13:14:59 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 13:19:22 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[27-Jun-2025 13:25:27 UTC] PHP Fatal error:  Uncaught Error: Named parameter $web overwrites previous argument in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:12
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(16): require_once()
+#1 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 12
+[03-Oct-2025 10:59:16 UTC] PHP Fatal error:  Cannot use App\Models\BiometricId as BiometricId because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/BiometricQRController.php on line 8
+[03-Oct-2025 10:59:16 UTC] PHP Fatal error:  Cannot use App\Models\BiometricId as BiometricId because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/BiometricQRController.php on line 8
+[10-Oct-2025 10:51:22 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:51:23 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:52:19 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:52:20 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:54:57 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:54:58 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:55:12 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:55:52 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:56:07 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:57:19 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:57:20 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:57:59 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:57:59 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:58:33 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 10:58:34 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:02:22 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:02:22 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:03:22 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:03:22 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:04:27 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:04:27 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:06:48 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:06:49 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:07:23 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:07:24 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:08:07 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[10-Oct-2025 11:08:07 UTC] PHP Fatal error:  Cannot declare class StudentFeeController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/StudentFeeController.php on line 10
+[20-Oct-2025 22:43:39 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\DB as DB because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/SubscriptionController.php on line 10
+[20-Oct-2025 22:43:56 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\DB as DB because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/SubscriptionController.php on line 10
+[20-Oct-2025 23:00:27 UTC] PHP Fatal error:  Cannot use empty array elements in arrays in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/SubscriptionController.php on line 217
+[23-Oct-2025 21:14:49 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:14:50 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:25 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:25 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:41 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:46 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:47 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:15:48 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:16:21 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:16:22 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:17:04 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[23-Oct-2025 21:17:31 UTC] PHP Fatal error:  Cannot use App\Models\WalletTransaction as WalletTransaction because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/WalletController.php on line 9
+[28-Oct-2025 16:06:22 UTC] PHP Fatal error:  Trait "App\Traits\HandlesFeatureLimits" not found in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/ResultController.php on line 50
+[28-Oct-2025 16:06:34 UTC] PHP Fatal error:  Trait "App\Traits\HandlesFeatureLimits" not found in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/ResultController.php on line 50
+[08-Nov-2025 12:04:24 UTC] PHP Fatal error:  Cannot use App\Models\PaymentGateway as PaymentGateway because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/PaymentGatewayController.php on line 9
+[08-Nov-2025 12:04:24 UTC] PHP Fatal error:  Cannot use App\Models\PaymentGateway as PaymentGateway because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/PaymentGatewayController.php on line 9
+[08-Nov-2025 12:05:42 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\Auth as Auth because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/PaymentGatewayController.php on line 10
+[08-Nov-2025 12:05:42 UTC] PHP Fatal error:  Cannot use Illuminate\Support\Facades\Auth as Auth because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/PaymentGatewayController.php on line 10
+[14-Nov-2025 22:42:53 UTC] PHP Fatal error:  During class fetch: Uncaught ParseError: syntax error, unexpected identifier "Student" in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php:84
+Stack trace:
+#0 /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/ClassLoader.php(427): Composer\Autoload\{closure}()
+#1 /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/ResultController.php(51): Composer\Autoload\ClassLoader->loadClass()
+#2 /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/ClassLoader.php(576): include('/home/gradeque/...')
+#3 /home/gradeque/public_html/app.gradequest.com.ng/vendor/composer/ClassLoader.php(427): Composer\Autoload\{closure}()
+#4 [internal function]: Composer\Autoload\ClassLoader->loadClass()
+#5 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Route.php(1097): is_a()
+#6 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Route.php(1036): Illuminate\Routing\Route->controllerMiddleware()
+#7 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Router.php(820): Illuminate\Routing\Route->gatherMiddleware()
+#8 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Router.php(802): Illuminate\Routing\Router->gatherRouteMiddleware()
+#9 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Router.php(786): Illuminate\Routing\Router->runRouteWithinStack()
+#10 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Router.php(750): Illuminate\Routing\Router->runRoute()
+#11 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Routing/Router.php(739): Illuminate\Routing\Router->dispatchToRoute()
+#12 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Kernel.php(201): Illuminate\Routing\Router->dispatch()
+#13 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(144): Illuminate\Foundation\Http\Kernel->Illuminate\Foundation\Http\{closure}()
+#14 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Middleware/TransformsRequest.php(21): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#15 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Middleware/ConvertEmptyStringsToNull.php(31): Illuminate\Foundation\Http\Middleware\TransformsRequest->handle()
+#16 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull->handle()
+#17 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Middleware/TransformsRequest.php(21): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#18 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Middleware/TrimStrings.php(51): Illuminate\Foundation\Http\Middleware\TransformsRequest->handle()
+#19 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Foundation\Http\Middleware\TrimStrings->handle()
+#20 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Http/Middleware/ValidatePostSize.php(27): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#21 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Http\Middleware\ValidatePostSize->handle()
+#22 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Middleware/PreventRequestsDuringMaintenance.php(110): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#23 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Foundation\Http\Middleware\PreventRequestsDuringMaintenance->handle()
+#24 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Http/Middleware/HandleCors.php(62): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#25 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Http\Middleware\HandleCors->handle()
+#26 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Http/Middleware/TrustProxies.php(57): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#27 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(183): Illuminate\Http\Middleware\TrustProxies->handle()
+#28 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline.php(119): Illuminate\Pipeline\Pipeline->Illuminate\Pipeline\{closure}()
+#29 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Kernel.php(176): Illuminate\Pipeline\Pipeline->then()
+#30 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Http/Kernel.php(145): Illuminate\Foundation\Http\Kernel->sendRequestThroughRouter()
+#31 /home/gradeque/public_html/app.gradequest.com.ng/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1188): Illuminate\Foundation\Http\Kernel->handle()
+#32 /home/gradeque/public_html/app.gradequest.com.ng/public/index.php(18): Illuminate\Foundation\Application->handleRequest()
+#33 {main} in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/ResultController.php on line 51
+[14-Nov-2025 22:44:53 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:45:02 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:45:03 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:45:03 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:47:28 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:47:57 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:47:59 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:47:59 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:48:39 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:48:39 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:48:40 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:21 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:21 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:22 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:29 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:30 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:30 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:49 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:52 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:49:52 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:50:36 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:50:36 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:50:36 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:22 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:24 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:24 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:35 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:36 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:51:36 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:53:05 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:53:06 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:53:06 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:15 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:15 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:16 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:57 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:58 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[14-Nov-2025 22:55:59 UTC] PHP Fatal error:  Namespace declaration statement has to be the very first statement or after any declare call in the script in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 3
+[20-Nov-2025 07:36:50 UTC] PHP Fatal error:  Cannot redeclare App\Models\User::children() in /home/gradeque/public_html/app.gradequest.com.ng/app/Models/User.php on line 140
+[02-Dec-2025 07:45:14 UTC] PHP Fatal error:  Cannot use Illuminate\Http\Request as Request because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/BlogController.php on line 10
+[02-Dec-2025 07:45:15 UTC] PHP Fatal error:  Cannot use Illuminate\Http\Request as Request because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Http/Controllers/Backend/BlogController.php on line 10
+[20-Dec-2025 15:57:42 UTC] PHP Fatal error:  Trait "App\Traits\CheckFeeStatus" not found in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:58:04 UTC] PHP Fatal error:  Trait "App\Traits\CheckFeeStatus" not found in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:58:31 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:58:32 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:58:38 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:58:39 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:59:06 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:59:07 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:59:18 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20
+[20-Dec-2025 15:59:19 UTC] PHP Fatal error:  Cannot declare class App\Http\Controllers\Backend\ResultController, because the name is already in use in /home/gradeque/public_html/app.gradequest.com.ng/app/Traits/CheckFeeStatus.php on line 20

@@ -1,0 +1,771 @@
+body{
+    font-family: "Roboto", serif;
+    font-optical-sizing: auto;
+    font-weight: 20px;
+    font-style: normal;
+    font-variation-settings:
+      "wdth" 100;
+}
+
+
+/* Preloader Styles */
+.preloader {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(255, 255, 255, 0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999; /* Ensures the preloader stays on top of everything */
+  }
+
+  .spinner-border {
+    width: 3rem;
+    height: 3rem;
+    border-width: 0.3rem;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+
+  /* Optional: Style for when page content is loaded */
+  body.loaded #preloader {
+    display: none;
+  }
+
+
+/* General Styles for Navbar */
+.navbar {
+    background-color: #0d6efd; /* Updated background */
+    padding: 1rem; /* Add spacing */
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
+    z-index: 1050;
+}
+
+.navbar-brand {
+    color: #ffffff; /* White text for contrast */
+    font-size: 1.5rem; /* Slightly larger font */
+    font-weight: bold; /* Emphasize brand name */
+    text-transform: uppercase; /* Uppercase styling */
+    transition: color 0.3s ease; /* Smooth color transition */
+}
+
+.navbar-brand:hover {
+    color: #f8f9fa; /* Slightly off-white color on hover */
+    text-decoration: none; /* Remove underline */
+}
+
+.navbar-toggler {
+    border: none; /* Remove border */
+    background-color: #ffffff; /* White background for the toggler */
+    padding: 0.5rem 1rem; /* Adjust padding */
+    border-radius: 5px; /* Rounded corners */
+}
+
+.navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 30 30'%3E%3Cpath stroke='rgba(13, 110, 253, 1)' stroke-width='2' d='M4 7h22M4 15h22M4 23h22'/%3E%3C/svg%3E");
+}
+
+.offcanvas {
+    background-color: #343a40; /* Dark background for the offcanvas */
+    color: #f8f9fa; /* Light text */
+}
+
+.offcanvas-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1); /* Subtle divider */
+}
+
+.offcanvas-title {
+    font-size: 1.25rem; /* Increase title size */
+    font-weight: 500;
+}
+
+.navbar-nav .nav-item .nav-link {
+    color: #f8f9fa;
+    font-size: 1rem; /* Standard font size */
+    padding: 0.5rem 1rem; /* Add padding for spacing */
+    transition: color 0.3s ease; /* Smooth color transition */
+}
+
+.navbar-nav .nav-item .nav-link.active,
+.navbar-nav .nav-item .nav-link:hover {
+    color: #01193b;
+    background-color: rgba(13, 110, 253, 0.1); /* Light accent background */
+    border-radius: 5px; /* Rounded corners for hover */
+}
+
+.btn-close-white {
+    filter: invert(1); /* Adjust close button for dark background */
+}
+
+
+/* Hero Section Styles */
+.container {
+    max-width: 1140px; /* Ensures the content doesn't stretch too wide */
+    margin: 0 auto; /* Centers the container */
+}
+
+.hero-section {
+    display: flex;
+    flex-direction: row-reverse;
+    align-items: center;
+    padding: 5rem 2rem;
+    background-color: #f8f9fa; /* Light background color */
+    border-radius: 15px; /* Rounded corners for a smooth look */
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
+}
+
+.hero-image {
+    max-width: 100%; /* Ensures the image scales responsively */
+    height: auto; /* Maintain aspect ratio */
+    border-radius: 10px; /* Rounded image corners */
+}
+
+.hero-text {
+    flex: 1; /* Ensures the text takes available space */
+    margin-left: 3rem; /* Space between text and image */
+}
+
+.hero-title {
+    font-size: 2.5rem; /* Larger title for emphasis */
+    font-weight: 600; /* Bold title */
+    color: #0d6efd; /* Use your primary color for the title */
+    margin-bottom: 1rem; /* Space below the title */
+}
+
+.hero-description {
+    font-size: 1.2rem; /* Slightly larger than normal text for readability */
+    color: #333; /* Dark gray text for readability */
+    margin-bottom: 2rem; /* Add some space below the description */
+}
+
+.hero-buttons .btn {
+    font-size: 1.1rem; /* Slightly larger buttons */
+    padding: 1rem 2rem; /* Increase button padding */
+    border-radius: 8px; /* Rounded corners for the buttons */
+    transition: background-color 0.3s ease, transform 0.3s ease;
+}
+
+.hero-buttons .btn-primary {
+    background-color: #0d6efd; /* Primary button color */
+    color: #fff; /* White text */
+    border: none; /* Remove border */
+}
+
+.hero-buttons .btn-outline-secondary {
+    background-color: transparent;
+    border: 2px solid #0d6efd; /* Border with primary color */
+    color: #0d6efd; /* Text color matches primary */
+}
+
+.hero-buttons .btn:hover {
+    transform: scale(1.05); /* Slightly scale the buttons on hover */
+}
+
+.hero-buttons .btn-primary:hover {
+    background-color: #0056b3; /* Darker blue on hover */
+}
+
+.hero-buttons .btn-outline-secondary:hover {
+    background-color: #0d6efd; /* Fill color on hover */
+    color: #fff; /* Text color changes to white on hover */
+}
+
+/* Responsiveness */
+@media (max-width: 768px) {
+    .hero-section {
+        flex-direction: column;
+        text-align: center; /* Center-align text on smaller screens */
+        padding: 3rem 1rem; /* Less padding on smaller screens */
+    }
+
+    .hero-text {
+        margin-left: 0; /* Remove margin for small screens */
+        margin-bottom: 2rem; /* Space below text */
+    }
+
+    .hero-title {
+        font-size: 2rem; /* Slightly smaller title for mobile */
+    }
+
+    .hero-description {
+        font-size: 1.1rem; /* Adjust font size for better mobile readability */
+    }
+}
+
+
+
+
+
+/* Heading style */
+h2.pb-2 {
+    font-size: 2.5rem; /* Larger font size for the main section heading */
+    font-weight: 600; /* Bold font */
+    color: #0d6efd; /* Primary color */
+    border-bottom: 3px solid #0d6efd; /* Underline with the primary color */
+    padding-bottom: 0.5rem;
+    margin-bottom: 2rem; /* Adds some space below the heading */
+}
+
+/* Flexbox layout for the features */
+.row {
+    display: flex;
+    flex-wrap: wrap; /* Ensures items wrap on smaller screens */
+    justify-content: space-between;
+}
+
+/* Individual feature cards */
+.col {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.5rem;
+    background-color: #fff; /* White background for each feature */
+    border-radius: 10px; /* Rounded corners */
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1); /* Subtle shadow for depth */
+    transition: transform 0.3s ease, box-shadow 0.3s ease; /* Smooth hover effect */
+    max-width: 48%; /* 2 columns on larger screens */
+}
+
+.col:hover {
+    transform: translateY(-10px); /* Lifts the feature card on hover */
+    box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2); /* Darker shadow on hover */
+}
+
+/* Title for each feature */
+h4.fw-semibold {
+    font-size: 1.25rem; /* Slightly larger font size */
+    font-weight: 600; /* Bold font */
+    color: #333; /* Dark gray color */
+    margin-bottom: 1rem; /* Space below the title */
+}
+
+/* Text description of each feature */
+.text-body-secondary {
+    font-size: 1rem; /* Normal font size for descriptions */
+    color: #666; /* Lighter gray color */
+    line-height: 1.6; /* Increases line height for readability */
+    margin-bottom: 1.5rem; /* Space below the description */
+}
+
+/* Button styles */
+.btn-lg {
+    font-size: 1.1rem; /* Slightly larger text for buttons */
+    padding: 1rem 2rem; /* Increased padding for a comfortable click */
+    border-radius: 8px; /* Rounded corners for buttons */
+    transition: background-color 0.3s ease, transform 0.3s ease;
+}
+
+.btn-primary {
+    background-color: #0d6efd; /* Primary color */
+    color: white; /* White text */
+    border: none;
+}
+
+  /* Optional: Style buttons to make them more prominent */
+  .btn-light {
+    color: #0d6efd; /* Set text color to match the theme */
+    background-color: white;
+  }
+
+  .btn-outline-light {
+    border-color: #0d6efd; /* Outline color matches the theme */
+    color: #051833; /* Text color matches the theme */
+  }
+
+.btn-outline-secondary {
+    background-color: transparent;
+    color: #0d6efd; /* Text color matches primary */
+    border: 2px solid #0d6efd; /* Border with primary color */
+}
+
+.btn-primary:hover {
+    background-color: #0056b3; /* Darker blue on hover */
+}
+
+.btn-outline-secondary:hover {
+    background-color: #0d6efd; /* Background fill on hover */
+    color: white; /* Text color changes to white */
+}
+
+/* Feature icon styles */
+.feature-icon-small {
+    width: 50px;
+    height: 50px;
+    background-color: #0d6efd; /* Background color matches primary */
+    color: white; /* White icon color */
+    border-radius: 50%; /* Circular icon */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem; /* Icon size */
+    margin-bottom: 1rem; /* Space below the icon */
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .row {
+        flex-direction: column;
+    }
+
+    .col {
+        max-width: 100%; /* Full width on smaller screens */
+        margin-bottom: 1.5rem; /* Adds spacing between items */
+    }
+
+    h2.pb-2 {
+        font-size: 2rem; /* Smaller font size for the heading */
+    }
+
+    h4.fw-semibold {
+        font-size: 1.125rem; /* Slightly smaller feature titles */
+    }
+}
+
+
+
+/* General Container */
+.pricing-section {
+    padding: 60px 0;
+    color:  #0d6efd;;
+    background-color: #f9f9f9;
+
+}
+
+/* Pricing Card Layout */
+.card {
+    border: none;
+    border-radius: 30px;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    background-color: #ffffff;
+}
+
+.card:hover {
+    transform: translateY(-10px); /* Lift effect on hover */
+    box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2); /* Darker shadow */
+}
+
+/* Header styling */
+.card-header {
+
+    background-color: #0d6efd;
+    color: #ffffff;
+    font-weight: 600;
+    border-radius: 30px 10px 0 0;
+    text-align: center;
+}
+
+.card-body {
+
+    padding: 30px;
+    text-align: center;
+}
+
+.card-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #0d6efd;
+}
+
+.card-title small {
+    font-size: 1rem;
+    color: #6c757d; /* Lighter text for the pricing period */
+}
+
+ul.list-unstyled {
+    list-style: none;
+    padding: 0;
+}
+
+ul.list-unstyled li {
+    font-size: 1rem;
+    color: #555;
+    margin-bottom: 10px; /* Adds space between list items */
+}
+
+button.btn {
+    padding: 15px;
+    font-size: 1.1rem;
+    border-radius: 8px;
+    text-transform: uppercase;
+    transition: background-color 0.3s ease;
+}
+
+button.btn-outline-primary {
+    border-color: #0d6efd; /* Border matches the primary color */
+    color: #0d6efd; /* Text color matches the primary color */
+    background-color: white;
+}
+
+button.btn-primary {
+    background-color: #0d6efd;
+    color: white;
+    border: none;
+}
+
+button.btn-primary:hover,
+button.btn-outline-primary:hover {
+    background-color: #0056b3; /* Darker primary color on hover */
+    color: white;
+}
+
+
+
+
+
+
+
+/* Featured Plan - Enterprise card */
+.card.border-primary {
+    border: 2px solid #0d6efd; /* Highlight the enterprise card */
+}
+
+/* Table Styles for Comparison */
+.table-responsive {
+    margin-top: 40px; /* Adds space above the table */
+}
+
+.table {
+    width: 100%;
+    margin-top: 20px;
+    border-collapse: collapse;
+}
+
+.table th,
+.table td {
+    padding: 15px;
+    text-align: center;
+    border: 1px solid #dee2e6; /* Subtle borders for the table */
+}
+
+.table th {
+    background-color: #f1f1f1;
+    font-weight: 600;
+}
+
+.table td {
+    background-color: #ffffff;
+    font-size: 1rem;
+}
+
+.table svg {
+    color: #0d6efd; /* Icon color matches the primary color */
+    font-size: 1.5rem; /* Larger icons for visibility */
+}
+
+.text-start {
+    text-align: left;
+}
+
+/* Responsiveness */
+@media (max-width: 768px) {
+    .row-cols-md-3 {
+        flex-direction: column; /* Stack the columns on small screens */
+    }
+
+    .card-body {
+        padding: 20px; /* Less padding on smaller screens */
+    }
+
+    .card-title {
+        font-size: 2rem; /* Smaller title on mobile */
+    }
+
+    .table th,
+    .table td {
+        padding: 10px; /* Less padding for small screens */
+    }
+}
+
+
+
+/* Video Section Styling */
+.video-section {
+    background-color: #f8f9fa;
+    padding: 60px 0;
+    text-align: center;
+}
+
+.video-section h2 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #0d6efd; /* Primary color */
+}
+
+.video-section p {
+    font-size: 1.2rem;
+    color: #555;
+}
+
+.video-wrapper {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 40px;
+}
+
+.video-container {
+    position: relative;
+    width: 100%;
+    max-width: 800px; /* Limit video width */
+    padding-top: 56.25%; /* Aspect ratio 16:9 */
+    background-color: #000;
+    border-radius: 10px; /* Rounded corners */
+    overflow: hidden;
+}
+
+.video-player {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 10px;
+}
+
+.cta .btn {
+    background-color: #0d6efd; /* Primary color */
+    color: white;
+    padding: 15px 30px;
+    font-size: 1.1rem;
+    border-radius: 50px;
+    text-transform: uppercase;
+    transition: background-color 0.3s ease;
+}
+
+.cta .btn:hover {
+    background-color: #0056b3; /* Darker shade for hover */
+}
+
+/* Responsiveness */
+@media (max-width: 768px) {
+    .video-section h2 {
+        font-size: 2rem; /* Adjust heading size on smaller screens */
+    }
+
+    .video-section p {
+        font-size: 1rem; /* Adjust paragraph size */
+    }
+}
+
+
+
+/* Vision Section Styling */
+.vision-section {
+    background-color: #f1f5f9; /* Light background for contrast */
+    padding: 60px 0;
+  }
+
+  .vision-section h2 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #0d6efd; /* Primary color */
+  }
+
+  .vision-section p {
+    font-size: 1.2rem;
+    color: #555;
+    line-height: 1.6;
+  }
+
+  .vision-section .container {
+    max-width: 800px; /* Limit container width */
+    margin: 0 auto;
+  }
+
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .vision-section h2 {
+      font-size: 2rem; /* Adjust heading size */
+    }
+
+    .vision-section p {
+      font-size: 1rem; /* Adjust paragraph size */
+    }
+  }
+
+
+
+  /* Contact Section Styling */
+.contact-section {
+    background-color: #f8f9fa;
+    padding: 60px 0;
+  }
+
+  .contact-section h2 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #0d6efd; /* Primary color */
+  }
+
+  .contact-section p {
+    font-size: 1.2rem;
+    color: #555;
+  }
+
+  .contact-section form {
+    background-color: #fff;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  }
+
+  .contact-section .form-label {
+    font-weight: 500;
+    color: #333;
+  }
+
+  .contact-section .form-control {
+    border-radius: 5px;
+    border: 1px solid #ccc;
+  }
+
+  .contact-section .form-control:focus {
+    border-color: #0d6efd; /* Focus border color */
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+  }
+
+  .contact-section button {
+    background-color: #0d6efd; /* Primary color */
+    color: white;
+    border-radius: 50px;
+    padding: 12px 30px;
+    text-transform: uppercase;
+    font-weight: bold;
+    transition: background-color 0.3s ease;
+  }
+
+  .contact-section button:hover {
+    background-color: #0056b3; /* Darker shade for hover */
+  }
+
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .contact-section h2 {
+      font-size: 2rem; /* Adjust heading size */
+    }
+
+    .contact-section p {
+      font-size: 1rem; /* Adjust paragraph size */
+    }
+
+    .contact-section form {
+      padding: 20px; /* Adjust form padding on smaller screens */
+    }
+  }
+
+
+
+
+  /* Footer Styling */
+.footer {
+    background-color: #fff;
+    color:  #343a40;
+    padding-top: 40px;
+    padding-bottom: 40px;
+  }
+
+  .footer-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 20px;
+  }
+
+  .footer p {
+    font-size: 1rem;
+  }
+
+  .footer a {
+    text-decoration: none;
+    transition: color 0.3s ease;
+  }
+
+  .footer a:hover {
+    color: #0d6efd; /* Primary color on hover */
+  }
+
+  .footer hr {
+    border-top: 1px solid #6c757d; /* Subtle line separator */
+  }
+
+  .footer .container {
+    max-width: 1200px;
+  }
+
+  .footer .text-muted {
+    font-size: 0.875rem; /* Slightly smaller text */
+  }
+
+  /* Responsive Design */
+  @media (max-width: 768px) {
+    .footer {
+      padding-top: 30px;
+      padding-bottom: 30px;
+    }
+
+    .footer-title {
+      font-size: 1.1rem; /* Adjust title size */
+    }
+
+    .footer p, .footer a {
+      font-size: 0.9rem; /* Adjust text size */
+    }
+  }
+
+
+  /* Social Media Icons Styling */
+.social-icons {
+    font-size: 24px;
+  }
+
+  .social-icon {
+    text-decoration: none;
+    color: inherit;
+    transition: color 0.3s;
+  }
+
+  .social-icon:hover {
+    color: #0d6efd; /* Change to your preferred hover color */
+  }
+
+  .social-icon i {
+    margin: 0 10px;
+  }
+
+
+
+  /* Scroll Up Button Styling */
+#scrollUpBtn {
+    position: fixed;
+    bottom: 30px; /* Position 30px from the bottom */
+    right: 30px; /* Position 30px from the right */
+    background-color: #0d6efd; /* Primary color */
+    color: #fff;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 50%;
+    font-size: 18px;
+    display: none; /* Hidden by default */
+    cursor: pointer;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* Subtle shadow for 3D effect */
+    transition: opacity 0.3s ease-in-out;
+  }
+
+  #scrollUpBtn:hover {
+    background-color: #0046d3;
+  }
+
+  /* Show button when scrolling down */
+  #scrollUpBtn.show {
+    display: block;
+  }
+

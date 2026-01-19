@@ -1,0 +1,20 @@
+[28-Jun-2025 01:54:14 UTC] PHP Fatal error:  Uncaught Error: Class "Illuminate\Foundation\Application" not found in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:9
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 9
+[28-Jun-2025 01:54:22 UTC] PHP Fatal error:  Uncaught Error: Class "Illuminate\Foundation\Application" not found in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:9
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 9
+[28-Jun-2025 01:54:31 UTC] PHP Fatal error:  Uncaught Error: Class "Illuminate\Foundation\Application" not found in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:9
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 9
+[28-Jun-2025 01:54:40 UTC] PHP Fatal error:  Uncaught Error: Class "Illuminate\Foundation\Application" not found in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:9
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 9
+[28-Jun-2025 01:54:52 UTC] PHP Fatal error:  Uncaught Error: Class "Illuminate\Foundation\Application" not found in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php:9
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/bootstrap/app.php on line 9

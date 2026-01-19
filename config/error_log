@@ -1,0 +1,60 @@
+[28-Jun-2025 01:54:20 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php on line 18
+[28-Jun-2025 01:54:22 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php on line 17
+[28-Jun-2025 01:54:22 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php on line 16
+[28-Jun-2025 01:54:28 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php on line 18
+[28-Jun-2025 01:54:29 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php on line 17
+[28-Jun-2025 01:54:31 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php on line 16
+[28-Jun-2025 01:54:38 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php on line 18
+[28-Jun-2025 01:54:38 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php on line 17
+[28-Jun-2025 01:54:40 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php on line 16
+[28-Jun-2025 01:54:48 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php on line 17
+[28-Jun-2025 01:54:48 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php on line 18
+[28-Jun-2025 01:54:50 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php on line 16
+[28-Jun-2025 01:54:59 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php:17
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/auth.php on line 17
+[28-Jun-2025 01:55:00 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php:18
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/cache.php on line 18
+[28-Jun-2025 01:55:02 UTC] PHP Fatal error:  Uncaught Error: Call to undefined function env() in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php:16
+Stack trace:
+#0 {main}
+  thrown in /home/gradeque/public_html/app.gradequest.com.ng/config/app.php on line 16
