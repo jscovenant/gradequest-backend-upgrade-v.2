@@ -44,4 +44,23 @@ return [
     ],
 
 
+    'paystack' => [
+    'secret' => env('PAYSTACK_SECRET_KEY'),
+],
+
+    'paystack_public' => [
+        'public' => env('PAYSTACK_PUBLIC_KEY'),
+    ],
+
+
+
+    // config/services.php
+'whatsapp' => [
+    'token' => env('WHATSAPP_CLOUD_TOKEN'),
+    'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+    'version' => env('WHATSAPP_API_VERSION', 'v22.0'),
+    'fee_reminder_cost' => (float) env('WHATSAPP_FEE_REMINDER_COST', 10),
+],
+
+
 ];

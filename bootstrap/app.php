@@ -14,7 +14,13 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->statefulApi();
+        // ❌ REMOVE THIS LINE - it causes CSRF on API routes
+        // $middleware->statefulApi();
+
+        // ✅ ADD THIS - Exclude API routes from CSRF
+        $middleware->validateCsrfTokens(except: [
+            'api/*',
+        ]);
 
         // Register global middleware (runs for every request)
         // $middleware->append(CorsMiddleware::class);
@@ -26,7 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission'        => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission'=> \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
             'customdomain'      => \App\Http\Middleware\CustomDomain::class, 
-            'cors'              => CorsMiddleware::class, // optional alias
+            'cors'              => CorsMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

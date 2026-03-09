@@ -10,14 +10,9 @@ use App\Models\AcademicSession;
 use App\Models\Term;
 use App\Models\Section;
 
-class FinancialReportController extends Controller
+class SchoolFeesReportController extends Controller
 {
-    
-    /**
-     * Display a detailed financial report for the school
-     */
-   
-public function schoolFinancialReport(Request $request)
+    public function schoolFinancialReport(Request $request)
 {
     $schoolId = Auth::user()->school_id;
 
@@ -108,3 +103,4 @@ public function getFilters()
         ]);
     }
 }
+

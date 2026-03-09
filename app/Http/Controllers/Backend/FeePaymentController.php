@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\{FeeType, StudentFee, Payment, User, Section};
+use App\Models\{FeeType, StudentFee, Payment, PaymentReceipt, User, Section};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -196,22 +196,67 @@ class FeePaymentController extends Controller
 }
 
 
- // ✅ Record payment with session
 public function payFee(Request $request)
 {
-    $schoolId = Auth::user()->school_id;
+    $user = Auth::user();
+    $schoolId = $user->school_id;
 
     $request->validate([
         'student_fee_id' => 'required|exists:student_fees,id',
         'amount' => 'required|numeric|min:1',
-        'payment_method' => 'required|string',
-        'session_id' => 'required|exists:sessions,id', 
+        'payment_method' => 'required|string|max:50',
     ]);
 
+    // ✅ Get the fee record with student info
     $studentFee = StudentFee::where('school_id', $schoolId)
-        ->where('id', $request->student_fee_id)
-        ->where('session_id', $request->session_id) 
-        ->firstOrFail();
+        ->with(['feeType', 'term', 'session', 'student'])
+        ->findOrFail($request->student_fee_id);
+
+    // ✅ Check if there is a receipt uploaded for this payment
+    $receipt = PaymentReceipt::where('student_id', $studentFee->student_id)
+        ->where('school_id', $schoolId)
+        ->where('payment_method', $request->payment_method)
+        ->latest()
+        ->first();
+
+    if (!$receipt) {
+        return response()->json([
+            'message' => 'No payment receipt uploaded for this fee.',
+        ], 422);
+    }
+
+    // ✅ Check the status of the receipt
+    if ($receipt->status === 'rejected') {
+        return response()->json([
+            'message' => 'Payment was rejected by the school. Please upload a valid receipt.',
+        ], 422);
+    } elseif ($receipt->status !== 'approved') {
+        return response()->json([
+            'message' => 'Payment is pending school approval. Cannot mark as paid yet.',
+        ], 422);
+    }
+
+    // ✅ Prevent duplicate full payment for same fee type, term & session
+    $alreadyPaid = StudentFee::where('student_id', $studentFee->student_id)
+        ->where('fee_type_id', $studentFee->fee_type_id)
+        ->where('term_id', $studentFee->term_id)
+        ->where('session_id', $studentFee->session_id)
+        ->where('status', 'paid')
+        ->exists();
+
+    if ($alreadyPaid) {
+        return response()->json([
+            'message' => 'This fee type has already been fully paid for this term and session.',
+        ], 422);
+    }
+
+    // ✅ Prevent overpayment
+    if ($request->amount > $studentFee->balance) {
+        return response()->json([
+            'message' => 'Amount exceeds remaining balance.',
+            'balance' => $studentFee->balance,
+        ], 422);
+    }
 
     // ✅ Record payment
     $payment = Payment::create([
@@ -220,29 +265,32 @@ public function payFee(Request $request)
         'payment_method' => $request->payment_method,
         'school_id' => $schoolId,
         'reference' => uniqid('PAY-'),
-        'received_by' => Auth::id(),
-        'session_id' => $request->session_id, 
+        'received_by' => $user->id,
     ]);
 
-    // ✅ Update balances
+    // ✅ Update totals & status
     $studentFee->amount_paid += $request->amount;
-    $studentFee->balance = $studentFee->total_amount - $studentFee->amount_paid;
+    $studentFee->balance = max(0, $studentFee->total_amount - $studentFee->amount_paid);
+
+    if ($studentFee->balance <= 0) {
+        $studentFee->status = 'paid';
+        $studentFee->balance = 0;
+    } elseif ($studentFee->amount_paid > 0 && $studentFee->balance > 0) {
+        $studentFee->status = 'partial';
+    } else {
+        $studentFee->status = 'unpaid';
+    }
+
     $studentFee->save();
 
-    // ✅ Fetch updated list for this student + session
-    $updatedFees = StudentFee::with('feeType')
-        ->where('student_id', $studentFee->student_id)
-        ->where('school_id', $schoolId)
-        ->where('session_id', $request->session_id)
-        ->get();
-
     return response()->json([
-        'message' => 'Payment successful',
+        'message' => 'Payment successful and approved by school.',
         'payment' => $payment,
         'balance' => $studentFee->balance,
-        'updatedFees' => $updatedFees,
+        'status' => $studentFee->status,
     ]);
 }
+
 
 
 public function studentFeeDetails(Request $request)

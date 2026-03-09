@@ -16,11 +16,11 @@ class TestimonialController extends Controller
     public function store(Request $request)
     {
         $validated = $request->validate([
-            'quote' => 'required|string',
+            'quote'  => 'required|string',
             'author' => 'required|string',
-            'org' => 'required|string',
-            'img' => 'nullable|url',
-            'color' => 'nullable|string',
+            'org'    => 'required|string',
+            'img'    => 'nullable|url',
+            'color'  => 'nullable|string',
             'rating' => 'required|integer|min:1|max:5',
         ]);
 
@@ -29,12 +29,40 @@ class TestimonialController extends Controller
         return response()->json($testimonial, 201);
     }
 
+    // ✅ NEW: GET /testimonials/{id}
+    public function edit($id)
+    {
+        $testimonial = Testimonial::findOrFail($id);
+        return response()->json($testimonial);
+    }
+
+    // ✅ NEW: PUT /testimonials/{id}
+    public function update(Request $request, $id)
+    {
+        $testimonial = Testimonial::findOrFail($id);
+
+        $validated = $request->validate([
+            'quote'  => 'required|string',
+            'author' => 'required|string',
+            'org'    => 'required|string',
+            'img'    => 'nullable|url',
+            'color'  => 'nullable|string',
+            'rating' => 'required|integer|min:1|max:5',
+        ]);
+
+        $testimonial->update($validated);
+
+        return response()->json([
+            'message' => 'Updated successfully',
+            'data'    => $testimonial
+        ]);
+    }
+
     public function destroy($id)
-{
-    $testimonial = Testimonial::findOrFail($id);
-    $testimonial->delete();
+    {
+        $testimonial = Testimonial::findOrFail($id);
+        $testimonial->delete();
 
-    return response()->json(['message' => 'Deleted successfully']);
-}
-
+        return response()->json(['message' => 'Deleted successfully']);
+    }
 }

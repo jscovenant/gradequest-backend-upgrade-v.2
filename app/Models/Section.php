@@ -14,12 +14,12 @@ class Section extends Model
 
     public function level()
     {
-        return $this->hasOne(Level::class);
+        return $this->hasOne(StudentClass::class);
     }
 
     public function user()
     {
-        return $this->hasOne(User::class);
+        return $this->hasOne(User::class, 'section_id', 'id');
     }
 
     public function average()
@@ -27,13 +27,13 @@ class Section extends Model
         return $this->hasOne(Average::class);
     }
     
-        public function students()
-    {
-        return $this->hasMany(User::class, 'section_id');
-    }
+    //     public function students()
+    // {
+    //     return $this->hasOne(User::class, 'section_id', 'id');
+    // }
     
     public function subjects()
 {
-    return $this->hasMany(Subject::class, 'section_id');
+    return $this->hasMany(Subject::class, 'section_id',);
 }
 }

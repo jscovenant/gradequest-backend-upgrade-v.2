@@ -48,9 +48,14 @@ protected $casts = [
     'email_verified_at' => 'datetime',
     'password' => 'hashed',
     'password_reset_expires_at' => 'datetime',
+    'default_password' => 'encrypted', 
 ];
 
 
+public function records()
+{
+    return $this->hasMany(FinancialRecord::class, 'school_id', 'id');
+}
 
 
 public function children()
@@ -85,7 +90,7 @@ public function class()
 
     public function department()
     {
-        return $this->belongsTo(Department::class);
+        return $this->belongsTo(Department::class, 'department_id', 'id');
     }
 
     public function subjectenroll()
@@ -147,11 +152,11 @@ public function parentAccount()
 
 
 
-
- public function schoolsetting()
+public function schoolsetting()
 {
-       return $this->hasOne(SchoolSetting::class, 'user_id', 'id');
+    return $this->hasOne(SchoolSetting::class, 'user_id', 'id');
 }
+
 
 
     public function payments()
@@ -184,6 +189,12 @@ public function activeSubscription()
 {
     return $this->hasOne(Subscription::class)->where('status', 'active');
 }
+
+public function subscriptions()
+{
+    return $this->hasMany(\App\Models\Subscription::class, 'user_id');
+}
+
 
 public function studentFees()
 {
@@ -225,6 +236,10 @@ public function hasFeature(string $featureKey): ?array
 
 
 
+ public function routeNotificationForWhatsapp(): ?string
+    {
+        return $this->phone ?: null;
+    }
 
 
 

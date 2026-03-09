@@ -13,28 +13,31 @@ use Carbon\Carbon;
 
 class BiometricQRController extends Controller
 {
-    // Search teacher by reg_no
-    public function findTeacher(Request $request)
+    // Search staff by reg_no
+    public function findStaff(Request $request)
     {
+        $schoolId = Auth::user()->school_id;
         $request->validate(['reg_no' => 'required|string']);
 
-        $user = User::where('reg_no', $request->reg_no)->first();
+        $user = User::where('reg_no', $request->reg_no)
+        ->where('school_id', $schoolId)
+        ->first();
 
         if (!$user) {
-            return response()->json(['message' => 'Teacher not found'], 404);
+            return response()->json(['message' => 'Staff not found'], 404);
         }
 
         return response()->json($user);
     }
 
-public function generateForTeacher(Request $request)
+public function generateForStaff(Request $request)
 {
     $request->validate(['reg_no' => 'required|string']);
 
     $user = User::where('reg_no', $request->reg_no)->first();
 
     if (!$user) {
-        return response()->json(['message' => 'Teacher not found'], 404);
+        return response()->json(['message' => 'Staff not found'], 404);
     }
 
     // Update or create biometric record
@@ -52,7 +55,7 @@ public function generateForTeacher(Request $request)
         'id' => $biometric->id,
         'biometric_code' => $biometric->biometric_code,
         'expires_at'     => $biometric->expires_at,
-        'teacher' => [
+        'staff' => [
             'firstname' => $user->firstname,
             'surname'   => $user->surname,
             'reg_no'    => $user->reg_no,

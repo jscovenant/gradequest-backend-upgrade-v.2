@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>GradeQuest Demo Booking Confirmation</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f7f9fb;
+      margin: 0;
+      padding: 0;
+    }
+    .email-container {
+      max-width: 600px;
+      margin: 30px auto;
+      background-color: #ffffff;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+      overflow: hidden;
+    }
+    .email-header {
+      background-color: #0d6efd;
+      color: white;
+      text-align: center;
+      padding: 25px 20px;
+    }
+    .email-header img {
+      max-width: 120px;
+      margin-bottom: 10px;
+    }
+    .email-header h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+    .email-body {
+      padding: 25px;
+      color: #333;
+    }
+    .email-body p {
+      font-size: 16px;
+      line-height: 1.6;
+      margin: 15px 0;
+    }
+    .email-body a {
+      color: #0d6efd;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .booking-box {
+      background: #f8faff;
+      border: 1px solid #e6eefc;
+      border-radius: 8px;
+      padding: 18px;
+      margin: 20px 0;
+    }
+    .booking-row {
+      margin: 8px 0;
+      font-size: 15px;
+      line-height: 1.5;
+    }
+    .booking-label {
+      font-weight: bold;
+      color: #0d6efd;
+    }
+    .email-footer {
+      text-align: center;
+      font-size: 14px;
+      color: #aaa;
+      padding: 15px 20px;
+      border-top: 1px solid #eaeaea;
+    }
+    .email-footer a {
+      color: #0d6efd;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="email-container">
+    <div class="email-header">
+      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
+      <h1>Demo Booking Confirmed 🎓</h1>
+    </div>
+
+    <div class="email-body">
+      <p>
+        Hello
+        <strong>{{ $booking->first_name }} {{ $booking->last_name }}</strong>,
+      </p>
+
+      <p>
+        Thank you for booking a demo with <strong>GradeQuest</strong>. 🎉
+      </p>
+
+      <p>
+        We have received your booking request successfully. A GradeQuest specialist
+        will review your request and reach out to confirm your selected time.
+      </p>
+
+      <div class="booking-box">
+        <div class="booking-row">
+          <span class="booking-label">Name:</span>
+          {{ $booking->first_name }} {{ $booking->last_name }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Email:</span>
+          {{ $booking->email }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Phone:</span>
+          {{ $booking->phone }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">School:</span>
+          {{ $booking->school_name }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Role:</span>
+          {{ $booking->role }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">School Type:</span>
+          {{ $booking->school_type }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Student Count:</span>
+          {{ $booking->student_count }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Preferred Date:</span>
+          {{ \Carbon\Carbon::parse($booking->preferred_date)->format('F j, Y') }}
+        </div>
+        <div class="booking-row">
+          <span class="booking-label">Preferred Time:</span>
+          {{ $booking->preferred_time }} (WAT)
+        </div>
+
+        @if(!empty($booking->message))
+          <div class="booking-row">
+            <span class="booking-label">Additional Note:</span>
+            {{ $booking->message }}
+          </div>
+        @endif
+      </div>
+
+      <p>
+        For more information about GradeQuest and setup guides, visit our blog:
+        <br>
+        👉 <a href="https://gradequest.com.ng/blog" target="_blank">
+          https://gradequest.com.ng/blog
+        </a>
+      </p>
+
+      <p>
+        Thank you for choosing <strong>GradeQuest</strong>.
+      </p>
+
+      <p>— The GradeQuest Team</p>
+    </div>
+
+    <div class="email-footer">
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradeQuest</a>. All rights reserved.</p>
+    </div>
+  </div>
+</body>
+</html>

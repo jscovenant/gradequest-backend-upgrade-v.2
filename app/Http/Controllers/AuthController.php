@@ -30,91 +30,103 @@ class AuthController extends Controller
     /**
      * Login
      */
-    public function login(Request $request)
-    {
-        // Basic request validation
-        $request->validate([
-            'identifier' => ['required', 'string'],
-            'password' => ['required', 'string'],
-        ]);
+  
+   
+public function login(Request $request)
+{
+   // ✅ Force JSON response and bypass domain check
+    $request->headers->set('Accept', 'application/json');
+    config(['sanctum.stateful' => []]);
 
-        $throttleKey = $this->throttleKey($request);
+    // Validate request
+    $request->validate([
+        'identifier' => ['required', 'string'],
+        'password'   => ['required', 'string'],
+    ]);
 
-        // Rate limit login attempts (customize attempts & decay)
-        if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
-            return response()->json([
-                'message' => 'Too many login attempts. Please try again later.'
-            ], Response::HTTP_TOO_MANY_REQUESTS);
-        }
+    $throttleKey = $this->throttleKey($request);
 
-        // Find user by email or reg_no
-        $user = User::where('email', $request->identifier)
-                    ->orWhere('reg_no', $request->identifier)
-                    ->first();
+    // Rate limiting
+    if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
+        return response()->json([
+            'message' => 'Too many login attempts. Please try again later.'
+        ], Response::HTTP_TOO_MANY_REQUESTS);
+    }
 
-        // Generic failure message (do not reveal whether user exists)
-        $badCredsResponse = response()->json([
+    // Find user by email or reg number + eager load school setting
+    $user = User::with('schoolsetting')
+        ->where('email', $request->identifier)
+        ->orWhere('reg_no', $request->identifier)
+        ->first();
+
+    if (! $user || ! Hash::check($request->password, $user->password)) {
+        RateLimiter::hit($throttleKey, 60);
+        return response()->json([
             'message' => 'Invalid credentials.'
         ], Response::HTTP_UNPROCESSABLE_ENTITY);
-
-        if (! $user || ! Hash::check($request->password, $user->password)) {
-            RateLimiter::hit($throttleKey, 60); // count attempt, decay 60s (adjust as needed)
-            return $badCredsResponse;
-        }
-
-        // Prevent inactive accounts from logging in (but allow Super-Admin via role check on DB)
-       $userRole = $user->role ?? null;
-        if ((int)$user->status !== 1 && $userRole !== 'Super-Admin') {
-            return response()->json([
-                'message' => 'Account is inactive.'
-            ], Response::HTTP_FORBIDDEN);
-        }
-
-        // Everything OK -> clear rate limiter for this key
-        RateLimiter::clear($throttleKey);
-
-        // Create personal access token with minimal abilities
-        // Abilities should reflect what the token can do; avoid storing roles as ability directly.
-        $abilities = ['basic-auth']; // add more abilities if required for API usage
-
-        // Prefer issuing short-lived tokens or use cookie-based session for SPAs.
-        // Here we create a token and set an expiration in DB meta (you can enforce expirations via scheduled job).
-        $tokenResult = $user->createToken('access_token', $abilities);
-        $plainToken = $tokenResult->plainTextToken;
-
-        // Audit login
-        try {
-            ActivityLog::create([
-                'user_id' => $user->id,
-                'school_id' => $user->school_id,
-                'action' => 'login',
-                'description' => 'User logged in',
-                'ip_address' => $request->ip(),
-                'user_agent' => $request->userAgent(),
-            ]);
-        } catch (\Throwable $e) {
-            Log::warning('Could not write activity log on login: '.$e->getMessage());
-            // do not fail login if log fails
-        }
-
-        // Minimal user payload to return (avoid exposing sensitive fields)
-        $safeUser = [
-            'id' => $user->id,
-            'firstname' => $user->firstname,
-            'email' => $user->email,
-            'reg_no' => $user->reg_no,
-            'school_id' => $user->school_id,
-            'photo_url' => $user->photo ? asset('uploads/users/'.$user->photo) : asset('img/profile.png'),
-            'role' => $userRole, 
-        ];
-
-        return response()->json([
-            'message' => 'Login successful',
-            'access_token' => $plainToken,
-            'token_type' => 'Bearer',
-            'user' => $safeUser,
-        ], Response::HTTP_OK);
     }
+
+    // Check account status (allow Super-Admin)
+    $userRole = $user->role ?? null;
+
+    if ((int) $user->status !== 1 && $userRole !== 'Super-Admin') {
+        return response()->json([
+            'message' => 'Account is inactive.'
+        ], Response::HTTP_FORBIDDEN);
+    }
+
+    // Clear rate limiter
+    RateLimiter::clear($throttleKey);
+
+    // Create token
+    $tokenResult = $user->createToken('access_token', ['basic-auth']);
+    $plainToken = $tokenResult->plainTextToken;
+
+    // Activity log (non-blocking)
+    try {
+        ActivityLog::create([
+            'user_id'    => $user->id,
+            'school_id'  => $user->school_id,
+            'action'     => 'login',
+            'description'=> 'User logged in',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+    } catch (\Throwable $e) {
+        Log::warning('Login activity log failed: '.$e->getMessage());
+    }
+
+    /**
+     * Build SAFE user payload
+     */
+    $safeUser = [
+        'id'        => $user->id,
+        'firstname' => $user->firstname,
+        'email'     => $user->email,
+        'reg_no'    => $user->reg_no,
+        'school_id' => $user->school_id,
+        'role'      => $userRole,
+        'photo_url' => $user->photo
+            ? asset('uploads/users/'.$user->photo)
+            : asset('img/profile.png'),
+
+        // ✅ School details (from school_settings table)
+        'school' => $user->schoolsetting ? [
+            'name' => $user->schoolsetting->school_name,
+            'logo' => $user->schoolsetting->logo
+                ? asset($user->schoolsetting->logo)
+                : asset('img/school-default.png'),
+        ] : null,
+    ];
+
+    return response()->json([
+        'message'      => 'Login successful',
+        'access_token' => $plainToken,
+        'token_type'   => 'Bearer',
+        'user'         => $safeUser,
+    ], Response::HTTP_OK);
+}
+
 
     /**
      * Register (creates school + user + assigns role)
@@ -130,7 +142,7 @@ public function register(Request $request)
     'phone' => 'required|string|max:20',
     'school_name' => 'required|string|max:255',
     'address' => 'required|string|max:255',
-    'school_subdomain' => 'required|alpha_dash|unique:school_settings,school_subdomain',
+   
 ]);
 
 
@@ -147,7 +159,6 @@ public function register(Request $request)
         $school = SchoolSetting::create([
             'school_name' => $request->school_name,
             'address' => $request->address,
-            'school_subdomain' => $request->school_subdomain,
             'phone' => $request->phone,
         ]);
 

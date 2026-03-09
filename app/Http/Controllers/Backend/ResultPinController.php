@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Backend;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\ResultPin;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\DB;
@@ -14,7 +15,7 @@ class ResultPinController extends Controller
     // LIST PINS
     public function index()
     {
-       return ResultPin::where('school_id', auth()->user()->school_id)
+       return ResultPin::where('school_id', auth::user()->school_id)
         ->latest()
         ->get();
     }
@@ -22,7 +23,7 @@ class ResultPinController extends Controller
     // Get all terms for the current school
 public function getTerms()
 {
-    $schoolId = auth()->user()->school_id;
+    $schoolId = Auth::user()->school_id;
 
     $terms = DB::table('terms')
         ->where('school_id', $schoolId)
@@ -35,7 +36,7 @@ public function getTerms()
 // Get all academic sessions for the current school
 public function getSessions()
 {
-    $schoolId = auth()->user()->school_id;
+    $schoolId = auth::user()->school_id;
 
     $sessions = DB::table('academic_sessions')
         ->where('school_id', $schoolId)
@@ -57,7 +58,7 @@ public function store(Request $request)
         'quantity' => 'nullable|integer|min:1|max:100',
     ]);
 
-   $schoolId = auth()->user()->school_id;
+   $schoolId = auth::user()->school_id;
     $quantity = (int) $request->quantity;
 
     // 🚫 Hard limit check (extra safety)

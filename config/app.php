@@ -55,7 +55,8 @@ return [
     |
     */
 
-    'url' => env('APP_URL', 'http://localhost'),
+    'url' => env('APP_URL', 'http://localhost:8000'),
+    'frontend_url' => env('FRONT_URL', 'http://localhost:5173'),
 
     /*
     |--------------------------------------------------------------------------
@@ -109,8 +110,10 @@ return [
     ],
     
     
-    'paystack_secret_key' => env('PAYSTACK_SECRET_KEY'),
-    'paystack_base_url' => env('PAYSTACK_BASE_URL', 'https://api.paystack.co'),
+
+
+
+
 
     /*
     |--------------------------------------------------------------------------
@@ -124,6 +127,8 @@ return [
     | Supported drivers: "file", "cache"
     |
     */
+
+
 
     'maintenance' => [
         'driver' => env('APP_MAINTENANCE_DRIVER', 'file'),

@@ -92,7 +92,7 @@ class SessionController extends Controller
 
 public function setCurrent($id)
 {
-    $auth = auth()->user();
+    $auth = auth::user();
 
     // School-based scope
     AcademicSession::where('school_id', $auth->school_id)

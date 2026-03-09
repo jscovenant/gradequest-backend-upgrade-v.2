@@ -128,15 +128,70 @@ public function getUserFeatures(Request $request)
     
 
 
+
 public function showAdmin($id)
 {
+    $auth = request()->user();
+
+    // Only Super-Admin
+    if (!$auth || !$auth->hasRole('Super-Admin')) {
+        return response()->json(['message' => 'Unauthorized'], 403);
+    }
+
     $admin = User::with('school')->findOrFail($id);
 
+    // Subscription + Plan
+    $subscription = \App\Models\Subscription::with('plan')
+        ->where('user_id', $admin->id)
+        ->latest('created_at')
+        ->first();
+
+    // Payments + Plan (billing history)
+    $payments = \App\Models\SubPayment::with('plan')
+        ->where('user_id', $admin->id)
+        ->orderBy('created_at', 'desc')
+        ->get()
+        ->map(function ($p) {
+            return [
+                'id' => $p->id,
+                'reference' => $p->reference,
+                'amount' => (float) $p->amount,
+                'status' => $p->status,
+                'channel' => $p->channel,
+                'card_type' => $p->card_type,
+                'last4' => $p->last4,
+                'starts_at' => $p->starts_at,
+                'created_at' => $p->created_at,
+                'plan' => $p->plan ? [
+                    'id' => $p->plan->id,
+                    'name' => $p->plan->name,
+                    'price' => $p->plan->price,
+                    'duration_in_days' => $p->plan->duration_in_days,
+                ] : null,
+            ];
+        });
+
     return response()->json([
-        'admin' => $admin
+        'admin' => $admin,
+        'billing' => [
+            'subscription' => $subscription ? [
+                'id' => $subscription->id,
+                'status' => $subscription->status,
+                'auto_renew' => (bool) $subscription->auto_renew,
+                'auto_renew_source' => $subscription->auto_renew_source,
+                'starts_at' => $subscription->starts_at,
+                'ends_at' => $subscription->ends_at,
+                'plan' => $subscription->plan ? [
+                    'id' => $subscription->plan->id,
+                    'name' => $subscription->plan->name,
+                    'price' => $subscription->plan->price,
+                    'duration_in_days' => $subscription->plan->duration_in_days,
+                ] : null,
+            ] : null,
+            'payments' => $payments,
+        ],
     ]);
 }
-
 
 
 
@@ -254,7 +309,7 @@ public function getLogs(Request $request)
 
         foreach ($request->recipients as $recipient) {
             $email = $recipient['email'] ?? null;
-            $firstname = $recipient['firstname'] ?? 'there';
+            $firstname = $recipient['firstname'] ?? 'dear Sir/Ma';
 
             if (!$email) continue;
 
@@ -276,17 +331,71 @@ public function getLogs(Request $request)
 
 public function mailAdminUsers()
 {
+    // Classification:
+    // free            -> no subscription OR plan is "Free"
+    // premium_active  -> latest plan != "Free" AND ends_at >= now
+    // premium_expired -> latest plan != "Free" AND ends_at < now
+    //
+    // Premium = premium_active + premium_expired
+
     $users = User::where('role', 'Admin')
-        ->get(['id', 'firstname', 'surname', 'email', 'status']);
+        ->with([
+            'subscriptions' => function ($q) {
+                $q->with('plan:id,name,price,duration_in_days')
+                  ->orderByDesc('created_at');
+            },
+            'school' // optional (if you want school info here too)
+        ])
+        ->get(['id', 'firstname', 'surname', 'email', 'status', 'school_id'])
+        ->map(function ($u) {
+
+            $latestSub = $u->subscriptions->first(); // latest subscription record (may be null)
+            $planName  = $latestSub?->plan?->name;
+
+            // Treat missing plan or "Free" as free
+            $isFreePlan = !$planName || strtolower(trim($planName)) === 'free';
+
+            $endsAt = $latestSub?->ends_at ? \Carbon\Carbon::parse($latestSub->ends_at) : null;
+
+            $subState = 'none'; // none | active | expired
+            if ($latestSub && $endsAt) {
+                $subState = $endsAt->gte(now()) ? 'active' : 'expired';
+            }
+
+            $tier = 'free';
+            if (!$isFreePlan && $latestSub) {
+                $tier = ($subState === 'active') ? 'premium_active' : 'premium_expired';
+            }
+
+            return [
+                'id' => $u->id,
+                'firstname' => $u->firstname,
+                'surname' => $u->surname,
+                'email' => $u->email,
+                'status' => $u->status,
+
+                // Subscription classification
+                'tier' => $tier, // free | premium_active | premium_expired
+                'plan_name' => $planName ?? 'Free',
+                'subscription_status' => $latestSub?->status ?? null,
+                'subscription_starts_at' => $latestSub?->starts_at,
+                'subscription_ends_at' => $latestSub?->ends_at,
+
+                // optional school info if needed
+                'school' => $u->school ? [
+                    'id' => $u->school->id ?? null,
+                    'school_name' => $u->school->school_name ?? null,
+                    'email' => $u->school->email ?? null,
+                    'phone' => $u->school->phone ?? null,
+                    'address' => $u->school->address ?? null,
+                ] : null,
+            ];
+        });
 
     return response()->json([
         'users' => $users
     ]);
 }
-
-
-
-
 
 
 

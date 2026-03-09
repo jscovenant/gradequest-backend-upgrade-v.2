@@ -14,6 +14,7 @@ use App\Models\Subscription;
 use Illuminate\Support\Facades\Log;
 use App\Mail\WelcomeBonusMail;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\DB;
 
 class ActivationController extends Controller
 {
@@ -51,6 +52,123 @@ public function verifyEmailCode(Request $request)
 
 }
 
+/**
+     * Route::post('/set-current-session', [ActivationController::class, 'setCurrentSession']);
+     *
+     * Creates session if not exists (per school), updates dates/status,
+     * and if make_current=true sets it as current (school scoped).
+     */
+    public function setCurrentSession(Request $request)
+    {
+        $auth = Auth::user();
+
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
+            'make_current' => 'nullable|boolean',
+        ]);
+
+        return DB::transaction(function () use ($auth, $validated) {
+
+            // Find existing session for this school+name (avoid duplicates)
+            $session = AcademicSession::where('school_id', $auth->school_id)
+                ->where('name', $validated['name'])
+                ->first();
+
+            if (!$session) {
+                $session = new AcademicSession();
+                $session->school_id = $auth->school_id;
+                $session->name = $validated['name'];
+            }
+
+            // Update optional fields
+            if (array_key_exists('start_date', $validated)) $session->start_date = $validated['start_date'];
+            if (array_key_exists('end_date', $validated)) $session->end_date = $validated['end_date'];
+
+            // Mark active (you already have status column)
+            $session->status = 'Active';
+            $session->save();
+
+            if (!empty($validated['make_current'])) {
+                // turn off current for all sessions in the school
+                AcademicSession::where('school_id', $auth->school_id)->update(['is_current' => 0]);
+
+                // set this session current
+                $session->is_current = 1;
+                $session->save();
+            }
+
+            return response()->json([
+                'message' => !empty($validated['make_current'])
+                    ? 'Session saved and set as current.'
+                    : 'Session saved successfully.',
+                'session' => $session,
+            ], 201);
+        });
+    }
+
+    /**
+     * Route::post('/create-all-terms', [ActivationController::class, 'createAllTerms']);
+     *
+     * Creates default terms if not exist and optionally sets one as active.
+     */
+    public function createAllTerms(Request $request)
+    {
+        $auth = Auth::user();
+
+        $validated = $request->validate([
+            'terms' => 'nullable|array',
+            'terms.*' => 'string|max:255',
+            'make_current' => 'nullable|boolean',
+            'current_term' => 'nullable|string|max:255',
+        ]);
+
+        $termsToCreate = $validated['terms'] ?? ['1st Term', '2nd Term', '3rd Term'];
+
+        return DB::transaction(function () use ($auth, $validated, $termsToCreate) {
+
+            $created = [];
+
+            foreach ($termsToCreate as $name) {
+                $term = Term::where('school_id', $auth->school_id)->where('name', $name)->first();
+                if (!$term) {
+                    $term = new Term();
+                    $term->school_id = $auth->school_id;
+                    $term->name = $name;
+                    $term->status = 'Inactive'; // default
+                    $term->save();
+                    $created[] = $term;
+                }
+            }
+
+            if (!empty($validated['make_current'])) {
+                $currentName = $validated['current_term'] ?? '1st Term';
+
+                // deactivate all terms for school
+                Term::where('school_id', $auth->school_id)->update(['status' => 'Inactive']);
+
+                // activate selected
+                $term = Term::where('school_id', $auth->school_id)->where('name', $currentName)->first();
+
+                if (!$term) {
+                    return response()->json([
+                        'message' => "Cannot set current term. '{$currentName}' does not exist.",
+                    ], 404);
+                }
+
+                $term->status = 'Active';
+                $term->save();
+            }
+
+            return response()->json([
+                'message' => !empty($validated['make_current'])
+                    ? 'Terms created and current term set.'
+                    : 'Terms created successfully.',
+                'created' => $created,
+            ], 201);
+        });
+    }
 
 public function resendEmailCode()
 {
@@ -142,7 +260,7 @@ public function activateBonus()
     try {
         Mail::to($user->email)->send(new WelcomeBonusMail($user));
     } catch (\Exception $e) {
-        \Log::error("Welcome email failed for user {$user->id}: " . $e->getMessage());
+        Log::error("Welcome email failed for user {$user->id}: " . $e->getMessage());
     }
 
     return response()->json([

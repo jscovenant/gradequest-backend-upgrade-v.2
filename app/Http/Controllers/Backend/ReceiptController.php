@@ -10,15 +10,17 @@ use App\Models\User;
 use App\Models\PaymentGateway;
 use Illuminate\Support\Facades\Storage;
 use App\Notifications\SystemNotification;
+use Illuminate\Support\Facades\DB;
 
 class ReceiptController extends Controller
 {
  
+   
+
 public function uploadReceipts(Request $request)
 {
-    // Accept normal form-data + JSON fields
     $request->validate([
-        'student_id' => 'required|exists:users,id',
+        'reg_no' => 'required|string|max:50',
         'payment_method' => 'required|in:online,cash',
         'term_id' => 'nullable|exists:terms,id',
         'session_id' => 'nullable|exists:academic_sessions,id',
@@ -27,6 +29,18 @@ public function uploadReceipts(Request $request)
     ]);
 
     $schoolId = Auth::user()->school_id;
+    $regNo = trim($request->reg_no);
+
+    // ✅ Resolve student_id by reg_no + school
+    $student = DB::table('users')
+        ->where('school_id', $schoolId)
+        ->where('reg_no', $regNo)
+        ->select('id')
+        ->first();
+
+    if (!$student) {
+        return response()->json(['message' => 'Student not found for this Reg No.'], 404);
+    }
 
     $destinationPath = public_path('uploads/receipts');
     if (!file_exists($destinationPath)) {
@@ -34,21 +48,16 @@ public function uploadReceipts(Request $request)
     }
 
     $uploadedPaths = [];
-
-    // Save files
     if ($request->hasFile('receipts')) {
         foreach ($request->file('receipts') as $file) {
-
-            $fileName = time().'_'.uniqid().'.'.$file->getClientOriginalExtension();
+            $fileName = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
             $file->move($destinationPath, $fileName);
-
-            $uploadedPaths[] = 'uploads/receipts/'.$fileName;
+            $uploadedPaths[] = 'uploads/receipts/' . $fileName;
         }
     }
 
-    // Save record in DB
     $receipt = PaymentReceipt::create([
-        'student_id' => $request->student_id,
+        'student_id' => (int)$student->id,
         'school_id' => $schoolId,
         'payment_method' => $request->payment_method,
         'receipt_path' => json_encode($uploadedPaths),
@@ -60,32 +69,94 @@ public function uploadReceipts(Request $request)
         'data' => [
             'id' => $receipt->id,
             'files' => array_map(fn($p) => asset($p), $uploadedPaths),
-            'status' => $receipt->status
+            'status' => $receipt->status,
         ],
+    ]);
+}
+
+    /**
+     * List receipts for a student (Parent view or Student view).
+     * Query: ?student_id=744
+     */
+
+
+public function myReceipts(Request $request)
+{
+    $request->validate([
+        'reg_no' => 'required|string|max:50',
+    ]);
+
+    $user = Auth::user();
+    $schoolId = $user->school_id;
+    $regNo = trim($request->reg_no);
+
+    // ✅ Resolve student by reg_no within this school
+    $student = DB::table('users')
+        ->where('school_id', $schoolId)
+        ->where('reg_no', $regNo)
+        ->select('id', 'reg_no', 'firstname', 'surname')
+        ->first();
+
+    if (!$student) {
+        return response()->json(['message' => 'Student not found for this Reg No.'], 404);
+    }
+
+    $studentId = (int) $student->id;
+
+    // ✅ Parent ownership check (fixed)
+    $isParent = strtolower((string)($user->role ?? '')) === 'parent';
+    if ($isParent) {
+        $link = DB::table('parent_students')
+            ->where('parent_id', $user->id)
+            ->where('student_id', $studentId)
+            ->first();
+
+        if (!$link) {
+            return response()->json(['message' => 'You are not authorized to view this student.'], 403);
+        }
+
+        if (isset($link->school_id) && (int) $link->school_id !== (int) $schoolId) {
+            return response()->json(['message' => 'Invalid school context.'], 403);
+        }
+    }
+
+    $rows = PaymentReceipt::where('school_id', $schoolId)
+        ->where('student_id', $studentId)
+        ->latest()
+        ->get()
+        ->map(function ($r) {
+            $paths = [];
+            try {
+                $decoded = json_decode($r->receipt_path ?? '[]', true);
+                if (is_array($decoded)) $paths = $decoded;
+            } catch (\Throwable $e) {}
+
+            return [
+                'id' => $r->id,
+                'student_id' => $r->student_id,
+                'school_id' => $r->school_id,
+                'payment_method' => $r->payment_method,
+                'status' => $r->status,
+                'files' => array_map(fn($p) => asset($p), $paths),
+                'created_at' => $r->created_at,
+                'updated_at' => $r->updated_at,
+            ];
+        });
+
+    return response()->json([
+        'reg_no' => $student->reg_no,
+        'student' => [
+            'id' => $studentId,
+            'reg_no' => $student->reg_no,
+            'name' => trim(($student->firstname ?? '').' '.($student->surname ?? '')),
+        ],
+        'receipts' => $rows,
     ]);
 }
 
 
 
-public function getAccountDetails($schoolId)
-{
-    $gateway = PaymentGateway::where('school_id', $schoolId)->first();
 
-    if (!$gateway) {
-        return response()->json([
-            'message' => 'Account details not found',
-            'account' => null
-        ], 404);
-    }
-
-    return response()->json([
-        'account' => [
-            'bank_name' => $gateway->bank_name,
-            'account_number' => $gateway->account_number,
-            'account_name' => $gateway->account_name,
-        ]
-    ], 200);
-}
 
 
 

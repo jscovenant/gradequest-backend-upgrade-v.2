@@ -10,6 +10,13 @@ class Subscription extends Model
     use HasFactory;
     
     protected $guarded = [];
+
+       protected $casts = [
+        'notified_about_expiry' => 'boolean',
+        'last_reminded_at' => 'datetime',
+        'starts_at' => 'datetime',
+        'ends_at' => 'datetime',
+    ];
     
 
 public function plan()

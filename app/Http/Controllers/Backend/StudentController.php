@@ -2,71 +2,67 @@
 
 namespace App\Http\Controllers\Backend;
 
-use App\Models\Quiz;
+
 use App\Models\User;
-use App\Models\Level;
+
 use App\Models\Average;
 use App\Models\Section;
-use App\Models\Setting;
-use App\Models\Student;
+
 use App\Models\Subject;
 use App\Models\Department;
-use App\Exports\UsersExport;
+
 use Illuminate\Http\Request;
 use App\Models\SchoolSetting;
-use App\Models\SubjectEnroll;
-use App\Exports\StudentExport;
+
 use App\Models\AcademicSession;
 use App\Models\AffectiveDomain;
-use App\Models\FirstTermResult;
-use App\Models\ThirdTermResult;
-use Barryvdh\DomPDF\Facade\Pdf;
-use App\Models\SecondTermResult;
+
 
 use App\Models\PsychomotorDomain;
 use App\Models\TeacherEnrollment;
-use Illuminate\Support\Facades\DB;
+
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Models\StudentClass;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
-use Maatwebsite\Excel\Facades\Excel;
-use Illuminate\Auth\Events\Validated;
+
 use App\Models\UserHasAffectiveDomain;
 use App\Models\UserHasPsychomotorDomain;
-use App\Models\StudentFee;
-use App\Models\FeeType;
-use Illuminate\Contracts\Encryption\DecryptException;
-   
+
+
 use Illuminate\Http\JsonResponse;
 use Illuminate\Validation\Rule;
+
 
 class StudentController extends Controller
 {
     
-    public function search(Request $request)
-    {
-        $schoolId = Auth::user()->school_id;
-        $query = $request->query('query');
+   public function search(Request $request)
+{
+    $schoolId = Auth::user()->school_id;
+    $query = $request->query('query');
 
-        if (!$query) {
-            return response()->json([]);
-        }
-
-        $students = User::where('school_id', $schoolId)
-            ->where(function ($q) use ($query) {
-                $q->where('firstname', 'like', "%{$query}%")
-                  ->orWhere('surname', 'like', "%{$query}%")
-                  ->orWhere('reg_no', 'like', "%{$query}%");
-            })
-            ->select('id', 'firstname', 'surname', 'reg_no')
-            ->limit(10)
-            ->get();
-
-        return response()->json($students);
+    if (!$query) {
+        return response()->json([]);
     }
+
+    // Prefix search for faster lookup using indexes
+    $students = User::where('school_id', $schoolId)
+        ->where(function ($q) use ($query) {
+            $q->where('firstname', 'like', "{$query}%")
+              ->orWhere('surname', 'like', "{$query}%")
+              ->orWhere('reg_no', 'like', "{$query}%");
+        })
+        ->select('id', 'firstname', 'surname', 'reg_no')
+        ->limit(10)
+        ->get();
+
+    return response()->json($students);
+}
+
+
 
 
 // ✅ Fetch subjects offered by student's department
@@ -105,12 +101,24 @@ class StudentController extends Controller
 
 
 
-public function AllStudents(Request $request)
+
+    public function AllStudents(Request $request)
 {
     $user = Auth::user();
     $school_setting = SchoolSetting::first();
     $perPage = $request->get('perPage', 8);
     $page = $request->get('page', 1);
+    $search = $request->input('search');
+    $levelFilter = $request->input('level');
+
+    // ========================
+    // BASE STUDENT QUERY
+    // ========================
+    $studentsQuery = User::with('level')
+        ->where('role', 'student')
+        ->where('school_id', $user->school_id);
+
+    $levelsQuery = StudentClass::where('school_id', $user->school_id);
 
     // ========================
     // TEACHER VIEW
@@ -121,84 +129,27 @@ public function AllStudents(Request $request)
             ->where('school_id', $user->school_id)
             ->pluck('level_id');
 
-        $studentsQuery = User::with('level')
-            ->where('role', 'student')
-            ->where('school_id', $user->school_id)
-            ->whereHas('level', function ($query) use ($enrolledLevels) {
-                $query->whereIn('id', $enrolledLevels);
-            });
+        $studentsQuery->whereHas('level', function ($q) use ($enrolledLevels) {
+            $q->whereIn('id', $enrolledLevels);
+        });
 
-        $levels = StudentClass::whereIn('id', $enrolledLevels)
-            ->where('school_id', $user->school_id)
-            ->get();
+        $levelsQuery->whereIn('id', $enrolledLevels);
     }
 
     // ========================
-    // ADMIN VIEW
-    // ========================
-    elseif ($user->role == 'Admin') {
-        $studentsQuery = User::with('level')
-            ->where('role', 'student')
-            ->where('school_id', $user->school_id);
-
-        $levels = StudentClass::where('school_id', $user->school_id)->get();
-    }
-
-    // ========================
-    // PARENT VIEW (using belongsToMany)
+    // PARENT VIEW
     // ========================
     elseif ($user->role == 'Parent') {
-        $children = $user->children()->with('level')->get();
-
-        // Optional filters (search and class)
-        if ($request->filled('search')) {
-            $search = $request->input('search');
-            $children = $children->filter(function ($child) use ($search) {
-                return str_contains(strtolower($child->firstname), strtolower($search)) ||
-                       str_contains(strtolower($child->surname), strtolower($search)) ||
-                       str_contains(strtolower($child->reg_no), strtolower($search));
-            });
-        }
-
-        if ($request->filled('level')) {
-            $children = $children->filter(function ($child) use ($request) {
-                return optional($child->level)->name === $request->level;
-            });
-        }
-
-        // Manual pagination for Collection
-        $total = $children->count();
-        $students = $children->slice(($page - 1) * $perPage, $perPage)->values();
-        $levels = StudentClass::where('school_id', $user->school_id)->get();
-
-        return response()->json([
-            'students' => [
-                'data' => $students,
-                'total' => $total,
-                'per_page' => $perPage,
-                'current_page' => $page,
-                'last_page' => ceil($total / $perPage),
-            ],
-            'school_setting' => $school_setting,
-            'levels' => $levels,
-            'user_role' => $user->role
-        ]);
-    }
-
-    // ========================
-    // INVALID ROLE
-    // ========================
-    else {
-        return response()->json([
-            'message' => 'Unauthorized access',
-        ], 403);
+        // Join with pivot table for children
+        $studentsQuery->whereHas('parents', function ($q) use ($user) {
+            $q->where('parent_id', $user->id);
+        });
     }
 
     // ========================
     // SEARCH FILTER
     // ========================
-    if ($request->filled('search')) {
-        $search = $request->input('search');
+    if ($search) {
         $studentsQuery->where(function ($q) use ($search) {
             $q->where('firstname', 'LIKE', "%$search%")
               ->orWhere('surname', 'LIKE', "%$search%")
@@ -209,9 +160,9 @@ public function AllStudents(Request $request)
     // ========================
     // CLASS FILTER
     // ========================
-    if ($request->filled('level')) {
-        $studentsQuery->whereHas('level', function ($q) use ($request) {
-            $q->where('name', $request->level);
+    if ($levelFilter) {
+        $studentsQuery->whereHas('level', function ($q) use ($levelFilter) {
+            $q->where('name', $levelFilter);
         });
     }
 
@@ -219,6 +170,7 @@ public function AllStudents(Request $request)
     // PAGINATION
     // ========================
     $students = $studentsQuery->latest()->paginate($perPage, ['*'], 'page', $page);
+    $levels = $levelsQuery->get();
 
     return response()->json([
         'students' => $students,
@@ -229,6 +181,7 @@ public function AllStudents(Request $request)
 }
 
 
+
     
     
     
@@ -236,50 +189,64 @@ public function AllStudents(Request $request)
     
      
 
-    public function ViewStudent($id)
-    {
-        $auth = Auth::user();
-    
-        // Fetch the student with department and level
-        $user = User::with(['level', 'department'])->find($id);
-    
-        if (!$user || $user->school_id !== $auth->school_id) {
-            return response()->json(['message' => 'Student not found.'], 404);
-        }
-    
-        // Attempt to decrypt the default password
-        try {
-            $user->decrypted_password = decrypt($user->default_password);
-        } catch (DecryptException $e) {
-            $user->decrypted_password = null; // Gracefully fallback if decryption fails
-        }
-    
-        // Fetch affective and psychomotor domains
-        $affectiveDomains = AffectiveDomain::all();
-        $psychomotorDomains = PsychomotorDomain::all();
-    
-        // Get student-specific ratings
-        $userHasAffectiveRatings = UserHasAffectiveDomain::where('user_id', $user->id)
-            ->where('school_id', $auth->school_id)
-            ->get()
-            ->keyBy('affective_id');
-    
-        $userPsychomotorRatings = UserHasPsychomotorDomain::where('user_id', $user->id)
-            ->where('school_id', $auth->school_id)
-            ->get()
-            ->keyBy('psychomotor_id');
-    
-        $sessions = AcademicSession::where('school_id', $auth->school_id)->get();
-    
-        return response()->json([
-            'student' => $user,
-            'sessions' => $sessions,
-            'affectiveDomains' => $affectiveDomains,
-            'psychomotorDomains' => $psychomotorDomains,
-            'affectiveRatings' => $userHasAffectiveRatings,
-            'psychomotorRatings' => $userPsychomotorRatings,
-        ]);
+   public function ViewStudent($id)
+{
+    $auth = Auth::user();
+
+    $user = User::with(['level', 'department', 'section'])->find($id);
+
+    if (!$user || $user->school_id !== $auth->school_id) {
+        return response()->json(['message' => 'Student not found.'], 404);
     }
+
+    $affectiveDomains = AffectiveDomain::all();
+    $psychomotorDomains = PsychomotorDomain::all();
+
+    $userHasAffectiveRatings = UserHasAffectiveDomain::where('user_id', $user->id)
+        ->where('school_id', $auth->school_id)
+        ->get()
+        ->keyBy('affective_id');
+
+    $userPsychomotorRatings = UserHasPsychomotorDomain::where('user_id', $user->id)
+        ->where('school_id', $auth->school_id)
+        ->get()
+        ->keyBy('psychomotor_id');
+
+    $sessions = AcademicSession::where('school_id', $auth->school_id)->get();
+
+    // 🔹 Add available levels and departments
+    $levels = StudentClass::where('school_id', $auth->school_id)->get();
+    $departments = Department::where('school_id', $auth->school_id)->get();
+    $sections = Section::where('school_id', $auth->school_id)->get();
+
+    return response()->json([
+        'student' => $user,
+        'sessions' => $sessions,
+        'affectiveDomains' => $affectiveDomains,
+        'psychomotorDomains' => $psychomotorDomains,
+        'affectiveRatings' => $userHasAffectiveRatings,
+        'psychomotorRatings' => $userPsychomotorRatings,
+        'levels' => $levels,
+        'departments' => $departments,
+        'sections' => $sections,
+    ]);
+}
+
+
+
+
+public function Section(): JsonResponse
+{
+    $auth = Auth::user();
+
+    // Fetch all sections belonging to the authenticated user's school
+    $sections = Section::select('id', 'name')
+        ->where('school_id', $auth->school_id)
+        ->get();
+
+    return response()->json($sections);
+}
+
     
     
   public function Level(): JsonResponse
@@ -301,103 +268,108 @@ public function AllStudents(Request $request)
 
   
     
-    public function StoreAllStudent(Request $request)
-    {
-        $auth = Auth::user();
-    
-        // ✅ Step 1: Fetch school setting BEFORE validation
-        $school_setting = SchoolSetting::where('id', $auth->school_id)->firstOrFail();
-    
-        // ✅ Step 2: Now you can safely use the setting in validation
-        $request->validate([
-            'firstname' => 'required|string',
-            'surname' => 'required|string',
-            'third_name' => 'required|string',
-            'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-            'role' => 'required|string|max:255',
-            'gender' => 'required|in:Male,Female',
-            'level_id' => 'required|integer',
-            'section_id' => 'required|integer',
-            'department_id' => 'required|integer',
-          'reg_no' => [
-        Rule::requiredIf($school_setting->auto_admission == 0), 
-        'nullable',
-        'string',
-        'max:255',
-        Rule::unique('users', 'reg_no'),
-    ],
-        ]);
-    
-        $user = new User();
-    
-       // ✅ Step 3: Decide how to assign reg_no
-if ($school_setting->auto_admission == 1) {
-    // Auto-generate admission number
-    do {
-        $reg_no = random_int(100000, 999999);
-        $final_reg_no = "{$school_setting->prefix}{$reg_no}";
-    } while (User::where('reg_no', $final_reg_no)->exists());
-} else {
-    // Manually provided by user
-    $final_reg_no = strtoupper(trim($request->reg_no));
+public function storeAllStudent(Request $request)
+{
+    $auth = Auth::user();
 
-    if (User::where('reg_no', $final_reg_no)->exists()) {
-        return response()->json([
-            'message' => "Admission number '$final_reg_no' already exists.",
-        ], 409);
-    }
-}
-    
-        // ✅ Step 4: Check for duplicate student name
-        $existingUser = User::where('firstname', $request->firstname)
-            ->where('surname', $request->surname)
-            ->where('third_name', $request->third_name)
-            ->where('school_id', $auth->school_id)
-            ->first();
-    
-        if ($existingUser) {
+    // ✅ Step 1: Fetch school setting BEFORE validation
+    $schoolSetting = SchoolSetting::where('id', $auth->school_id)->firstOrFail();
+
+    // ✅ Step 2: Validation
+    $request->validate([
+        'firstname'      => 'required|string',
+        'surname'        => 'required|string',
+        'third_name'     => 'required|string',
+        'photo'          => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
+        'role'           => 'required|string|max:255',
+        'gender'         => 'required|in:Male,Female',
+        'blood_group'   => 'nullable|in:A+,A-,B+,B-,O+,O-',
+        'religion'      => 'nullable|string|max:255',
+        'nationality'   => 'nullable|string|max:255',
+        'level_id'       => 'required|integer',
+        'section_id'     => 'required|integer',
+        'department_id'  => 'required|integer',
+        'reg_no'         => [
+            Rule::requiredIf($schoolSetting->auto_admission == 0),
+            'nullable',
+            'string',
+            'max:255',
+            Rule::unique('users', 'reg_no'),
+        ],
+    ]);
+
+    // ✅ Step 3: Generate or accept admission number
+    if ($schoolSetting->auto_admission == 1) {
+        do {
+            $regNo = random_int(100000, 999999);
+            $finalRegNo = "{$schoolSetting->prefix}{$regNo}";
+        } while (User::where('reg_no', $finalRegNo)->exists());
+    } else {
+        $finalRegNo = strtoupper(trim($request->reg_no));
+
+        if (User::where('reg_no', $finalRegNo)->exists()) {
             return response()->json([
-                'message' => 'A student with the same full name already exists.',
+                'message' => "Admission number '{$finalRegNo}' already exists.",
             ], 409);
         }
-    
-        // ✅ Step 5: Create user
-        $randomPassword = Str::random(8);
-    
-        $user->firstname = $request->firstname;
-        $user->surname = $request->surname;
-        $user->third_name = $request->third_name;
-        $user->username = $final_reg_no;
-        $user->reg_no = $final_reg_no;
-        $user->dob = $request->dob;
-        $user->address = $request->address;
-        $user->level_id = $request->level_id;
-        $user->section_id = $request->section_id;
-        $user->department_id = $request->department_id;
-        $user->password = Hash::make($randomPassword);
-        $user->default_password = encrypt($randomPassword);
-        $user->sex = $request->gender;
-        $user->role = $request->role;
-        $user->school_id = $auth->school_id;
-        $user->phone = $request->phone;
-        $user->status = "1";
-    
-        if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
-            $file = $request->file('photo');
-            $fileName = date('ymdHi') . $file->getClientOriginalName();
-            $file->move(public_path('uploads/users'), $fileName);
-            $user->photo = $fileName;
-        }
-    
-        $user->save();
-        $user->assignRole($request->role);
-    
-        return response()->json([
-            'message' => 'Student registered successfully',
-            'reg_no' => $user->reg_no,
-        ], 201);
     }
-    
+
+    // ✅ Step 4: Prevent duplicate student names in same school
+    $existingUser = User::where([
+            'firstname'  => $request->firstname,
+            'surname'    => $request->surname,
+            'third_name' => $request->third_name,
+            'school_id'  => $auth->school_id,
+        ])->first();
+
+    if ($existingUser) {
+        return response()->json([
+            'message' => 'A student with the same full name already exists.',
+        ], 409);
+    }
+
+    // ✅ Step 5: Create student
+    $randomPassword = Str::random(8);
+
+    $user = new User();
+    $user->firstname         = $request->firstname;
+    $user->surname           = $request->surname;
+    $user->third_name        = $request->third_name;
+    $user->username          = $finalRegNo;
+    $user->reg_no            = $finalRegNo;
+    $user->dob               = $request->dob;
+    $user->address           = $request->address;
+    $user->level_id          = $request->level_id;
+    $user->section_id        = $request->section_id;
+    $user->department_id     = $request->department_id;
+    $user->blood_group       = $request->blood_group;
+    $user->religion          = $request->religion;
+    $user->nationality       = $request->nationality;
+    $user->password          = Hash::make($randomPassword);
+    $user->default_password  = $randomPassword;
+    $user->sex               = $request->gender;
+    $user->role              = $request->role;
+    $user->school_id         = $auth->school_id;
+    $user->phone             = $request->phone;
+    $user->status            = 1;
+
+    // ✅ Step 6: Upload photo (if provided)
+    if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
+        $file     = $request->file('photo');
+        $fileName = now()->format('ymdHi') . '_' . $file->getClientOriginalName();
+        $file->move(public_path('uploads/users'), $fileName);
+        $user->photo = $fileName;
+    }
+
+    $user->save();
+    $user->assignRole($request->role);
+
+    return response()->json([
+        'message' => 'Student registered successfully',
+        'reg_no'  => $user->reg_no,
+    ], 201);
+}
+
 
 
 
@@ -435,8 +407,11 @@ if ($school_setting->auto_admission == 1) {
             'surname' => 'required|string',
             'third_name' => 'nullable|string',
             'photo' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048',
-            'gender' => 'required|in:Male,Female',
+            'sex' => 'required|in:Male,Female',
             'level_id' => 'required|integer',
+            'blood_group' => 'nullable|string',
+            'religion' => 'nullable|string',
+            'nationality' => 'nullable|string',
             'section_id' => 'required|integer',
             'department_id' => 'required|integer',
             'email' => 'nullable|email',
@@ -452,7 +427,10 @@ if ($school_setting->auto_admission == 1) {
         $student->dob = $request->dob;
         $student->address = $request->address;
         $student->email = $request->email;
-        $student->sex = $request->gender;
+        $student->sex = $request->sex;
+         $student->blood_group       = $request->blood_group;
+        $student->religion          = $request->religion;
+        $student->nationality       = $request->nationality;
         $student->level_id = $request->level_id;
         $student->section_id = $request->section_id;
         $student->department_id = $request->department_id; 
@@ -466,7 +444,7 @@ if ($school_setting->auto_admission == 1) {
     
         if ($request->filled('password')) {
             $student->password = Hash::make($request->password);
-            $student->default_password = encrypt($request->password);
+            $student->default_password = $request->password;
         }
     
         if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
@@ -527,6 +505,9 @@ if ($school_setting->auto_admission == 1) {
 
 
 
+
+
+
     public function DeleteStudent($id)
     {
         try {
@@ -569,24 +550,86 @@ if ($school_setting->auto_admission == 1) {
 
 
 
-    public function getClasses()
-    {
-        $schoolId = Auth::user()->school_id;
-        return StudentClass::where('school_id', $schoolId)->get();
+  public function getClasses()
+{
+    $user = Auth::user();
+    $schoolId = $user->school_id;
+
+    $allClasses = StudentClass::where('school_id', $schoolId)
+        ->select('id', 'name')
+        ->orderBy('name')
+        ->get();
+
+    // Admin can promote from any class
+    if (strtolower($user->role) === 'admin') {
+        return response()->json([
+            'user_role' => $user->role,
+            'from_classes' => $allClasses,
+            'all_classes' => $allClasses,
+        ]);
     }
+
+    // Teacher: only assigned classes as FROM
+    if (strtolower($user->role) === 'teacher') {
+        $enrolledLevelIds = TeacherEnrollment::where('user_id', $user->id)
+            ->where('school_id', $schoolId)
+            ->where('enroll', '1')
+            ->pluck('level_id');
+
+        $fromClasses = StudentClass::where('school_id', $schoolId)
+            ->whereIn('id', $enrolledLevelIds)
+            ->select('id', 'name')
+            ->orderBy('name')
+            ->get();
+
+        return response()->json([
+            'user_role' => $user->role,
+            'from_classes' => $fromClasses,
+            'all_classes' => $allClasses, // Teacher can promote TO any class
+        ]);
+    }
+
+    // Default fallback (optional)
+    return response()->json([
+        'user_role' => $user->role,
+        'from_classes' => [],
+        'all_classes' => $allClasses,
+    ]);
+}
+
+
 
 public function getStudentsByClass(Request $request)
 {
-    $schoolId = Auth::user()->school_id;
+    $user = Auth::user();
+    $schoolId = $user->school_id;
 
     $request->validate([
-        'class_id' => 'required|integer',
+        'class_id' => 'required|integer|exists:student_classes,id',
     ]);
 
+    $classId = (int) $request->class_id;
+
+    // TEACHER restriction: class_id must be among enrolled classes
+    if (strtolower($user->role) === 'teacher') {
+        $allowed = TeacherEnrollment::where('user_id', $user->id)
+            ->where('school_id', $schoolId)
+            ->where('enroll', '1')
+            ->where('level_id', $classId)
+            ->exists();
+
+        if (!$allowed) {
+            return response()->json([
+                'message' => 'You are not allowed to load students from this class.',
+            ], 403);
+        }
+    }
+
+    // Admin is allowed for all classes in same school
     $students = User::where('school_id', $schoolId)
-        ->where('role', 'student')
-        ->where('level_id', $request->class_id)
-        ->with('level') 
+        ->where('role', 'Student')
+        ->where('level_id', $classId)
+        ->with('level')
         ->get()
         ->map(function ($s) {
             return [
@@ -605,16 +648,53 @@ public function getStudentsByClass(Request $request)
 
 public function promoteStudents(Request $request)
 {
+    $user = Auth::user();
+    $schoolId = $user->school_id;
+
     $request->validate([
-        'from_class' => 'required|integer',
-        'to_class' => 'required|integer',
-        'student_ids' => 'required|array',
+        'from_class' => 'required|integer|exists:student_classes,id',
+        'to_class' => 'required|integer|exists:student_classes,id|different:from_class',
+        'student_ids' => 'required|array|min:1',
+        'student_ids.*' => 'required|integer|exists:users,id',
     ]);
 
-    User::whereIn('id', $request->student_ids)
-        ->update([
-            'level_id' => $request->to_class,
-        ]);
+    $fromClass = (int) $request->from_class;
+    $toClass   = (int) $request->to_class;
+    $studentIds = $request->student_ids;
+
+    // TEACHER restriction: must be assigned to from_class
+    if (strtolower($user->role) === 'teacher') {
+        $allowed = TeacherEnrollment::where('user_id', $user->id)
+            ->where('school_id', $schoolId)
+            ->where('enroll', '1')
+            ->where('level_id', $fromClass)
+            ->exists();
+
+        if (!$allowed) {
+            return response()->json([
+                'message' => 'You are not allowed to promote students from this class.',
+            ], 403);
+        }
+    }
+
+    // Safety: ensure students belong to this school + are in from_class
+    $validCount = User::where('school_id', $schoolId)
+        ->where('role', 'Student')
+        ->where('level_id', $fromClass)
+        ->whereIn('id', $studentIds)
+        ->count();
+
+    if ($validCount !== count($studentIds)) {
+        return response()->json([
+            'message' => 'Some selected students are not in the selected From Class (or not in your school).',
+        ], 422);
+    }
+
+    User::where('school_id', $schoolId)
+        ->where('role', 'Student')
+        ->where('level_id', $fromClass)
+        ->whereIn('id', $studentIds)
+        ->update(['level_id' => $toClass]);
 
     return response()->json(['message' => 'Students promoted successfully']);
 }
@@ -667,7 +747,47 @@ public function promoteStudents(Request $request)
     }
 
   
-  
+/**
+     * Decrypt and return the student's default password
+     *
+     
+     */
+  public function decryptPassword(Request $request)
+{
+    $request->validate([
+        'user_id' => 'required|integer|exists:users,id',
+    ]);
+
+    $student = User::findOrFail($request->user_id);
+
+    if (!$student->default_password) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No default password found for this student',
+        ], 404);
+    }
+
+    try {
+        $decryptedPassword = $student->default_password;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password decrypted successfully',
+            'decrypted_password' => $decryptedPassword,
+        ], 200);
+
+    } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
+        Log::error('Password decryption failed', [
+            'user_id' => $student->id,
+            'error' => $e->getMessage()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to decrypt password. The password may be corrupted.',
+        ], 500);
+    }
+}
 
 
 

@@ -7,35 +7,28 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 
+
+
 class SystemNotification extends Notification
 {
-     use Queueable;
+    use Queueable;
 
-    protected $message;
-    protected $actionUrl;
-    protected $type;
+    protected string $message;
+    protected string $actionUrl;
+    protected string $type;
 
-    /**
-     * Create a new notification instance.
-     */
-    public function __construct(string $message, string $type = 'info', string $actionUrl = null)
+    public function __construct(string $message, string $actionUrl, string $type = 'info')
     {
         $this->message = $message;
         $this->type = $type;
         $this->actionUrl = $actionUrl;
     }
 
-    /**
-     * Determine which channels to send notification through.
-     */
     public function via($notifiable)
     {
-        return ['database']; 
+        return ['database'];
     }
 
-    /**
-     * Store notification data in the database.
-     */
     public function toDatabase($notifiable)
     {
         return [
@@ -45,3 +38,4 @@ class SystemNotification extends Notification
         ];
     }
 }
+

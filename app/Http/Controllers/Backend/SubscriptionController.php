@@ -21,362 +21,170 @@ use Carbon\Carbon;
 
 class SubscriptionController extends Controller
 {
-    protected $paystackSecretKey;
+  protected $paystackSecretKey;
 
     public function __construct()
     {
-        $this->paystackSecretKey = config('app.paystack_secret_key');
+        $this->paystackSecretKey = config('services.paystack.secret');
+
+        if (!$this->paystackSecretKey) {
+            Log::error("PAYSTACK_SECRET_KEY is missing. Set it in .env and clear config cache.");
+        }
     }
 
     /**
-     * 🔹 Initialize a Paystack transaction
+     * One-time Paystack payment only
      */
-    public function initialize(Request $request)
-    {
-        $request->validate([
-            'plan_id' => 'required|exists:subscription_plans,id',
-            'email' => 'required|email',
-            // 'auto_renew' => 'required|boolean',
-            
-        ]);
-
-        $plan = SubscriptionPlan::findOrFail($request->plan_id);
-        $user = User::where('email', $request->email)->firstOrFail();
-
-        if ($request->auto_renew && !$plan->paystack_plan_code) {
-            return response()->json(['message' => 'This plan does not support auto-renewal.'], 400);
-        }
-
-        $reference = 'trx_' . uniqid();
-        $amountInKobo = $plan->price * 100;
-
-        $payload = [
-            'email' => $user->email,
-            'amount' => $amountInKobo,
-            'reference' => $reference,
-            // 'callback_url' => config('app.frontend_url') . '/dashboard',
-            'metadata' => [
-                'plan_id' => $plan->id,
-                'user_id' => $user->id,
-                'auto_renew' => $request->auto_renew,
-            ],
-        ];
-
-
-     
-
-        $response = Http::withToken($this->paystackSecretKey)
-            ->post('https://api.paystack.co/transaction/initialize', $payload);
-
-        if ($response->failed() || !$response->json('status')) {
-            Log::error('❌ Paystack Initialization Failed', $response->json());
-            return response()->json(['message' => 'Could not initialize payment.'], 500);
-        }
-
-        SubPayment::create([
-            'user_id' => $user->id,
-             'subscription_plan_id' => $plan->id,
-            'reference' => $reference,
-            'amount' => $plan->price,
-            'status' => 'pending',
-        ]);
-
-        return response()->json($response->json('data'));
-    }
-
-    /**
-     * 🔹 Verify transaction and create Paystack Subscription
-     */
-
-
-public function verify($reference)
+  public function initialize(Request $request)
 {
-    $user = Auth::user();
+    $request->validate([
+        'plan_id' => 'required|exists:subscription_plans,id',
+        'email' => 'required|email',
+    ]);
 
-    $response = Http::withToken($this->paystackSecretKey)
-        ->get("https://api.paystack.co/transaction/verify/{$reference}");
+    $plan = SubscriptionPlan::findOrFail($request->plan_id);
+    $user = User::where('email', $request->email)->firstOrFail();
 
-    if ($response->failed() || !$response->json('status')) {
-        Log::error('❌ Paystack Verification Failed', $response->json());
-        return response()->json(['message' => 'Payment verification failed'], 500);
+    $reference = 'trx_' . uniqid();
+    $amountInKobo = (int) round($plan->price * 100);
+
+    $payload = [
+        'email' => $user->email,
+        'amount' => $amountInKobo,
+        'reference' => $reference,
+        'callback_url' => rtrim(config('app.frontend_url'), '/') . '/checkout',
+        'metadata' => [
+            'plan_id' => $plan->id,
+            'user_id' => $user->id,
+            'payment_source' => 'paystack',
+            'auto_renew' => 0,
+        ],
+    ];
+
+    $response = Http::withHeaders([
+        'Authorization' => 'Bearer ' . $this->paystackSecretKey,
+        'Accept' => 'application/json',
+    ])->post('https://api.paystack.co/transaction/initialize', $payload);
+
+    if (!$response->ok() || !$response->json('status')) {
+        Log::error('Paystack initialize failed', [
+            'response' => $response->json(),
+        ]);
+
+        return response()->json([
+            'message' => 'Unable to initialize payment.',
+            'error' => $response->json(),
+        ], 400);
     }
 
-    $data = $response->json('data');
-    Log::info('✅ Paystack Payment Verified', [$data]);
+    SubPayment::create([
+        'user_id' => $user->id,
+        'subscription_plan_id' => $plan->id,
+        'reference' => $reference,
+        'amount' => $plan->price,
+        'status' => 'pending',
+    ]);
 
-    $payment = SubPayment::where('reference', $reference)->first();
-    $plan = SubscriptionPlan::find($payment->subscription_plan_id);
-    $planCode = $plan->paystack_plan_code ?? null;
+    return response()->json($response->json('data'));
+}
 
-    $authorizationCode = $data['authorization']['authorization_code'] ?? null;
-    $customerCode = $data['customer']['customer_code'] ?? null;
+    /**
+     * Verify one-time payment and activate subscription locally
+     */
+    public function verify($reference)
+    {
+        $response = Http::withHeaders([
+            'Authorization' => 'Bearer ' . $this->paystackSecretKey,
+            'Accept' => 'application/json',
+        ])->get("https://api.paystack.co/transaction/verify/{$reference}");
 
-    if ($data['status'] === 'success' && $planCode && $authorizationCode && $customerCode) {
-
-        // ✅ Step 1: Check for existing subscription
-        $existingSub = Subscription::where('user_id', $user->id)
-            ->whereNotNull('subscription_code')
-            ->where('status', 'active')
-            ->first();
-
-        if ($existingSub && $existingSub->subscription_code && $existingSub->email_token) {
-            // ✅ Step 2: Disable the existing subscription on Paystack
-            $disableResponse = Http::withToken($this->paystackSecretKey)
-                ->post('https://api.paystack.co/subscription/disable', [
-                    'code' => $existingSub->subscription_code,
-                    'token' => $existingSub->email_token,
-                ]);
-
-            if ($disableResponse->ok() && $disableResponse->json('status')) {
-                $existingSub->update(['status' => 'canceled']);
-                Log::info('🛑 Old subscription disabled on Paystack', [
-                    'subscription_code' => $existingSub->subscription_code,
-                ]);
-            } else {
-                Log::warning('⚠️ Failed to disable old subscription', [
-                    'response' => $disableResponse->json(),
-                    'existing' => $existingSub->subscription_code,
-                ]);
-            }
-        }
-
-        // ✅ Step 3: Create a new Paystack subscription
-        $subscriptionResponse = Http::withToken($this->paystackSecretKey)
-            ->post('https://api.paystack.co/subscription', [
-                'customer' => (string) $customerCode,
-                'plan' => (string) $planCode,
-                'authorization' => (string) $authorizationCode,
+        if (!$response->ok() || !$response->json('status')) {
+            Log::error('Paystack verification failed', [
+                'reference' => $reference,
+                'response' => $response->json(),
             ]);
 
-        if ($subscriptionResponse->ok() && $subscriptionResponse->json('status')) {
-            $subData = $subscriptionResponse->json('data');
+            return response()->json([
+                'message' => 'Payment verification failed.',
+                'error' => $response->json(),
+            ], 400);
+        }
+
+        $data = $response->json('data');
+        Log::info('Paystack payment verified', ['data' => $data]);
+
+        if (($data['status'] ?? null) !== 'success') {
+            return response()->json(['message' => 'Payment was not successful.'], 400);
+        }
+
+        $payment = SubPayment::where('reference', $reference)->first();
+
+        if (!$payment) {
+            return response()->json(['message' => 'Payment record not found.'], 404);
+        }
+
+        $plan = SubscriptionPlan::find($payment->subscription_plan_id);
+        if (!$plan) {
+            return response()->json(['message' => 'Subscription plan not found.'], 404);
+        }
+
+        $userId = $data['metadata']['user_id'] ?? $payment->user_id ?? Auth::id();
+        $user = User::find($userId);
+
+        if (!$user) {
+            return response()->json(['message' => 'User not found.'], 404);
+        }
+
+        DB::transaction(function () use ($payment, $data, $plan, $user) {
+            $payment->update([
+                'status' => 'successful',
+                'paystack_id' => $data['id'] ?? null,
+                'channel' => $data['channel'] ?? null,
+                'card_type' => $data['authorization']['card_type'] ?? null,
+                'last4' => $data['authorization']['last4'] ?? null,
+                'starts_at' => now(),
+            ]);
+
+            $existingSubscription = Subscription::where('user_id', $user->id)->lockForUpdate()->first();
+
+            $baseStart = now();
+
+            // If current subscription is still active, extend from current end date
+            if ($existingSubscription && $existingSubscription->ends_at && Carbon::parse($existingSubscription->ends_at)->isFuture()) {
+                $baseStart = Carbon::parse($existingSubscription->ends_at);
+            }
+
+            $newEnd = Carbon::parse($baseStart)->addDays((int) $plan->duration_in_days);
 
             Subscription::updateOrCreate(
                 ['user_id' => $user->id],
                 [
-                    'status' => 'active',
                     'subscription_plan_id' => $plan->id,
-                    'authorization_code' => $authorizationCode,
-                    'customer_code' => $customerCode,
-                   'subscription_code' => $subData['subscription_code'] ?? null,
-                   'auto_renew' => 1,
-                  'auto_renew_source' => "card",
-                    'email_token' => $subData['email_token'] ?? null,
+                    'status' => 'active',
+
+                    // No Paystack recurring fields
+                    'authorization_code' => null,
+                    'customer_code' => null,
+                    'subscription_code' => null,
+                    'email_token' => null,
+
+                    // Paystack should never auto-renew now
+                    'auto_renew' => 0,
+                    'auto_renew_source' => 'paystack',
+
                     'starts_at' => now(),
-                    'ends_at' => now()->addDays((int) $plan->duration_in_days),
+                    'ends_at' => $newEnd,
+                    'notified_about_expiry' => 0,
+                    'reminder_stage' => 0,
+                    'last_reminded_at' => null,
                 ]
             );
+        });
 
-            Log::info('✅ New subscription created successfully', $subData);
-        } else {
-            Log::warning('⚠️ Failed to create new subscription', [
-                'response' => $subscriptionResponse->json(),
-            ]);
-        }
-    } else {
-        Log::warning('⚠️ Missing required fields', [
-            'plan_code' => $planCode,
-            'authorization_code' => $authorizationCode,
-            'customer_code' => $customerCode,
+        return response()->json([
+            'message' => 'Payment verified successfully',
         ]);
     }
-
-    // ✅ Step 4: Update the user's payment record
-    $payment->update([
-        'status' => 'successful',
-        'paystack_id' => $data['id'],
-        'channel' => $data['channel'],
-        'card_type' => $data['authorization']['card_type'] ?? null,
-        'last4' => $data['authorization']['last4'] ?? null,
-        'starts_at' => now(),
-    ]);
-
-    return response()->json(['message' => 'Payment verified successfully']);
-}
-
-
-public function handleWebhook(Request $request)
-{
-    $input = $request->getContent(); 
-    $paystackSignature = $request->header('x-paystack-signature');
-    $computedSignature = hash_hmac('sha512', $input, $this->paystackSecretKey);
-
-    if (!hash_equals($computedSignature, $paystackSignature)) {
-        Log::warning('Invalid Paystack Webhook Signature', [
-            'received_signature' => $paystackSignature,
-            'computed_signature' => $computedSignature,
-        ]);
-        return response()->json(['message' => 'Invalid signature'], 401);
-    }
-
-    $payload = json_decode($input, true);
-    Log::info('Paystack Webhook Received:', ['payload' => $payload]);
-
-    $event = $payload['event'] ?? null;
-    $data = $payload['data'] ?? [];
-
-    try {
-        switch ($event) {
-           
-            case 'invoice.create':
-                $this->handleInvoiceCreate($data);
-                break;
-
-            case 'invoice.payment_failed':
-                $this->handleInvoiceFailed($data);
-                break;
-
-            default:
-                Log::info("Unhandled Paystack event: {$event}");
-                break;
-        }
-    } catch (\Exception $e) {
-        Log::error("Error handling webhook event [{$event}]: " . $e->getMessage());
-    }
-
-    return response()->json(['message' => 'Webhook handled'], 200);
-}
-
-private function handleInvoiceFailed($data)
-{
-    $subscriptionCode = $data['subscription']['subscription_code'] ?? null;
-    $email = $data['customer']['email'] ?? null;
-
-    if (!$subscriptionCode || !$email) {
-        Log::warning('Invoice failed missing subscription_code or email', $data);
-        return;
-    }
-
-    $subscription = Subscription::where('subscription_code', $subscriptionCode)->first();
-
-    if (!$subscription) {
-        Log::warning("⚠️ Subscription not found for code: {$subscriptionCode}");
-        return;
-    }
-
-    $user = User::where('email', $email)->first();
-    if (!$user) {
-        Log::warning("⚠️ User not found for failed invoice: {$email}");
-        return;
-    }
-
-    // 🔥 Step 1: Cancel subscription on Paystack
-    if ($subscription->subscription_code && $subscription->email_token) {
-        $response = Http::withToken($this->paystackSecretKey)
-            ->post('https://api.paystack.co/subscription/disable', [
-                'code' => $subscription->subscription_code,
-                'token' => $subscription->email_token,
-            ]);
-
-        if ($response->failed() || !$response->json('status')) {
-            Log::error('❌ Paystack cancel failed on invoice failure', [
-                'response' => $response->json(),
-                'subscription_id' => $subscription->id,
-            ]);
-        }
-    }
-
-    // 🔁 Step 2: Update subscription status in DB
-    $subscription->update([
-        'status' => 'cancelled',
-        'auto_renew' => false,
-    ]);
-$frontendUrl = config('app.frontend_url') . '/subscriptions';
-    // 🔔 Step 3: Send notification to user
-    try {
-        $message = "Your recent subscription payment failed. Your subscription has been cancelled. Please update your payment method to continue using our services.";
-        $user->notify(new \App\Notifications\SystemNotification(
-            message: $message,
-            type: 'error',
-            actionUrl: $frontendUrl
-            
-        ));
-
-        Log::info("📩 Notification sent to user {$user->email} for failed invoice");
-    } catch (\Throwable $e) {
-        Log::warning("⚠️ Failed to send notification: " . $e->getMessage());
-    }
-
-    // 🔚 Step 4: Log the event
-    Log::warning("⚠️ Invoice payment failed and subscription cancelled for {$email}");
-}
-
-
-
-
-private function handleInvoiceCreate($data)
-{
-    $subscriptionCode = $data['subscription']['subscription_code'] ?? null;
-    $email = $data['customer']['email'] ?? null;
-    $amount = isset($data['amount']) ? ($data['amount'] / 100) : 0;
-    $reference = $data['transaction']['reference'] ?? Str::random(12);
-    $channel = $data['authorization']['channel'] ?? 'card';
-    $cardType = $data['authorization']['card_type'] ?? null;
-    $last4 = $data['authorization']['last4'] ?? null;
-
-    if (!$subscriptionCode || !$email) {
-        Log::warning('Invoice event missing subscription or email', $data);
-        return;
-    }
-
-    $user = User::where('email', $email)->first();
-    $subscription = Subscription::where('subscription_code', $subscriptionCode)->first();
-
-    if (!$user || !$subscription) {
-        Log::warning('Invoice event: user or subscription not found', compact('subscriptionCode', 'email'));
-        return;
-    }
-
-    $plan = SubscriptionPlan::find($subscription->subscription_plan_id);
-    $duration = (int) ($plan->duration_in_days ?? 90);
-
-    // ✅ Renew or activate subscription
-    $subscription->update([
-        'status' => 'active',
-        'starts_at' => now(),
-        'ends_at' => now()->addDays($duration),
-    ]);
-
-    // ✅ Log payment in sub_payments table
-    if (!SubPayment::where('reference', $reference)->exists()) {
-        SubPayment::create([
-            'user_id' => $user->id,
-            'subscription_plan_id' => $plan ? $plan->id : null,
-            'reference' => $reference,
-            'amount' => $amount,
-            'status' => 'successful',
-            'channel' => $channel,
-            'card_type' => $cardType,
-            'last4' => $last4,
-            'starts_at' => now(),
-        ]);
-    }
-
-    // ✅ Send notification to user
-    try {
-        $message = "Your subscription renewal of ₦" . number_format($amount, 2) . " for the plan '{$plan->name}' was successful.";
-        $frontendUrl = config('app.frontend_url', 'https://app.gradequest.com.ng/dashboard/subscriptions');
-
-        $user->notify(new \App\Notifications\SystemNotification(
-            $message,
-            'success',
-            $frontendUrl
-        ));
-
-        Log::info("📩 Renewal notification sent to {$email}");
-    } catch (\Throwable $e) {
-        Log::error("❌ Failed to send renewal notification to {$email}: " . $e->getMessage());
-    }
-
-    Log::info("✅ Invoice successfully processed for {$email}, ref: {$reference}, amount: ₦{$amount}");
-}
-
-
-
-
-
-
-
 
 
 
@@ -384,9 +192,12 @@ private function handleInvoiceCreate($data)
     /**
      * 🔹 calcel button
      */
-   public function cancelSubscription(Request $request)
+
+
+    public function cancelSubscription(Request $request)
 {
     $user = $request->user();
+
     $subscription = Subscription::where('user_id', $user->id)
         ->where('status', 'active')
         ->first();
@@ -395,33 +206,15 @@ private function handleInvoiceCreate($data)
         return response()->json(['message' => 'No active subscription found.'], 404);
     }
 
-    // Cancel on Paystack if applicable
-    if ($subscription->subscription_code && $subscription->email_token) {
-        $response = Http::withToken($this->paystackSecretKey)
-            ->post('https://api.paystack.co/subscription/disable', [
-                'code' => $subscription->subscription_code,
-                'token' => $subscription->email_token,
-            ]);
-
-        if ($response->failed() || !$response->json('status')) {
-            Log::error('❌ Paystack cancel failed', [
-                'response' => $response->json(),
-                'subscription_id' => $subscription->id,
-            ]);
-
-            return response()->json([
-                'message' => 'Failed to cancel subscription on Paystack. Try again later.'
-            ], 500);
-        }
-    }
-
-    // Update subscription in your DB
     $subscription->update([
         'status' => 'cancelled',
         'auto_renew' => false,
+        'authorization_code' => null,
+        'customer_code' => null,
+        'subscription_code' => null,
+        'email_token' => null,
     ]);
 
-    // Optionally notify user
     try {
         Mail::raw("Your subscription has been successfully cancelled.", function ($m) use ($user) {
             $m->to($user->email)->subject('Subscription Cancelled');
@@ -430,11 +223,11 @@ private function handleInvoiceCreate($data)
         Log::warning("Mail sending failed for subscription cancel: " . $e->getMessage());
     }
 
-    Log::info("✅ Subscription cancelled for user {$user->id}");
+    Log::info("Subscription cancelled for user {$user->id}");
 
     return response()->json([
         'message' => 'Subscription cancelled successfully.',
-        'status' => 'cancelled'
+        'status' => 'cancelled',
     ]);
 }
 
@@ -443,7 +236,7 @@ private function handleInvoiceCreate($data)
      * ✅ WALLET CHARGE FOR SUBSCRIPTION
      */
    public function walletCharge(Request $request)
-{
+    {
     $user = Auth::user();
 
     if (!$user) {
@@ -589,9 +382,8 @@ private function handleInvoiceCreate($data)
     
 public function updateRenewalSource(Request $request)
 {
-    // Validate input
     $request->validate([
-        'source' => 'required|in:wallet,card',
+        'source' => 'required|in:wallet,paystack',
     ]);
 
     $user = $request->user();
@@ -601,52 +393,23 @@ public function updateRenewalSource(Request $request)
         return response()->json(['message' => 'No active subscription found'], 404);
     }
 
-    // Check if user is switching to WALLET
-    if ($request->source === 'wallet') {
-        // Only disable Paystack if:
-        // 1️⃣ There's a subscription_code (so Paystack knows it), and
-        // 2️⃣ The previous auto_renew_source was 'card' (means Paystack was being used)
-        if ($subscription->subscription_code && $subscription->auto_renew_source !== 'wallet') {
-            try {
-                $response = Http::withToken($this->paystackSecretKey)->post(
-                    'https://api.paystack.co/subscription/disable',
-                    [
-                        'code' => $subscription->subscription_code,
-                        'token' => $subscription->email_token,
-                    ]
-                );
+    $source = $request->source;
 
-                if ($response->failed() || !$response->json('status')) {
-                    Log::error('Failed to disable Paystack subscription', [
-                        'response' => $response->json(),
-                        'subscription_id' => $subscription->id,
-                    ]);
-
-                    return response()->json([
-                        'message' => 'Could not disable Paystack subscription at this time.'
-                    ], 500);
-                }
-
-                Log::info("Paystack subscription disabled for {$user->email}");
-            } catch (\Exception $e) {
-                Log::error('Error disabling Paystack subscription: ' . $e->getMessage());
-                return response()->json(['message' => 'Error disabling Paystack subscription.'], 500);
-            }
-        } else {
-            Log::info("Skipping Paystack disable — already using wallet or no Paystack subscription found.", [
-                'subscription_id' => $subscription->id,
-            ]);
-        }
-    }
-
-    // ✅ Update local subscription record
     $subscription->update([
-        'auto_renew_source' => $request->source,
+        'auto_renew_source' => $source,
+        // Paystack should never auto-renew
+        'auto_renew' => $source === 'paystack' ? 0 : (bool) $subscription->auto_renew,
+
+        // Clear old Paystack recurring fields completely
+        'authorization_code' => null,
+        'customer_code' => null,
+        'subscription_code' => null,
+        'email_token' => null,
     ]);
 
     return response()->json([
         'message' => 'Auto-renewal source updated successfully.',
-        'source' => $request->source,
+        'source' => $source,
     ]);
 }
 
@@ -658,4 +421,68 @@ public function updateRenewalSource(Request $request)
     {
         return response()->json(User::with('schoolsetting')->find(Auth::id()));
     }
+
+
+
+    // Add at bottom of SubscriptionController
+
+public function billingHistory(Request $request)
+{
+    $user = $request->user();
+
+    // Payments history
+    $payments = SubPayment::with('plan')
+        ->where('user_id', $user->id)
+        ->orderByDesc('created_at')
+        ->get()
+        ->map(function ($p) {
+            return [
+                'id' => $p->id,
+                'reference' => $p->reference,
+                'amount' => (float) $p->amount,
+                'status' => $p->status,
+                'channel' => $p->channel,
+                'card_type' => $p->card_type,
+                'last4' => $p->last4,
+                'starts_at' => $p->starts_at,
+                'created_at' => $p->created_at,
+                'plan' => [
+                    'id' => $p->plan->id ?? null,
+                    'name' => $p->plan->name ?? 'Unknown',
+                    'price' => $p->plan->price ?? null,
+                    'duration_in_days' => $p->plan->duration_in_days ?? null,
+                ],
+            ];
+        });
+
+    // Current subscription details
+    $subscription = Subscription::with('plan')
+        ->where('user_id', $user->id)
+        ->latest('created_at')
+        ->first();
+
+    $subPayload = null;
+    if ($subscription) {
+        $subPayload = [
+            'id' => $subscription->id,
+            'status' => $subscription->status,
+            'auto_renew' => (bool) $subscription->auto_renew,
+            'auto_renew_source' => $subscription->auto_renew_source ?? 'wallet',
+            'starts_at' => $subscription->starts_at,
+            'ends_at' => $subscription->ends_at,
+            'plan' => [
+                'id' => $subscription->plan->id ?? null,
+                'name' => $subscription->plan->name ?? 'Unknown',
+                'price' => $subscription->plan->price ?? 0,
+                'duration_in_days' => $subscription->plan->duration_in_days ?? null,
+            ],
+        ];
+    }
+
+    return response()->json([
+        'subscription' => $subPayload,
+        'payments' => $payments,
+    ]);
+}
+
 }

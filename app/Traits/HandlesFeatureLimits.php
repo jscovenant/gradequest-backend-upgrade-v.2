@@ -82,7 +82,7 @@ trait HandlesFeatureLimits
 
         if ($maxStudents > 0) {
             $currentStudentCount = User::where('school_id', $user->school_id)
-                ->where('role', 'student')
+                ->where('role', 'Student')
                 ->count();
 
             if ($currentStudentCount >= $maxStudents) {
@@ -101,7 +101,7 @@ trait HandlesFeatureLimits
 
         if ($maxTeachers > 0) {
             $currentTeacherCount = User::where('school_id', $user->school_id)
-                ->where('role', 'teacher')
+                ->where('role', 'Teacher')
                 ->count();
 
             if ($currentTeacherCount >= $maxTeachers) {

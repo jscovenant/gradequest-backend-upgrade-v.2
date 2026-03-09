@@ -27,73 +27,27 @@ use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
-
-class DashboardController extends Controller
+class AdminDashboardController extends Controller
 {
- 
-
-    
- public function getDashboardCounts(Request $request)
+       public function getDashboardCounts(Request $request)
 {
     $auth = Auth::user();
 
-    // === COUNTS ===
+    // === TOTAL SCHOOLS, ADMINS, RESULTS ===
     $totalSchools = SchoolSetting::count();
-    $totalAdmins = User::where('role', 'Admin')->count();
+    $totalAdmins  = User::where('role', 'Admin')->count();
     $totalResults = Average::count();
 
-    // **************************************
-    // FIND FREE PLAN DYNAMICALLY
-    // **************************************
-    $freePlan = SubscriptionPlan::where('name', 'Free')->first();
-    $freePlanId = $freePlan ? $freePlan->id : null;
+    // === SCHOOL USERS COUNTS (Students, Teachers, Parents) IN ONE QUERY ===
+    $schoolUsers = User::where('school_id', $auth->school_id)
+        ->selectRaw("
+            SUM(CASE WHEN role = 'Student' THEN 1 ELSE 0 END) as students,
+            SUM(CASE WHEN role = 'Teacher' THEN 1 ELSE 0 END) as teachers,
+            SUM(CASE WHEN role = 'Parent' THEN 1 ELSE 0 END) as parents
+        ")
+        ->first();
 
-    // ======================================
-    // COUNT FREE SUBSCRIBERS
-    // ======================================
-    $freeSubscribers = Subscription::when($freePlanId, function ($q) use ($freePlanId) {
-            $q->where('subscription_plan_id', $freePlanId);
-        })
-        ->count();
-
-    // ======================================
-    // COUNT ACTIVE SUBSCRIBERS (not expired)
-    // ======================================
- $activeSubscribers = Subscription::where('status', 'active')
-    ->where('ends_at', '>=', now())
-    ->whereHas('plan', function ($q) {
-        $q->where('name', '!=', 'Free');
-    })
-    ->count();
-
-
-    // ======================================
-    // COUNT EXPIRED SUBSCRIBERS
-    // ======================================
-    $expiredSubscribers = Subscription::where('status', 'expired')
-        ->orWhere('ends_at', '<', now())
-        ->count();
-
-    // === Revenue Stats ===
-    $totalRevenue = DB::table('sub_payments')
-        ->where('status', 'successful')
-        ->sum('amount');
-
-    $monthlyRevenue = DB::table('sub_payments')
-        ->where('status', 'successful')
-        ->whereYear('created_at', now()->year)
-        ->whereMonth('created_at', now()->month)
-        ->sum('amount');
-
-    // === School-specific stats ===
-    $students = User::where('role', 'Student')
-        ->where('school_id', $auth->school_id)
-        ->count();
-
-    $teachers = User::where('role', 'Teacher')
-        ->where('school_id', $auth->school_id)
-        ->count();
-
+    // === RESULTS UPLOADED ===
     $resultsUploaded = Average::where('school_id', $auth->school_id)->count();
 
     // === RETURN ALL STATS ===
@@ -101,18 +55,14 @@ class DashboardController extends Controller
         'totalSchools'      => $totalSchools,
         'totalAdmins'       => $totalAdmins,
         'totalResults'      => $totalResults,
-        'totalRevenue'      => (float) $totalRevenue,
-        'monthlyRevenue'    => (float) $monthlyRevenue,
-
-        'freeSubscribers'   => $freeSubscribers,
-        'activeSubscribers' => $activeSubscribers,
-        'expiredSubscribers'=> $expiredSubscribers,
-
-        'students'          => $students,
-        'teachers'          => $teachers,
+        'students'          => $schoolUsers->students,
+        'teachers'          => $schoolUsers->teachers,
+        'parents'           => $schoolUsers->parents,
         'results_uploaded'  => $resultsUploaded,
     ]);
 }
+
+
 
 
 public function getBursarStats()
@@ -205,20 +155,14 @@ public function getPerformanceStats()
 {
     $schoolId = Auth::user()->school_id;
 
-    // 1️⃣ Get Current Academic Session
+    // 1️⃣ Get current session
     $currentSession = AcademicSession::where('school_id', $schoolId)
         ->where('is_current', 1)
-        ->first();
-
-    if (!$currentSession) {
-        return response()->json([
-            "error" => "Current session not set."
-        ], 404);
-    }
+        ->firstOrFail();
 
     $sessionName = $currentSession->name;
 
-    // 2️⃣ Get all terms in this school (not just active term)
+    // 2️⃣ Get all terms in this school
     $terms = Term::where('school_id', $schoolId)->pluck('name');
 
     if ($terms->isEmpty()) {
@@ -227,24 +171,19 @@ public function getPerformanceStats()
         ], 404);
     }
 
-    // 3️⃣ Get all student IDs in the school
-    $studentIds = User::where('role', 'Student')
-        ->where('school_id', $schoolId)
-        ->pluck('id');
+    // 3️⃣ Fetch all averages for the session in ONE query
+    $averages = Average::where('school_id', $schoolId)
+        ->where('session', $sessionName)
+        ->whereIn('term', $terms)
+        ->groupBy('term')
+        ->selectRaw('term, AVG(total_average) as avg_score')
+        ->pluck('avg_score', 'term'); // returns ['termName' => avg_score]
 
-    // 4️⃣ Compute average for each term in the current session
-    $data = [];
-    foreach ($terms as $termName) {
-        $avg = Average::whereIn('user_id', $studentIds)
-            ->where('session', $sessionName)
-            ->where('term', $termName)
-            ->avg('total_average');
-
-        $data[] = [
-            'term' => $termName,
-            'average' => round($avg ?? 0, 2)
-        ];
-    }
+    // 4️⃣ Prepare result in order of terms
+    $data = $terms->map(fn($term) => [
+        'term' => $term,
+        'average' => round($averages[$term] ?? 0, 2)
+    ]);
 
     return response()->json([
         'session' => $sessionName,
@@ -258,7 +197,8 @@ public function getPerformanceStats()
 
 
 
- public function getTopPerformingStudents(Request $request)
+
+public function getTopPerformingStudents(Request $request)
 {
     $user = Auth::user();
     $schoolId = $user->school_id;
@@ -266,12 +206,11 @@ public function getPerformanceStats()
     $limit = $request->input('limit', 5);
     $currentPage = $request->input('page', 1);
 
-    // 🔹 Get active term
+    // 🔹 Get active term and current session in ONE query each
     $activeTerm = Term::where('school_id', $schoolId)
         ->where('status', 'Active')
         ->first();
 
-    // 🔹 Get current academic session
     $currentSession = AcademicSession::where('school_id', $schoolId)
         ->where('is_current', 1)
         ->first();
@@ -282,14 +221,16 @@ public function getPerformanceStats()
         ], 400);
     }
 
-    // 🔹 Fetch top performing students
-    $query = Average::with(['student', 'class'])
+    // 🔹 Fetch top performing students with only needed columns
+    $paginated = Average::with([
+            'student:id,firstname,surname,reg_no',
+            'class:id,name'
+        ])
         ->where('school_id', $schoolId)
         ->where('session', $currentSession->name)
         ->where('term', $activeTerm->name)
-        ->orderByDesc('total_average');
-
-    $paginated = $query->paginate($limit, ['*'], 'page', $currentPage);
+        ->orderByDesc('total_average')
+        ->paginate($limit, ['*'], 'page', $currentPage);
 
     $results = $paginated->map(function ($item) {
         return [
@@ -310,6 +251,7 @@ public function getPerformanceStats()
 
 
 
+
  
 // app/Http/Controllers/AcademicController.php
 
@@ -317,25 +259,28 @@ public function getCurrentSessionAndTerm()
 {
     $schoolId = Auth::user()->school_id;
 
-    // Get the latest active session for the school
+    // 🔹 Get latest active session (only needed columns)
     $session = AcademicSession::where('school_id', $schoolId)
         ->where('status', 'Active')
         ->orderByDesc('id')
+        ->select('name', 'start_date', 'end_date')
         ->first();
 
-    // Get the latest active term for the school
+    // 🔹 Get latest active term (only needed columns)
     $term = Term::where('school_id', $schoolId)
         ->where('status', 'Active')
         ->orderByDesc('id')
+        ->select('name')
         ->first();
 
     return response()->json([
-        'session' => $session ? $session->name : 'Not Set',
-        'start_date' => $session ? $session->start_date : 'Not Set',
-        'end_date' => $session ? $session->end_date : 'Not Set',
-        'term' => $term ? $term->name : 'Not Set',
+        'session' => $session?->name ?? 'Not Set',
+        'start_date' => $session?->start_date ?? 'Not Set',
+        'end_date' => $session?->end_date ?? 'Not Set',
+        'term' => $term?->name ?? 'Not Set',
     ]);
 }
+
 
 
 
@@ -344,7 +289,7 @@ public function parentDetails(Request $request)
     $parent = Auth::user();
 
     // Ensure only a parent can access this
-  if (!$parent->hasRole('Parent')) {
+  if (!$parent->role || $parent->role !== 'Parent') {
     return response()->json(['message' => 'Unauthorized'], 403);
 }
 
@@ -421,13 +366,7 @@ $childrenDetails = $children->map(function ($child) use ($fees) {
         'outstandingFees' => $outstandingFees,
         'children' => $childrenDetails
     ]);
-}
-
-
 
 }
 
-
-
-   
-   
+}

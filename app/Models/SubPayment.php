@@ -17,6 +17,10 @@ class SubPayment extends Model
     return $this->belongsTo(User::class, 'user_id');
 }
 
+public function plan() {
+  return $this->belongsTo(SubscriptionPlan::class, 'subscription_plan_id');
+}
+
 
 
 
