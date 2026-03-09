@@ -1,21 +1,30 @@
 # Environment
 .env
+.env.*
+!.env.example
 
 # Dependencies
-/vendor
-/node_modules
+/vendor/
+/node_modules/
 
-# Laravel
-/storage
-/bootstrap/cache
+# Laravel storage/runtime
+/storage/*.key
+/storage/logs/*.log
+/storage/framework/cache/data/*
+/storage/framework/sessions/*
+/storage/framework/testing/*
+/storage/framework/views/*
+/bootstrap/cache/*.php
+
+# Build output
+/public/build
+/public/hot
 
 # Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
-
-# Build
-/public/build
+pnpm-debug.log*
 
 # Server / cPanel junk
 backend.zip
@@ -26,3 +35,10 @@ php.ini
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Test / cache
+.phpunit.result.cache
