@@ -31,14 +31,14 @@ class AuthController extends Controller
      * Login
      */
   
-   
+
+
+
 public function login(Request $request)
 {
-   // ✅ Force JSON response and bypass domain check
     $request->headers->set('Accept', 'application/json');
     config(['sanctum.stateful' => []]);
 
-    // Validate request
     $request->validate([
         'identifier' => ['required', 'string'],
         'password'   => ['required', 'string'],
@@ -46,59 +46,72 @@ public function login(Request $request)
 
     $throttleKey = $this->throttleKey($request);
 
-    // Rate limiting
     if (RateLimiter::tooManyAttempts($throttleKey, 5)) {
         return response()->json([
-            'message' => 'Too many login attempts. Please try again later.'
+            'message' => 'Too many login attempts. Please try again later.',
         ], Response::HTTP_TOO_MANY_REQUESTS);
     }
 
-    // Find user by email or reg number + eager load school setting
+    // Resolved by ResolveSchoolFromDomain middleware when the request
+    // arrives via a verified custom domain (e.g. portal.school.edu).
+    // NULL when logging in via the main app domain — schools without a
+    // custom domain always take this path and are unaffected.
+    $school = $request->attributes->get('school');
+
     $user = User::with('schoolsetting')
-        ->where('email', $request->identifier)
-        ->orWhere('reg_no', $request->identifier)
+        ->where(function ($q) use ($request) {
+            // Wrap in a closure so orWhere doesn't escape the school scope
+            $q->where('email', $request->identifier)
+              ->orWhere('reg_no', $request->identifier);
+        })
+        // Only add school_id scope when a domain was resolved.
+        // Schools without a custom domain: $school is null, clause is skipped.
+        ->when($school, fn($q) => $q->where('school_id', $school->id))
         ->first();
 
-    if (! $user || ! Hash::check($request->password, $user->password)) {
+    if (!$user || !Hash::check($request->password, $user->password)) {
         RateLimiter::hit($throttleKey, 60);
         return response()->json([
-            'message' => 'Invalid credentials.'
+            'message' => 'Invalid credentials.',
         ], Response::HTTP_UNPROCESSABLE_ENTITY);
     }
 
-    // Check account status (allow Super-Admin)
+    // Extra guard: if a custom domain was used, ensure the authenticated user
+    // actually belongs to that school. Redundant when ->when() is in place,
+    // but kept as a safety net against future query refactors.
+    if ($school && (int) $user->school_id !== (int) $school->id) {
+        RateLimiter::hit($throttleKey, 60);
+        return response()->json([
+            'message' => 'Invalid credentials.',
+        ], Response::HTTP_UNPROCESSABLE_ENTITY);
+    }
+
     $userRole = $user->role ?? null;
 
-    if ((int) $user->status !== 1 && $userRole !== 'Super-Admin') {
+    if ((int) $user->status !== 1 && $userRole !== 'Admin') {
         return response()->json([
-            'message' => 'Account is inactive.'
+            'message' => 'Account is inactive.',
         ], Response::HTTP_FORBIDDEN);
     }
 
-    // Clear rate limiter
     RateLimiter::clear($throttleKey);
 
-    // Create token
     $tokenResult = $user->createToken('access_token', ['basic-auth']);
-    $plainToken = $tokenResult->plainTextToken;
+    $plainToken  = $tokenResult->plainTextToken;
 
-    // Activity log (non-blocking)
     try {
         ActivityLog::create([
-            'user_id'    => $user->id,
-            'school_id'  => $user->school_id,
-            'action'     => 'login',
-            'description'=> 'User logged in',
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
+            'user_id'     => $user->id,
+            'school_id'   => $user->school_id,
+            'action'      => 'login',
+            'description' => 'User logged in' . ($school ? " via {$school->domain}" : ''),
+            'ip_address'  => $request->ip(),
+            'user_agent'  => $request->userAgent(),
         ]);
     } catch (\Throwable $e) {
-        Log::warning('Login activity log failed: '.$e->getMessage());
+        Log::warning('Login activity log failed: ' . $e->getMessage());
     }
 
-    /**
-     * Build SAFE user payload
-     */
     $safeUser = [
         'id'        => $user->id,
         'firstname' => $user->firstname,
@@ -107,11 +120,9 @@ public function login(Request $request)
         'school_id' => $user->school_id,
         'role'      => $userRole,
         'photo_url' => $user->photo
-            ? asset('uploads/users/'.$user->photo)
+            ? asset('uploads/users/' . $user->photo)
             : asset('img/profile.png'),
-
-        // ✅ School details (from school_settings table)
-        'school' => $user->schoolsetting ? [
+        'school'    => $user->schoolsetting ? [
             'name' => $user->schoolsetting->school_name,
             'logo' => $user->schoolsetting->logo
                 ? asset($user->schoolsetting->logo)
@@ -126,7 +137,6 @@ public function login(Request $request)
         'user'         => $safeUser,
     ], Response::HTTP_OK);
 }
-
 
     /**
      * Register (creates school + user + assigns role)
@@ -259,32 +269,32 @@ public function register(Request $request)
     /**
      * Send admin reset link / code (secure)
      */
-  public function sendAdminResetLink(Request $request)
+
+
+
+    public function sendAdminResetLink(Request $request)
 {
     $request->validate([
         'email' => ['required', 'email'],
     ]);
 
-    // Check if user exists AND is an Admin (role stored directly in users table)
     $user = User::where('email', $request->email)
                 ->where('role', 'Admin')
                 ->first();
 
-    if (! $user) {
-        return response()->json([
-            'message' => 'If an account exists, a reset code has been sent.'
-        ]);
-    }
+   
 
-    // Generate 6-digit OTP
+  
+
     $code = random_int(100000, 999999);
 
     $user->password_reset_code = Hash::make((string) $code);
     $user->password_reset_expires_at = now()->addMinutes(15);
     $user->save();
 
-    // Send email
-   Mail::to($user->email)->send(new ForgotPassword($user, $code));
+ 
+
+    Mail::to($user->email)->send(new ForgotPassword($user, $code));
 
     return response()->json([
         'message' => 'If an account exists, a reset code has been sent.'
@@ -292,34 +302,71 @@ public function register(Request $request)
 }
 
 
-    /**
-     * Reset admin password
-     */
-   public function resetAdminPassword(Request $request)
+ 
+
+
+public function verifyResetCode(Request $request)
 {
     $request->validate([
-        'email' => ['required','email','exists:users,email'],
-        'reset_code' => ['required','string'],
-        'password' => ['required', 'confirmed', Password::min(8)->mixedCase()->numbers()->symbols()],
+        'email' => ['required', 'email'],
+        'code'  => ['required', 'digits:6'],
     ]);
 
-    // MUST MATCH the check in sendAdminResetLink
     $user = User::where('email', $request->email)
                 ->where('role', 'Admin')
                 ->first();
 
+
+
     if (! $user) {
-        return response()->json(['message' => 'Invalid request.'], 400);
+        Log::warning('verifyResetCode: admin user not found', [
+            'email' => $request->email,
+        ]);
+
+        return response()->json(['message' => 'Invalid or expired reset code.'], 422);
     }
 
-    // if (!$user->password_reset_code 
-    //     || !$user->password_reset_expires_at 
-    //     || $user->password_reset_expires_at->isPast()) {
-    //     return response()->json(['message' => 'Reset code expired or invalid.'], 400);
-    // }
 
-    if (! Hash::check($request->reset_code, $user->password_reset_code)) {
-        return response()->json(['message' => 'Invalid reset code.'], 400);
+
+    if (! $user->password_reset_expires_at || now()->isAfter($user->password_reset_expires_at)) {
+        Log::warning('verifyResetCode: code expired or missing expiry', [
+            'user_id' => $user->id,
+            'expires_at' => $user->password_reset_expires_at,
+            'now' => now()->toDateTimeString(),
+        ]);
+
+        return response()->json(['message' => 'Invalid or expired reset code.'], 422);
+    }
+
+    $codeMatches = Hash::check((string) $request->code, $user->password_reset_code);
+
+  
+
+ 
+
+    return response()->json(['message' => 'Code verified.']);
+}
+
+
+
+public function resetPassword(Request $request)
+{
+    $request->validate([
+        'email'    => ['required', 'email'],
+        'code'     => ['required', 'digits:6'],
+        'password' => ['required', 'min:8', 'confirmed'],
+    ]);
+
+    $user = User::where('email', $request->email)
+                ->where('role', 'Admin')
+                ->first();
+
+    if (! $user || ! $user->password_reset_expires_at || now()->isAfter($user->password_reset_expires_at)) {
+        return response()->json(['message' => 'Invalid or expired reset code.'], 422);
+    }
+
+    if (! Hash::check((string) $request->code, $user->password_reset_code)) {
+        return response()->json(['message' => 'The reset code is incorrect.'], 422);
     }
 
     $user->password = Hash::make($request->password);
@@ -327,8 +374,7 @@ public function register(Request $request)
     $user->password_reset_expires_at = null;
     $user->save();
 
-    return response()->json(['message' => 'Password reset successful.']);
+    return response()->json(['message' => 'Password reset successfully.']);
 }
-
 }
 

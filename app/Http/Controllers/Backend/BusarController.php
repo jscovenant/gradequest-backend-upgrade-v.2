@@ -9,6 +9,7 @@ use Illuminate\Support\Str;
 use App\Models\User;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
 
 class BusarController extends Controller
 {
@@ -123,26 +124,36 @@ public function edit($id)
 }
 
     // ✅ Update bursar details
-    public function update(Request $request, $id)
-    {
-        $bursar = User::where('role', 'Bursar')->findOrFail($id);
+   public function update(Request $request, $id)
+{
+    $bursar = User::where('role', 'Bursar')->findOrFail($id);
 
-        $request->validate([
-            'firstname' => 'sometimes|required|string|max:100',
-            'surname' => 'sometimes|required|string|max:100',
-            'email' => 'sometimes|required|email|unique:users,email,' . $bursar->id,
-            'phone' => 'sometimes|required|string|max:20|unique:users,phone,' . $bursar->id,
-            'address' => 'nullable|string|max:255',
-            'status' => 'nullable|in:0,1',
-        ]);
+    $request->validate([
+        'firstname' => 'sometimes|required|string|max:100',
+        'surname' => 'sometimes|required|string|max:100',
+        'email' => 'sometimes|required|email|unique:users,email,' . $bursar->id,
+        'phone' => 'sometimes|required|string|max:20|unique:users,phone,' . $bursar->id,
+        'address' => 'nullable|string|max:255',
+        'status' => 'nullable|in:0,1',
+        'password' => 'nullable|string|min:6',
+    ]);
 
-        $bursar->update($request->only('firstname', 'surname', 'email', 'phone', 'address', 'status'));
+    $data = $request->only('firstname', 'surname', 'email', 'phone', 'address', 'status');
 
-        return response()->json([
-            'message' => 'Bursar updated successfully',
-            'bursar' => $bursar,
-        ]);
+    if ($request->filled('password')) {
+        $data['password'] = Hash::make($request->password);
+        $data['default_password'] = encrypt($request->password);
     }
+
+    $bursar->update($data);
+
+    return response()->json([
+        'message' => 'Bursar updated successfully',
+        'bursar' => $bursar,
+    ]);
+}
+
+
 
     // ✅ Delete bursar
     public function destroy($id)
@@ -154,4 +165,43 @@ public function edit($id)
             'message' => 'Bursar deleted successfully',
         ]);
     }
+
+
+    public function decryptPassword(Request $request)
+{
+    $request->validate([
+        'user_id' => 'required|integer|exists:users,id',
+    ]);
+
+    $student = User::findOrFail($request->user_id);
+
+    if (!$student->default_password) {
+        return response()->json([
+            'success' => false,
+            'message' => 'No default password found for this user',
+        ], 404);
+    }
+
+    try {
+        $decryptedPassword = Crypt::decrypt($student->default_password);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Password decrypted successfully',
+            'decrypted_password' => $decryptedPassword,
+        ], 200);
+
+    } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
+        Log::error('Password decryption failed', [
+            'user_id' => $student->id,
+            'error' => $e->getMessage()
+        ]);
+
+        return response()->json([
+            'success' => false,
+            'message' => 'Failed to decrypt password. The password may be corrupted.',
+        ], 500);
+    }
+}
+
 }

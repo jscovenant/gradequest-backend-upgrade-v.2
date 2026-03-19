@@ -17,3 +17,8 @@ Schedule::command('subscriptions:send-reminders')
     ->everyMinute();
 
 Schedule::command('subscriptions:auto-renew-wallet')->everyMinute();
+
+
+Schedule::command('results:scan-incomplete')->everyMinute();
+Schedule::command('results:scan-incomplete')->everyMinute();
+Schedule::command('results:scan-anomalies')->everyMinute();

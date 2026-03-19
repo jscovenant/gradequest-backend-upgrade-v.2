@@ -18,7 +18,7 @@ class FeeInvoiceReminderNotification extends Notification implements ShouldQueue
     public function __construct(
         public array $data,
         public bool $forceEmail = true,
-        public bool $forceWhatsApp = true
+        public bool $forceWhatsApp = false
     ) {}
 
     public function via($notifiable): array

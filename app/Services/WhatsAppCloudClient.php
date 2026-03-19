@@ -2,85 +2,102 @@
 
 namespace App\Services;
 
+use App\Models\SchoolWhatsappAccount;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
 class WhatsAppCloudClient
 {
-    public function sendTemplate(string $toPhone, string $templateName, string $lang = 'en', array $bodyParams = []): array
+    private string $version;
+    private string $globalToken;
+
+    public function __construct()
     {
-        $version = config('services.whatsapp.version');
-        $phoneNumberId = config('services.whatsapp.phone_number_id');
-        $token = config('services.whatsapp.token');
+        $this->version     = config('services.whatsapp.version', 'v23.0');
+        $this->globalToken = config('services.whatsapp.token'); // Your .env token only
+    }
 
-        
-
-        $components = [];
-        if (!empty($bodyParams)) {
-            $components[] = [
-                'type' => 'body',
-                'parameters' => array_map(
-                    fn ($v) => ['type' => 'text', 'text' => (string) $v],
-                    $bodyParams
-                ),
-            ];
-        }
+    public function sendTemplateForSchool(
+        int $schoolId,
+        string $toPhone,
+        string $templateName,
+        string $lang = 'en',
+        array $bodyParams = []
+    ): array {
+        $account = SchoolWhatsappAccount::query()
+            ->where('school_id', $schoolId)
+            ->where('status', 'active')
+            ->firstOrFail();
 
         $payload = [
             'messaging_product' => 'whatsapp',
-            'to' => $this->normalizePhone($toPhone),
-            'type' => 'template',
-            'template' => [
-                'name' => $templateName,
+            'to'                => $this->normalizePhone($toPhone),
+            'type'              => 'template',
+            'template'          => [
+                'name'     => $templateName,
                 'language' => ['code' => $lang],
-                'components' => $components,
-            ],    
+            ],
         ];
 
-        if (!empty($bodyParams)) {
-    $payload['template']['components'] = [[
-        'type' => 'body',
-        'parameters' => array_map(
-            fn ($v) => ['type' => 'text', 'text' => (string) $v],
-            $bodyParams
-        ),
-    ]];
+     if (!empty($bodyParams)) {
+    $payload['template']['components'] = [
+        [
+            'type'       => 'body',
+            'parameters' => [
+                ['type' => 'text', 'text' => (string) $bodyParams[0]],
+            ],
+        ],
+        [
+            // Required for Authentication templates
+            'type'    => 'button',
+            'sub_type' => 'url',
+            'index'   => '0',
+            'parameters' => [
+                ['type' => 'text', 'text' => (string) $bodyParams[0]],
+            ],
+        ],
+    ];
 }
 
-        $url = "https://graph.facebook.com/{$version}/{$phoneNumberId}/messages";
-                    Log::error('WA RUNTIME', [
-                'version' => $version,
-                'phone_number_id' => $phoneNumberId,
-                'url' => $url,
-            ]);
+        $url  = "https://graph.facebook.com/{$this->version}/{$account->phone_number_id}/messages";
 
-        $resp = Http::withToken($token)
+        $resp = Http::withToken($this->globalToken) // Always your token, never school's
             ->acceptJson()
             ->asJson()
             ->post($url, $payload);
 
         if (!$resp->successful()) {
-            throw new \RuntimeException("WhatsApp send failed: {$resp->status()} {$resp->body()}");
+            Log::error('WhatsApp send failed', [
+                'school_id' => $schoolId,
+                'status'    => $resp->status(),
+                'body'      => $resp->body(),
+            ]);
+
+            throw new \RuntimeException(
+                "WhatsApp send failed: {$resp->status()} {$resp->body()}"
+            );
         }
 
-        if (empty($phoneNumberId)) {
-    throw new \RuntimeException('WhatsApp phone_number_id is empty. Check WHATSAPP_PHONE_NUMBER_ID and config cache.');
-}
-
- 
+        // Deduct credit from school wallet after confirmed send
+        $this->deductSchoolCredit($schoolId);
 
         return $resp->json();
     }
 
-    private function normalizePhone(string $phone): string
+    private function deductSchoolCredit(int $schoolId): void
     {
-        // Expect international digits only e.g. 2348012345678 (no +, no spaces)
+        // Hook into your wallet/credit service here
+        // e.g. SchoolWalletService::deduct($schoolId, 1);
+    }
+
+    public function normalizePhone(string $phone): string
+    {
         $p = preg_replace('/\D+/', '', $phone) ?? '';
+
         if (str_starts_with($p, '0')) {
-            // If Nigerians store as 080..., convert: remove leading 0 and prefix 234
-            // Adjust if your system supports other countries.
             $p = '234' . substr($p, 1);
         }
+
         return $p;
     }
 }

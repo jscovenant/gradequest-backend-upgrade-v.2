@@ -51,6 +51,14 @@ protected $casts = [
     'default_password' => 'encrypted', 
 ];
 
+public function schoolSubscriptions()
+{
+    return $this->hasMany(\App\Models\Subscription::class, 'user_id');
+}
+
+
+
+
 
 public function records()
 {

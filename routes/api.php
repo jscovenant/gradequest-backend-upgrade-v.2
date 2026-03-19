@@ -1,6 +1,12 @@
 <?php
 
 use App\Http\Controllers\ActivationController;
+use App\Http\Controllers\Api\AdminAcademicAlertController;
+use App\Http\Controllers\Api\AdminMonitoringController;
+use App\Http\Controllers\Api\AdminResultDeadlineController;
+use App\Http\Controllers\Api\AdminSchoolWhatsappAccountController;
+use App\Http\Controllers\Api\AdminWhatsappCreditController;
+use App\Http\Controllers\Api\AdminWhatsappMessageController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\Backend\DepartmentController;
 use App\Http\Controllers\Backend\StaffAttendanceController;
@@ -50,8 +56,11 @@ use App\Http\Controllers\Api\ResultBatchController;
 use App\Http\Controllers\Api\StudentResultController;
 use App\Http\Controllers\Api\FilterSetupController;
 use App\Http\Controllers\Api\BroadsheetV2Controller;
+use App\Http\Controllers\Api\SchoolDomainController;
+use App\Http\Controllers\Api\WhatsappVerificationController;
 use App\Http\Controllers\Backend\AttendanceSettingController;
 use App\Http\Controllers\Backend\AdminDashboardController;
+use App\Http\Controllers\Backend\BursarDashboardController;
 use App\Http\Controllers\Backend\FeeReminderAnalyticsController;
 use App\Http\Controllers\Backend\FeeReminderSettingsController;
 use App\Http\Controllers\Backend\InvoiceNotificationController;
@@ -60,21 +69,22 @@ use App\Http\Controllers\Backend\StudentDashboardController;
 use App\Http\Controllers\Backend\ParentDashboardController;
   use App\Http\Controllers\Backend\ParentStudentFeesController;
 use App\Http\Controllers\Backend\PublicDemoBookingController;
+use App\Http\Controllers\Frontend\HomeController;
 
     Route::post('/login', [AuthController::class, 'login']);
     Route::post('/register', [AuthController::class, 'register']);
     Route::get('/check-subdomain/{subdomain}', [AuthController::class, 'checkSubdomain']);
     Route::post('/forgot-password', [AuthController::class, 'sendAdminResetLink']);
-Route::post('/reset-password', [AuthController::class, 'resetAdminPassword']);
+    Route::post('/verify-reset-code', [AuthController::class, 'verifyResetCode']);
+Route::post('/reset-password',    [AuthController::class, 'resetPassword']);
+
 Route::post('/send-contact', [ContactController::class, 'send']);
 Route::get('/testimonials', [TestimonialController::class, 'index']);
 Route::get('/testimonials/{id}', [TestimonialController::class, 'edit']);     
 Route::put('/testimonials/{id}', [TestimonialController::class, 'update']);
 Route::post('/demo-bookings', [PublicDemoBookingController::class, 'store']);
 
-Route::get('/frontend/subscription-plans', function () {
-    return \App\Models\SubscriptionPlan::where('is_active', 1)->get();
-    });
+Route::get('/frontend/subscription-plans', [HomeController::class, 'subscriptionPlans']);
 
      Route::post('/verify-result', [ResultController::class, 'verifyResult']);
   Route::get('/frontend-blogs', [BlogController::class, 'index']);
@@ -153,6 +163,17 @@ Route::post('/notifications/read/{id}', function (Request $request, $id) {
     return response()->json(['status' => 'ok']);
 });
 
+ Route::get('/admin/academic-alerts/summary', [AdminAcademicAlertController::class, 'summary']);
+ 
+  Route::get(
+        '/admin/result-batches',
+        [AdminResultDeadlineController::class, 'index']
+    );
+
+    Route::post(
+        '/admin/result-batches/{batch}/set-deadline',
+        [AdminResultDeadlineController::class, 'setDeadline']
+    );
 
 
 
@@ -182,7 +203,24 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::post('/update-blog/{id}', [BlogController::class, 'update']);
     Route::delete('/blogs/{id}', [BlogController::class, 'destroy']);
    
-   
+
+     Route::get('/admin/whatsapp/account', [AdminSchoolWhatsappAccountController::class, 'show']);
+    Route::post('/admin/whatsapp/account', [AdminSchoolWhatsappAccountController::class, 'store']);
+
+    Route::get('/admin/whatsapp/credits', [AdminWhatsappCreditController::class, 'summary']);
+
+    Route::get('/admin/whatsapp/messages', [AdminWhatsappMessageController::class, 'index']);
+    Route::post('/admin/whatsapp/send-parent', [AdminWhatsappMessageController::class, 'sendToParent']);
+
+    Route::post('/whatsapp/verify/admin/start', [WhatsappVerificationController::class, 'startAdmin']);
+    Route::post('/whatsapp/verify/parent/start', [WhatsappVerificationController::class, 'startParent']);
+    Route::post('/whatsapp/verify/code', [WhatsappVerificationController::class, 'verify']);
+
+    Route::get   ('/settings/domain',         [SchoolDomainController::class, 'show']);
+    Route::post  ('/settings/domain',         [SchoolDomainController::class, 'register']);
+    Route::post  ('/settings/domain/verify',  [SchoolDomainController::class, 'verify']);
+    Route::delete('/settings/domain/{id}',    [SchoolDomainController::class, 'remove']);
+
      // School admin endpoints (uses authenticated user's school_id)
   Route::get('/school/bank-accounts', [SchoolBankAccountController::class, 'index']);
   Route::post('/school/bank-accounts', [SchoolBankAccountController::class, 'store']);
@@ -218,6 +256,13 @@ Route::get('/parent/payments/history', [ParentStudentFeesController::class, 'his
 
     // Delete a bursar
     Route::delete('/bursars/{id}', [BusarController::class, 'destroy']);
+    Route::post('/bursars/decrypt-password', [BusarController::class, 'decryptPassword']);
+
+
+    Route::get('/bursar-dashboard/summary', [BursarDashboardController::class, 'summary']);
+Route::get('/bursar-dashboard/recent-payments', [BursarDashboardController::class, 'recentPayments']);
+Route::get('/bursar-dashboard/payment-method-breakdown', [BursarDashboardController::class, 'paymentMethodBreakdown']);
+Route::get('/bursar-dashboard/bank-details', [BursarDashboardController::class, 'bankDetails']);
 
   Route::post('/parents/register', [ParentController::class, 'register']);
     Route::get('/parents', [ParentController::class, 'allParents']);

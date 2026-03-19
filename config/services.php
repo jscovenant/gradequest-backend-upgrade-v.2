@@ -56,10 +56,10 @@ return [
 
     // config/services.php
 'whatsapp' => [
-    'token' => env('WHATSAPP_CLOUD_TOKEN'),
-    'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
-    'version' => env('WHATSAPP_API_VERSION', 'v22.0'),
-    'fee_reminder_cost' => (float) env('WHATSAPP_FEE_REMINDER_COST', 10),
+    'version'             => env('WHATSAPP_VERSION', 'v23.0'),
+    'token'               => env('WHATSAPP_GLOBAL_TOKEN'),
+    'waba_id'             => env('WHATSAPP_WABA_ID'),
+    'business_account_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
 ],
 
 

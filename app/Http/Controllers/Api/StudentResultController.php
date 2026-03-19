@@ -21,6 +21,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Http\Request;
 use App\Models\TeacherEnrollment;
+use App\Jobs\UpdateResultSubmissionMonitorJob;
+use App\Jobs\ScanBatchResultAnomaliesJob;
 
 class StudentResultController extends Controller
 {
@@ -242,204 +244,184 @@ public function carryOverPreview(Request $request, User $student)
 
 
 
-
 public function upsert(UpsertStudentResultRequest $request, int $batch, int $student): JsonResponse
 {
-    // Ensure batch exists
     $batchRow = DB::table('result_batches')->where('id', $batch)->first();
     if (!$batchRow) {
         return response()->json(['message' => 'Batch not found'], 404);
     }
 
-    /**
-     * -----------------------------
-     * 1) UPSERT student_results_v2 (header)
-     * -----------------------------
-     * One row per (batch_id, user_id).
-     */
-    $sr = DB::table('student_results_v2')
-        ->where('batch_id', $batch)
-        ->where('user_id', $student)
-        ->first();
+    $srId = null;
 
-    // Prepare meta and explicit header fields expected by reportCard()
-    $meta = $request->input('summary.meta', []);
-
-    // Normalize/rescue values from multiple possible payload shapes
-    $noPresent = $request->input('summary.no_present')
-        ?? $meta['no_present'] ?? $meta['present'] ?? null;
-
-    $noAbsent = $request->input('summary.no_absent')
-        ?? $meta['no_absent'] ?? $meta['absent'] ?? null;
-
-    $schoolOpen = $request->input('summary.school_open')
-        ?? $meta['school_open'] ?? $meta['times_open'] ?? null;
-
-    $schoolClose = $request->input('summary.school_close')
-        ?? $meta['school_close'] ?? null;
-
-    $resumptionDate = $request->input('summary.resumption_date')
-        ?? $meta['resumption_date'] ?? null;
-
-    // Ensure these keys are present in meta_json for backward compatibility
-    if (!isset($meta['no_present']) && $noPresent !== null) $meta['no_present'] = $noPresent;
-    if (!isset($meta['no_absent']) && $noAbsent !== null) $meta['no_absent'] = $noAbsent;
-    if (!isset($meta['school_open']) && $schoolOpen !== null) $meta['school_open'] = $schoolOpen;
-    if (!isset($meta['school_close']) && $schoolClose !== null) $meta['school_close'] = $schoolClose;
-    if (!isset($meta['resumption_date']) && $resumptionDate !== null) $meta['resumption_date'] = $resumptionDate;
-
-    $payloadMeta = !empty($meta) ? json_encode($meta) : null;
-
-    if (!$sr) {
-        $srId = DB::table('student_results_v2')->insertGetId([
-            'batch_id' => $batch,
-            'user_id' => $student,
-
-            'rollno' => $request->input('rollno'),
-            'department' => $request->input('department'),
-            'section_id' => $request->input('section_id'),
-
-            'position' => $request->input('summary.position'),
-            'class_teacher' => $request->input('summary.class_teacher'),
-            'class_size' => $request->input('summary.class_size'),
-            'total_grade' => $request->input('summary.total_grade'),
-            'total_average' => $request->input('summary.total_average'),
-            'principal_comment' => $request->input('summary.principal_comment'),
-            'class_teacher_comment' => $request->input('summary.class_teacher_comment'),
-            'general_remark' => $request->input('summary.general_remark'),
-
-            // Explicit header fields
-            'school_open' => $schoolOpen,
-            'school_close' => $schoolClose,
-            'no_present' => $noPresent,
-            'no_absent' => $noAbsent,
-            'resumption_date' => $resumptionDate,
-
-            'meta_json' => $payloadMeta,
-
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
-    } else {
-        $srId = $sr->id;
-
-        DB::table('student_results_v2')->where('id', $srId)->update([
-            'rollno' => $request->input('rollno'),
-            'department' => $request->input('department'),
-            'section_id' => $request->input('section_id'),
-
-            'position' => $request->input('summary.position'),
-            'class_teacher' => $request->input('summary.class_teacher'),
-            'class_size' => $request->input('summary.class_size'),
-            'total_grade' => $request->input('summary.total_grade'),
-            'total_average' => $request->input('summary.total_average'),
-            'principal_comment' => $request->input('summary.principal_comment'),
-            'class_teacher_comment' => $request->input('summary.class_teacher_comment'),
-            'general_remark' => $request->input('summary.general_remark'),
-
-            // Explicit header fields
-            'school_open' => $schoolOpen,
-            'school_close' => $schoolClose,
-            'no_present' => $noPresent,
-            'no_absent' => $noAbsent,
-            'resumption_date' => $resumptionDate,
-
-            'meta_json' => $payloadMeta,
-
-            'updated_at' => now(),
-        ]);
-    }
-
-    /**
-     * -----------------------------
-     * 2) UPSERT subject_results_v2 (per-subject)
-     * -----------------------------
-     * One row per (student_result_id, subject_id).
-     */
-    foreach ($request->input('results') as $row) {
-        $existing = DB::table('subject_results_v2')
-            ->where('student_result_id', $srId)
-            ->where('subject_id', $row['subject_id'])
+    DB::transaction(function () use ($request, $batch, $student, &$srId) {
+        $sr = DB::table('student_results_v2')
+            ->where('batch_id', $batch)
+            ->where('user_id', $student)
             ->first();
 
-        // Raw CA -> JSON string
-        $caRaw = is_array($row['ca'] ?? null) ? json_encode($row['ca']) : ($row['ca'] ?? null);
+        $meta = $request->input('summary.meta', []);
 
-        // Carry-over extraction (matches your frontend payload)
-        $carry = $row['carry_over'] ?? null;
+        $noPresent = $request->input('summary.no_present')
+            ?? $meta['no_present'] ?? $meta['present'] ?? null;
 
-        $carryEnabled = (is_array($carry) && !empty($carry['enabled'])) ? 1 : 0;
-        $cumulativeTotal = ($carryEnabled && isset($carry['cumulative_total']))
-            ? (float) $carry['cumulative_total']
-            : null;
-        $cumulativeAverage = ($carryEnabled && isset($carry['cumulative_average']))
-            ? (float) $carry['cumulative_average']
-            : null;
+        $noAbsent = $request->input('summary.no_absent')
+            ?? $meta['no_absent'] ?? $meta['absent'] ?? null;
 
-        $carryJson = $carryEnabled ? json_encode($carry) : null;
+        $schoolOpen = $request->input('summary.school_open')
+            ?? $meta['school_open'] ?? $meta['times_open'] ?? null;
 
-        $payload = [
-            'student_result_id' => $srId,
-            'subject_id' => $row['subject_id'],
+        $schoolClose = $request->input('summary.school_close')
+            ?? $meta['school_close'] ?? null;
 
-            'ca_raw' => $caRaw,
-            'exam' => $row['exam'] ?? null,
-            'total' => $row['total'] ?? null,
-            'grade' => $row['grade'] ?? null,
-            'remark' => $row['remark'] ?? null,
+        $resumptionDate = $request->input('summary.resumption_date')
+            ?? $meta['resumption_date'] ?? null;
 
-            'comment' => $row['comment'] ?? null,
-            'signature' => $row['signature'] ?? null,
+        if (!isset($meta['no_present']) && $noPresent !== null) $meta['no_present'] = $noPresent;
+        if (!isset($meta['no_absent']) && $noAbsent !== null) $meta['no_absent'] = $noAbsent;
+        if (!isset($meta['school_open']) && $schoolOpen !== null) $meta['school_open'] = $schoolOpen;
+        if (!isset($meta['school_close']) && $schoolClose !== null) $meta['school_close'] = $schoolClose;
+        if (!isset($meta['resumption_date']) && $resumptionDate !== null) $meta['resumption_date'] = $resumptionDate;
 
-            // NEW columns
-            'carry_over_json' => $carryJson,
-            'carry_over_enabled' => $carryEnabled,
-            'cumulative_total' => $cumulativeTotal,
-            'cumulative_average' => $cumulativeAverage,
+        $payloadMeta = !empty($meta) ? json_encode($meta) : null;
 
-            'updated_at' => now(),
-        ];
+        if (!$sr) {
+            $srId = DB::table('student_results_v2')->insertGetId([
+                'batch_id' => $batch,
+                'user_id' => $student,
 
-        if (!$existing) {
-            $payload['created_at'] = now();
-            $subjectResultId = DB::table('subject_results_v2')->insertGetId($payload);
+                'rollno' => $request->input('rollno'),
+                'department' => $request->input('department'),
+                'section_id' => $request->input('section_id'),
+
+                'position' => $request->input('summary.position'),
+                'class_teacher' => $request->input('summary.class_teacher'),
+                'class_size' => $request->input('summary.class_size'),
+                'total_grade' => $request->input('summary.total_grade'),
+                'total_average' => $request->input('summary.total_average'),
+                'principal_comment' => $request->input('summary.principal_comment'),
+                'class_teacher_comment' => $request->input('summary.class_teacher_comment'),
+                'general_remark' => $request->input('summary.general_remark'),
+
+                'school_open' => $schoolOpen,
+                'school_close' => $schoolClose,
+                'no_present' => $noPresent,
+                'no_absent' => $noAbsent,
+                'resumption_date' => $resumptionDate,
+
+                'meta_json' => $payloadMeta,
+
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
         } else {
-            // Don't overwrite the "student_result_id/subject_id" keys in update unnecessarily
-            unset($payload['student_result_id'], $payload['subject_id']);
-            DB::table('subject_results_v2')->where('id', $existing->id)->update($payload);
-            $subjectResultId = $existing->id;
+            $srId = $sr->id;
+
+            DB::table('student_results_v2')->where('id', $srId)->update([
+                'rollno' => $request->input('rollno'),
+                'department' => $request->input('department'),
+                'section_id' => $request->input('section_id'),
+
+                'position' => $request->input('summary.position'),
+                'class_teacher' => $request->input('summary.class_teacher'),
+                'class_size' => $request->input('summary.class_size'),
+                'total_grade' => $request->input('summary.total_grade'),
+                'total_average' => $request->input('summary.total_average'),
+                'principal_comment' => $request->input('summary.principal_comment'),
+                'class_teacher_comment' => $request->input('summary.class_teacher_comment'),
+                'general_remark' => $request->input('summary.general_remark'),
+
+                'school_open' => $schoolOpen,
+                'school_close' => $schoolClose,
+                'no_present' => $noPresent,
+                'no_absent' => $noAbsent,
+                'resumption_date' => $resumptionDate,
+
+                'meta_json' => $payloadMeta,
+
+                'updated_at' => now(),
+            ]);
         }
 
-        /**
-         * -----------------------------
-         * 3) Rewrite assessment_scores_v2 (normalized CA components)
-         * -----------------------------
-         */
-        if (!empty($row['ca']) && is_array($row['ca'])) {
-            DB::table('assessment_scores_v2')
-                ->where('subject_result_id', $subjectResultId)
-                ->delete();
+        foreach ($request->input('results') as $row) {
+            $existing = DB::table('subject_results_v2')
+                ->where('student_result_id', $srId)
+                ->where('subject_id', $row['subject_id'])
+                ->first();
 
-            foreach ($row['ca'] as $k => $v) {
-                $key = is_numeric($k) ? "ca{$k}" : (string) $k;
+            $caRaw = is_array($row['ca'] ?? null)
+                ? json_encode($row['ca'])
+                : ($row['ca'] ?? null);
 
-                DB::table('assessment_scores_v2')->insert([
-                    'subject_result_id' => $subjectResultId,
-                    'component_key' => $key,
-                    'score' => (float) ($v ?? 0),
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]);
+            $carry = $row['carry_over'] ?? null;
+
+            $carryEnabled = (is_array($carry) && !empty($carry['enabled'])) ? 1 : 0;
+            $cumulativeTotal = ($carryEnabled && isset($carry['cumulative_total']))
+                ? (float) $carry['cumulative_total']
+                : null;
+            $cumulativeAverage = ($carryEnabled && isset($carry['cumulative_average']))
+                ? (float) $carry['cumulative_average']
+                : null;
+
+            $carryJson = $carryEnabled ? json_encode($carry) : null;
+
+            $payload = [
+                'student_result_id' => $srId,
+                'subject_id' => $row['subject_id'],
+
+                'ca_raw' => $caRaw,
+                'exam' => $row['exam'] ?? null,
+                'total' => $row['total'] ?? null,
+                'grade' => $row['grade'] ?? null,
+                'remark' => $row['remark'] ?? null,
+
+                'comment' => $row['comment'] ?? null,
+                'signature' => $row['signature'] ?? null,
+
+                'carry_over_json' => $carryJson,
+                'carry_over_enabled' => $carryEnabled,
+                'cumulative_total' => $cumulativeTotal,
+                'cumulative_average' => $cumulativeAverage,
+
+                'updated_at' => now(),
+            ];
+
+            if (!$existing) {
+                $payload['created_at'] = now();
+                $subjectResultId = DB::table('subject_results_v2')->insertGetId($payload);
+            } else {
+                unset($payload['student_result_id'], $payload['subject_id']);
+                DB::table('subject_results_v2')->where('id', $existing->id)->update($payload);
+                $subjectResultId = $existing->id;
+            }
+
+            if (!empty($row['ca']) && is_array($row['ca'])) {
+                DB::table('assessment_scores_v2')
+                    ->where('subject_result_id', $subjectResultId)
+                    ->delete();
+
+                foreach ($row['ca'] as $k => $v) {
+                    $key = is_numeric($k) ? "ca{$k}" : (string) $k;
+
+                    DB::table('assessment_scores_v2')->insert([
+                        'subject_result_id' => $subjectResultId,
+                        'component_key' => $key,
+                        'score' => (float) ($v ?? 0),
+                        'created_at' => now(),
+                        'updated_at' => now(),
+                    ]);
+                }
             }
         }
-    }
+    });
+
+    UpdateResultSubmissionMonitorJob::dispatch($batch)->afterCommit();
+    ScanBatchResultAnomaliesJob::dispatch($batch)->afterCommit();
 
     return response()->json([
         'message' => 'Saved',
         'student_result_id' => $srId,
     ]);
 }
-
 
 
 

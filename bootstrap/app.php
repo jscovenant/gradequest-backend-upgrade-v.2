@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\CustomRole;
 use App\Http\Middleware\CorsMiddleware;
+use App\Http\Middleware\ResolveSchoolFromDomain;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -21,6 +22,10 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->validateCsrfTokens(except: [
             'api/*',
         ]);
+
+        $middleware->append(ResolveSchoolFromDomain::class);
+
+
 
         // Register global middleware (runs for every request)
         // $middleware->append(CorsMiddleware::class);
