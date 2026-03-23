@@ -1,0 +1,2 @@
+echo * > bootstrap\cache\.gitignore
+echo !.gitignore >> bootstrap\cache\.gitignore
