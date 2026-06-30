@@ -49,7 +49,10 @@ protected $casts = [
     'password' => 'hashed',
     'password_reset_expires_at' => 'datetime',
     'default_password' => 'encrypted', 
+     'twilio_auth_token' => 'encrypted',
 ];
+
+
 
 public function schoolSubscriptions()
 {

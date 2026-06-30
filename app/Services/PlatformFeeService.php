@@ -1,0 +1,78 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\PlatformFeeCharge;
+use App\Models\StudentFee;
+use Illuminate\Support\Facades\DB;
+
+class PlatformFeeService
+{
+    /**
+     * Flat platform fee, in naira, charged once per student_fee record
+     * (i.e. once per student per term per academic session).
+     */
+    public function feeAmountNaira(): int
+    {
+        return (int) config('services.paystack.platform_fee_naira', 1000); 
+    }
+
+    /**
+     * Decide how much of the incoming installment (if any) should be
+     * routed to GradeQuest's main account as the one-time platform fee.
+     *
+     * Returns 0 if the fee has already been collected — or is currently
+     * being collected by another in-flight payment — for this student_fee.
+     */
+    public function resolveCharge(StudentFee $studentFee, int $installmentNaira, string $reference): int
+    {
+        return DB::transaction(function () use ($studentFee, $installmentNaira, $reference) {
+            $existing = PlatformFeeCharge::where('student_fee_id', $studentFee->id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($existing?->status === 'confirmed') {
+                return 0; // already collected for this student's fee record
+            }
+
+            if ($existing?->status === 'pending' && $existing->updated_at->gt(now()->subMinutes(30))) {
+                return 0; // another installment is currently in-flight claiming the fee
+            }
+
+            $fee = $this->feeAmountNaira();
+
+            if ($installmentNaira < $fee) {
+                return 0; // this installment is too small to bear the flat fee — wait for a bigger one
+            }
+
+            PlatformFeeCharge::updateOrCreate(
+                ['student_fee_id' => $studentFee->id],
+                ['status' => 'pending', 'paystack_reference' => $reference]
+            );
+
+            return $fee;
+        });
+    }
+
+    /**
+     * Called once a charge that carried the platform fee is confirmed
+     * successful — locks the claim in for the rest of the term/session.
+     */
+    public function confirmCharge(string $reference): void
+    {
+        PlatformFeeCharge::where('paystack_reference', $reference)
+            ->update(['status' => 'confirmed']);
+    }
+
+    /**
+     * Called if a charge that carried a pending fee claim ends up
+     * failing — frees the claim immediately so the next installment
+     * attempt doesn't have to wait out the 30-minute staleness window.
+     */
+    public function releaseCharge(string $reference): void
+    {
+        PlatformFeeCharge::where('paystack_reference', $reference)
+            ->where('status', 'pending')
+            ->delete();
+    }
+}

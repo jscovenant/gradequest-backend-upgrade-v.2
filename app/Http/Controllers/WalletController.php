@@ -41,9 +41,9 @@ class WalletController extends Controller
         $amountInKobo = (int) ($request->quantity * $pricePerUnit * 100);
 
         // ₦5,000 minimum => 500,000 kobo
-        if ($amountInKobo < 500000) {
+        if ($amountInKobo < 10000) {
             return response()->json([
-                'error' => 'Minimum payment amount is ₦5000. Please increase the number of students.'
+                'error' => 'Minimum payment amount is ₦100. Please increase the number of students.'
             ], 422);
         }
 

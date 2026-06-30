@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\{FeeType, StudentFee, Payment, PaymentReceipt, User, Section};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use App\Services\FeePaymentService;
+use Illuminate\Support\Facades\Log;
 
 class FeePaymentController extends Controller
 {
@@ -351,6 +353,83 @@ public function studentFeeDetails(Request $request)
 
 
 
+  public function __construct(private FeePaymentService $feePaymentService)
+    {
+    }
+
+    // ... your existing methods stay exactly as they are ...
+
+    /**
+     * ✅ Parent-initiated online payment via Paystack split.
+     */
+  public function initializeOnlinePayment(Request $request)
+{
+    $request->validate([
+        'student_fee_id' => 'required|exists:student_fees,id',
+        'amount' => 'required|integer|min:100', 
+        'email' => 'nullable|email',
+    ]);
+
+    $schoolId = Auth::user()->school_id;
+    $studentFee = StudentFee::where('school_id', $schoolId)->findOrFail($request->student_fee_id);
+
+    if ($request->amount > $studentFee->balance) {
+        return response()->json([
+            'message' => 'Amount exceeds remaining balance.',
+            'balance' => $studentFee->balance,
+        ], 422);
+    }
+
+    $payerEmail = $request->email ?: Auth::user()->email; 
+
+    try {
+        $result = $this->feePaymentService->initialize(
+            $studentFee,
+            (int) $request->amount,
+            $payerEmail,
+            Auth::id()
+        );
+    } catch (\RuntimeException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+
+    return response()->json($result);
+}
+
+    /**
+     * ✅ Frontend callback page hits this to confirm payment status.
+     */
+    public function verifyOnlinePayment(string $reference)
+    {
+        $payment = $this->feePaymentService->verify($reference);
+
+        return response()->json([
+            'status' => $payment->status,
+            'reference' => $payment->reference,
+            'amount' => $payment->amount,
+            'platform_fee' => $payment->platform_fee,
+        ]);
+    }
+
+    /**
+     * ✅ Paystack server-to-server webhook — not user-authenticated,
+     * verified via the x-paystack-signature header instead.
+     */
+    public function paystackWebhook(Request $request)
+    {
+        $signature = $request->header('x-paystack-signature');
+        $secret = config('services.paystack.secret');
+        $expected = hash_hmac('sha512', $request->getContent(), $secret);
+
+        if (! $signature || ! hash_equals($expected, $signature)) {
+            Log::warning('Paystack webhook signature mismatch');
+            return response()->json(['message' => 'Invalid signature'], 401);
+        }
+
+        $this->feePaymentService->handleWebhook($request->json()->all());
+
+        return response()->json(['status' => 'ok']);
+    }
 
 
 }

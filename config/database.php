@@ -58,7 +58,7 @@ return [
             'strict' => true,
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4',
+               Pdo\Mysql::ATTR_INIT_COMMAND => "SET sql_mode=''",
                 PDO::ATTR_EMULATE_PREPARES => true,
             ]) : [],
 
@@ -80,7 +80,7 @@ return [
             'strict' => true,
             'engine' => null,
             'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
+            Pdo\Mysql::ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
         ],
 

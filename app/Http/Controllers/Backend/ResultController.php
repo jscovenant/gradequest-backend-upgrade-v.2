@@ -49,6 +49,7 @@ use Illuminate\Support\Facades\Storage;
 use App\Traits\HandlesFeatureLimits;
 use App\Traits\CheckFeeStatus;
 use Symfony\Component\HttpKernel\Exception\HttpException;
+use App\Jobs\SendResultNotification;
 
 
 class ResultController extends Controller
@@ -166,14 +167,22 @@ public function AllResults(Request $request)
 
 
 
+public function getClasses(Request $request){
+    $auth = Auth::user();
+    $classes = StudentClass::where('school_id', $auth->school_id)
+            ->orderBy('name')
+            ->get(['id', 'name']);
+
+        return response()->json([
+            'data' => $classes,
+        ]);
+}
 
 
 
 
 
-
-
-public function findByAdmissionNo($admissionNo)
+public function findByAdmissionNo(string $admissionNo)
 {
     $auth = Auth::user();
 
@@ -423,81 +432,7 @@ $average = Average::create([
     }
     
     
-// public function getResultDataByStudent($studentId, $session, $classId, $term)
-// {
-//     $term = urldecode($term); 
-//     $auth = Auth::user();
 
-//     // Detect term model
-//     $termModel = match ($term) {
-//         'First Term' => \App\Models\FirstTermResult::class,
-//         'Second Term' => \App\Models\SecondTermResult::class,
-//         'Third Term' => \App\Models\ThirdTermResult::class,
-//         default => null,
-//     };
-
-//     if (!$termModel) {
-//         return response()->json(['message' => 'Invalid term specified'], 400);
-//     }
-
-//     // Fetch the average for this student/session/term/class
-//     $average = \App\Models\Average::where('user_id', $studentId)
-//         ->where('school_id', $auth->school_id)
-//         ->where('class_id', $classId)
-//         ->where('session', $session)
-//         ->where('term', $term)
-//         ->first();
-
-//     if (!$average) {
-//         return response()->json([
-//             'message' => 'No result found for this session and term.'
-//         ], 404);
-//     }
-
-//     // Fetch term results linked to this student
-//     $results = $termModel::with('subject')->where('user_id', $studentId)
-//         ->where('class_id', $classId)
-//         ->where('school_id', $auth->school_id)
-//         ->get();
-
-//     // Fetch student with department and level
-//     $student = \App\Models\User::with(['level', 'department'])->findOrFail($studentId);
-
-//     if (!$student->department) {
-//         return response()->json(['message' => 'Student has no department assigned.'], 400);
-//     }
-
-//     // Fetch all subjects in student's department
-//     $subjects = \App\Models\Subject::where('department_id', $student->department_id)
-//         ->where('school_id', $auth->school_id)
-//         ->select('id', 'name')
-//         ->orderBy('name')
-//         ->get();
-
-//     // Detect score_type from first CA JSON if available
-//     $score_type = null;
-//     if ($results->isNotEmpty()) {
-//         $firstCa = json_decode($results[0]->ca ?? '{}', true);
-//         $caCount = count(array_filter(array_keys($firstCa), fn($key) => str_starts_with($key, 'ca')));
-
-//         $score_type = match ($caCount) {
-//             4 => '10/10/10/10/60',
-//             2 => '20/20/60',
-//             1 => '40/60',
-//             default => null,
-//         };
-//     }
-
-//     return response()->json([
-//         'student' => $student,
-//         'results' => $results,
-//         'subjects' => $subjects, // send all department subjects
-//         'average' => $average,
-//         'session' => $session,
-//         'term' => $term,
-//         'score_type' => $score_type,
-//     ]);
-// }
 
 public function getResultDataByStudent($studentId, $session, $classId, $term)
 {
@@ -679,239 +614,239 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
 
 
 
-public function showStudentResult(Request $request, $id)
-{
-    // PUBLIC ACCESS — get student directly
-    $user = User::with('level', 'section')->findOrFail($id);
+        public function showStudentResult(Request $request, $id)
+        {
+            // PUBLIC ACCESS — get student directly
+            $user = User::with('level', 'section')->findOrFail($id);
 
-    // Restrict access if student has unpaid fees
-   try {
-    $this->restrictIfUnpaid($user);
-} catch (HttpException $e) {
-    return response()->json([
-        'status'  => 'restricted',
-        'message' => $e->getMessage()
-    ], $e->getStatusCode());
-}
+            // Restrict access if student has unpaid fees
+        try {
+            $this->restrictIfUnpaid($user);
+        } catch (HttpException $e) {
+            return response()->json([
+                'status'  => 'restricted',
+                'message' => $e->getMessage()
+            ], $e->getStatusCode());
+        }
 
-    $classId = $request->query('class_id');
-    $term    = $request->query('term');
+            $classId = $request->query('class_id');
+            $term    = $request->query('term');
 
-    // Get full class info
-    $class = StudentClass::find($classId);
+            // Get full class info
+            $class = StudentClass::find($classId);
 
-    $classSize = User::where('level_id', $classId)
-        ->where('school_id', $user->school_id)
-        ->count();
-    
-        $session = $request->query('session');
-        
+            $classSize = User::where('level_id', $classId)
+                ->where('school_id', $user->school_id)
+                ->count();
+            
+                $session = $request->query('session');
+                
 
-   $average = Average::where('user_id', $user->id)
-    ->where('class_id', $classId)
-    ->where('term', $term)
-    ->where('session', $session)
-    ->first();
+        $average = Average::where('user_id', $user->id)
+            ->where('class_id', $classId)
+            ->where('term', $term)
+            ->where('session', $session)
+            ->first();
 
-if (!$average) {
-    return response()->json([
-        'status' => 'error',
-        'message' => 'No result found for selected session.'
-    ], 404);
-}
+        if (!$average) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'No result found for selected session.'
+            ], 404);
+        }
 
-    // Validate term & existence of results
-   $resultExists = Average::where('user_id', $user->id)
-    ->where('class_id', $classId)
-    ->where('term', $term)
-    ->where('session', $session)
-    ->exists();
-
-
-    if (!$resultExists) {
-        return response()->json([
-            'message' => 'Invalid term selected.',
-            'status' => 'error'
-        ], 404);
-    }
-
-    // Subjects
-    $subjects = Subject::where('school_id', $user->school_id)
-        ->where('class_id', $classId)
-        ->get();
-
-    // Dynamic model resolution
-    $termModelMap = [
-        'First Term'  => FirstTermResult::class,
-        'Second Term' => SecondTermResult::class,
-        'Third Term'  => ThirdTermResult::class,
-    ];
-
-    if (!array_key_exists($term, $termModelMap)) {
-        return response()->json(['message' => 'Unsupported term.'], 400);
-    }
-
-    $resultModel = $termModelMap[$term];
-
- $termResult = $resultModel::where('user_id', $user->id)
-    ->where('average_id', $average->id)
-    ->where('class_id', $classId)
-    ->with('subject')
-    ->get();
-
-    
+            // Validate term & existence of results
+        $resultExists = Average::where('user_id', $user->id)
+            ->where('class_id', $classId)
+            ->where('term', $term)
+            ->where('session', $session)
+            ->exists();
 
 
+            if (!$resultExists) {
+                return response()->json([
+                    'message' => 'Invalid term selected.',
+                    'status' => 'error'
+                ], 404);
+            }
+
+            // Subjects
+            $subjects = Subject::where('school_id', $user->school_id)
+                ->where('class_id', $classId)
+                ->get();
+
+            // Dynamic model resolution
+            $termModelMap = [
+                'First Term'  => FirstTermResult::class,
+                'Second Term' => SecondTermResult::class,
+                'Third Term'  => ThirdTermResult::class,
+            ];
+
+            if (!array_key_exists($term, $termModelMap)) {
+                return response()->json(['message' => 'Unsupported term.'], 400);
+            }
+
+            $resultModel = $termModelMap[$term];
+
+        $termResult = $resultModel::where('user_id', $user->id)
+            ->where('average_id', $average->id)
+            ->where('class_id', $classId)
+            ->with('subject')
+            ->get();
+
+            
 
 
 
-    // School info
-    $school_info = SchoolSetting::find($user->school_id);
-    $backgroundColor = $school_info->background_color ?? null;
-    $secondaryColor  = $school_info->secondary_color ?? null;
-    $primaryColor    = $school_info->primary_color ?? null;
 
-    // =========================
-    // PRINCIPAL SIGNATURE (KEPT)
-    // =========================
-    $principalSignaturePath = $school_info->principal_signature
-        ? public_path($school_info->principal_signature)
-        : null;
 
-    $principalSignatureBase64 = null;
+            // School info
+            $school_info = SchoolSetting::find($user->school_id);
+            $backgroundColor = $school_info->background_color ?? null;
+            $secondaryColor  = $school_info->secondary_color ?? null;
+            $primaryColor    = $school_info->primary_color ?? null;
 
-    if ($principalSignaturePath && file_exists($principalSignaturePath)) {
-        $mime = mime_content_type($principalSignaturePath);
-        $principalSignatureBase64 =
-            'data:' . $mime . ';base64,' .
-            base64_encode(file_get_contents($principalSignaturePath));
-    }
+            // =========================
+            // PRINCIPAL SIGNATURE (KEPT)
+            // =========================
+            $principalSignaturePath = $school_info->principal_signature
+                ? public_path($school_info->principal_signature)
+                : null;
 
-    // Student photo
-    $userPhotoPath = $user->photo
-        ? public_path('uploads/users/' . $user->photo)
-        : null;
+            $principalSignatureBase64 = null;
 
-    $userPhotoBase64 = null;
+            if ($principalSignaturePath && file_exists($principalSignaturePath)) {
+                $mime = mime_content_type($principalSignaturePath);
+                $principalSignatureBase64 =
+                    'data:' . $mime . ';base64,' .
+                    base64_encode(file_get_contents($principalSignaturePath));
+            }
 
-    if ($userPhotoPath && file_exists($userPhotoPath)) {
-        $mime = mime_content_type($userPhotoPath);
-        $userPhotoBase64 =
-            'data:' . $mime . ';base64,' .
-            base64_encode(file_get_contents($userPhotoPath));
-    }
+            // Student photo
+            $userPhotoPath = $user->photo
+                ? public_path('uploads/users/' . $user->photo)
+                : null;
 
-    // School logo
-    $logoPath = $school_info->logo
-        ? public_path($school_info->logo)
-        : null;
+            $userPhotoBase64 = null;
 
-    $logoBase64 = null;
+            if ($userPhotoPath && file_exists($userPhotoPath)) {
+                $mime = mime_content_type($userPhotoPath);
+                $userPhotoBase64 =
+                    'data:' . $mime . ';base64,' .
+                    base64_encode(file_get_contents($userPhotoPath));
+            }
 
-    if ($logoPath && file_exists($logoPath)) {
-        $mime = mime_content_type($logoPath);
-        $logoBase64 =
-            'data:' . $mime . ';base64,' .
-            base64_encode(file_get_contents($logoPath));
-    }
+            // School logo
+            $logoPath = $school_info->logo
+                ? public_path($school_info->logo)
+                : null;
 
-    // Ratings map
-    $ratings = [
-        1 => 'Poor',
-        2 => 'Good',
-        3 => 'Very Good',
-        4 => 'Excellent',
-    ];
+            $logoBase64 = null;
 
-    // Affective domains
-    $affectiveDomains = DB::table('user_has_affective_domains as uhd')
-        ->join('affective_domains as ad', 'uhd.affective_id', '=', 'ad.id')
-        ->where('uhd.user_id', $user->id)
-        ->where('uhd.school_id', $user->school_id)
-        ->orderBy('uhd.updated_at', 'DESC')
-        ->select('ad.title as domain', 'uhd.rate')
-        ->get()
-        ->unique('domain')
-        ->values()
-        ->map(fn ($row) => [
-            'domain' => $row->domain,
-            'rating' => $ratings[$row->rate] ?? 'Not Rated',
-        ]);
+            if ($logoPath && file_exists($logoPath)) {
+                $mime = mime_content_type($logoPath);
+                $logoBase64 =
+                    'data:' . $mime . ';base64,' .
+                    base64_encode(file_get_contents($logoPath));
+            }
 
-    // Psychomotor domains
-    $psychomotorDomains = DB::table('user_has_psychomotor_domains as upd')
-        ->join('psychomotor_domains as pd', 'upd.psychomotor_id', '=', 'pd.id')
-        ->where('upd.user_id', $user->id)
-        ->where('upd.school_id', $user->school_id)
-        ->orderBy('upd.updated_at', 'DESC')
-        ->select('pd.title as domain', 'upd.rate')
-        ->get()
-        ->unique('domain')
-        ->values()
-        ->map(fn ($row) => [
-            'domain' => $row->domain,
-            'rating' => $ratings[$row->rate] ?? 'Not Rated',
-        ]);
+            // Ratings map
+            $ratings = [
+                1 => 'Poor',
+                2 => 'Good',
+                3 => 'Very Good',
+                4 => 'Excellent',
+            ];
 
-    // Grading system
-    $sectionName = optional($user->section)->name;
+            // Affective domains
+            $affectiveDomains = DB::table('user_has_affective_domains as uhd')
+                ->join('affective_domains as ad', 'uhd.affective_id', '=', 'ad.id')
+                ->where('uhd.user_id', $user->id)
+                ->where('uhd.school_id', $user->school_id)
+                ->orderBy('uhd.updated_at', 'DESC')
+                ->select('ad.title as domain', 'uhd.rate')
+                ->get()
+                ->unique('domain')
+                ->values()
+                ->map(fn ($row) => [
+                    'domain' => $row->domain,
+                    'rating' => $ratings[$row->rate] ?? 'Not Rated',
+                ]);
 
-    if ($sectionName === 'Junior') {
-        $grades = GradingForJunior::where('school_id', $user->school_id)->get();
-    } elseif ($sectionName === 'Senior') {
-        $grades = GradingForSenior::where('school_id', $user->school_id)->get();
-    } else {
-        $grades = [];
-    }
+            // Psychomotor domains
+            $psychomotorDomains = DB::table('user_has_psychomotor_domains as upd')
+                ->join('psychomotor_domains as pd', 'upd.psychomotor_id', '=', 'pd.id')
+                ->where('upd.user_id', $user->id)
+                ->where('upd.school_id', $user->school_id)
+                ->orderBy('upd.updated_at', 'DESC')
+                ->select('pd.title as domain', 'upd.rate')
+                ->get()
+                ->unique('domain')
+                ->values()
+                ->map(fn ($row) => [
+                    'domain' => $row->domain,
+                    'rating' => $ratings[$row->rate] ?? 'Not Rated',
+                ]);
 
-    return response()->json([
-    'term' => $term,
-    'user' => $user,
-    'user_photo_base64' => $userPhotoBase64,
+            // Grading system
+            $sectionName = optional($user->section)->name;
 
-    'class_id' => $classId,
-    'class_name' => optional($average->class)->name,
+            if ($sectionName === 'Junior') {
+                $grades = GradingForJunior::where('school_id', $user->school_id)->get();
+            } elseif ($sectionName === 'Senior') {
+                $grades = GradingForSenior::where('school_id', $user->school_id)->get();
+            } else {
+                $grades = [];
+            }
 
-    // TERM SCORES (ONLY scores)
-    'term_result' => $termResult,
+            return response()->json([
+            'term' => $term,
+            'user' => $user,
+            'user_photo_base64' => $userPhotoBase64,
 
-    // AVERAGE (ALL summary/meta)
-    'average' => [
-        'position' => $average->position,
-        'class_teacher' => $average->class_teacher,
-        'class_size' => $average->class_size,
-        'total_grade' => $average->total_grade,
-        'total_average' => $average->total_average,
-        'principal_comment' => $average->principal_comment,
-        'class_teacher_comment' => $average->class_teacher_comment,
-        'general_remark' => $average->general_remark,
-        'resumption_date' => $average->resumption_date,
-        'school_open' => $average->school_open,
-        'school_close' => $average->school_close,
-        'no_present' => $average->no_present,
-        'no_absent' => $average->no_absent,
-        'term' => $average->term,
-        'session' => $average->session,
-    ],
+            'class_id' => $classId,
+            'class_name' => optional($average->class)->name,
 
-    // STATIC DATA
-    'grades' => $grades,
-    'affective_domains' => $affectiveDomains,
-    'psychomotor_domains' => $psychomotorDomains,
+            // TERM SCORES (ONLY scores)
+            'term_result' => $termResult,
 
-    'school_info' => [
-        'name' => $school_info->school_name,
-        'phone' => $school_info->phone,
-        'address' => $school_info->address,
-        'logo' => $logoBase64,
-        'principal_signature' => $principalSignatureBase64,
-        'backgroundColor' => $backgroundColor,
-        'secondaryColor' => $secondaryColor,
-        'primaryColor' => $primaryColor,
-    ],
-], 200);
+            // AVERAGE (ALL summary/meta)
+            'average' => [
+                'position' => $average->position,
+                'class_teacher' => $average->class_teacher,
+                'class_size' => $average->class_size,
+                'total_grade' => $average->total_grade,
+                'total_average' => $average->total_average,
+                'principal_comment' => $average->principal_comment,
+                'class_teacher_comment' => $average->class_teacher_comment,
+                'general_remark' => $average->general_remark,
+                'resumption_date' => $average->resumption_date,
+                'school_open' => $average->school_open,
+                'school_close' => $average->school_close,
+                'no_present' => $average->no_present,
+                'no_absent' => $average->no_absent,
+                'term' => $average->term,
+                'session' => $average->session,
+            ],
 
-}
+            // STATIC DATA
+            'grades' => $grades,
+            'affective_domains' => $affectiveDomains,
+            'psychomotor_domains' => $psychomotorDomains,
+
+            'school_info' => [
+                'name' => $school_info->school_name,
+                'phone' => $school_info->phone,
+                'address' => $school_info->address,
+                'logo' => $logoBase64,
+                'principal_signature' => $principalSignatureBase64,
+                'backgroundColor' => $backgroundColor,
+                'secondaryColor' => $secondaryColor,
+                'primaryColor' => $primaryColor,
+            ],
+        ], 200);
+
+        }
 
 
 
@@ -1087,7 +1022,38 @@ public function verifyResult(Request $request)
 
 
 
+// app/Http/Controllers/NotificationController.php
 
+// public function broadcastResults(Request $request)
+// {
+//     $request->validate([
+//         'school_id' => 'required|integer',
+//         'class_id'  => 'required|integer',
+//         'term'      => 'required|in:First Term,Second Term,Third Term',
+//         'session'   => 'required|string',
+//     ]);
+
+//     // Get all students in this class with an average record
+//     $students = Average::where('class_id', $request->class_id)
+//         ->where('term', $request->term)
+//         ->where('session', $request->session)
+//         ->whereHas('user', fn($q) => $q->where('school_id', $request->school_id))
+//         ->pluck('user_id');
+
+//     $loop = 0;
+//     foreach ($students as $studentId) {
+//         SendResultNotification::dispatch(
+//             $studentId,
+//             $request->class_id,
+//             $request->term,
+//             $request->session
+//         )->delay(now()->addSeconds($loop++ * 3)); // 3s stagger per student
+//     }
+
+//     return response()->json([
+//         'message' => "{$students->count()} result PDFs queued for WhatsApp delivery."
+//     ]);
+// }
     
 
 

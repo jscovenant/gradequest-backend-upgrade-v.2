@@ -24,6 +24,7 @@ use App\Models\TeacherEnrollment;
 use Illuminate\Support\Facades\Log;
 use App\Http\Controllers\Controller;
 use App\Models\StudentClass;
+use App\Models\StudentResultV2;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -33,6 +34,7 @@ use App\Models\UserHasPsychomotorDomain;
 
 
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 
 
@@ -508,45 +510,62 @@ public function storeAllStudent(Request $request)
 
 
 
-    public function DeleteStudent($id)
-    {
-        try {
-            $user = User::find($id);
+   public function DeleteStudent($id)
+{
+    try {
+        $admin = auth::user();
 
-            if (!$user) {
-                return response()->json([
-                    'message' => 'User not found',
-                    'status' => 'error',
-                ], 404);
-            }
+        $user = User::where('id', $id)
+                    ->where('school_id', $admin->school_id) // scoped to same school
+                    ->first();
 
-            if ($user->role === 'Admin') {
-                return response()->json([
-                    'message' => 'User cannot be deleted',
-                    'status' => 'error',
-                ], 403);
-            }
-
-            if (Average::where('user_id', $user->id)->exists()) {
-                return response()->json([
-                    'message' => 'Student whose result is active cannot be deleted',
-                    'status' => 'error',
-                ], 409);
-            }
-
-            $user->delete();
-
+        if (!$user) {
             return response()->json([
-                'message' => 'User record deleted successfully',
-                'status' => 'success',
-            ], 200);
-        } catch (\Exception $e) {
-            return response()->json([
-                'message' => 'An error occurred: ' . $e->getMessage(),
-                'status' => 'error',
-            ], 500);
+                'message' => 'Student not found.',
+                'status'  => 'error',
+            ], 404);
         }
+
+        // Only students can be withdrawn through this endpoint
+        if ($user->role !== 'Student') {
+            return response()->json([
+                'message' => 'Only student accounts can be withdrawn.',
+                'status'  => 'error',
+            ], 403);
+        }
+
+        // Manually delete all related records to guarantee cleanup,
+        // regardless of whether DB foreign keys have cascade set.
+        DB::transaction(function () use ($user) {
+
+            // Academic records
+            StudentResultV2::where('user_id', $user->id)->delete();
+            Average::where('user_id', $user->id)->delete();
+
+            // Ratings
+            UserHasAffectiveDomain::where('user_id', $user->id)->delete();
+            UserHasPsychomotorDomain::where('user_id', $user->id)->delete();
+
+            // Session enrollment / pivot
+            // If it's a pivot table: DB::table('session_user')->where('user_id', $user->id)->delete();
+            // $user->sessions()->detach(); // if using belongsToMany
+
+            // Finally remove the user
+            $user->delete();
+        });
+
+        return response()->json([
+            'message' => 'Student withdrawn and all academic records removed successfully.',
+            'status'  => 'success',
+        ], 200);
+
+    } catch (\Exception $e) {
+        return response()->json([
+            'message' => 'An error occurred: ' . $e->getMessage(),
+            'status'  => 'error',
+        ], 500);
     }
+}
 
 
 

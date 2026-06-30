@@ -54,12 +54,13 @@ return [
 
 
 
-    // config/services.php
-'whatsapp' => [
-    'version'             => env('WHATSAPP_VERSION', 'v23.0'),
-    'token'               => env('WHATSAPP_GLOBAL_TOKEN'),
-    'waba_id'             => env('WHATSAPP_WABA_ID'),
-    'business_account_id' => env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
+ 
+
+// config/services.php
+'twilio' => [
+    'sid'        => env('TWILIO_SID'),
+    'auth_token' => env('TWILIO_AUTH_TOKEN'),
+    'from'       => env('TWILIO_WHATSAPP_FROM'),
 ],
 
 

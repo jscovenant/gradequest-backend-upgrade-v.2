@@ -4,9 +4,7 @@ use App\Http\Controllers\ActivationController;
 use App\Http\Controllers\Api\AdminAcademicAlertController;
 use App\Http\Controllers\Api\AdminMonitoringController;
 use App\Http\Controllers\Api\AdminResultDeadlineController;
-use App\Http\Controllers\Api\AdminSchoolWhatsappAccountController;
-use App\Http\Controllers\Api\AdminWhatsappCreditController;
-use App\Http\Controllers\Api\AdminWhatsappMessageController;
+
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\Backend\DepartmentController;
 use App\Http\Controllers\Backend\StaffAttendanceController;
@@ -36,6 +34,8 @@ use Illuminate\Support\Facades\Route;
 
 use App\Http\Controllers\Backend\BiometricQRController;
 use App\Http\Controllers\Backend\TeacherSubjectController;
+use App\Http\Controllers\Backend\WhatsAppSettingsController;
+use App\Http\Controllers\Backend\WhatsAppBroadcastController;
 use App\Http\Controllers\Backend\SectionController;
 use App\Http\Controllers\Backend\FeePaymentController;
 use App\Http\Controllers\Backend\FeeTypeController;
@@ -56,8 +56,10 @@ use App\Http\Controllers\Api\ResultBatchController;
 use App\Http\Controllers\Api\StudentResultController;
 use App\Http\Controllers\Api\FilterSetupController;
 use App\Http\Controllers\Api\BroadsheetV2Controller;
+use App\Http\Controllers\Api\CbtOnboardingController;
+
 use App\Http\Controllers\Api\SchoolDomainController;
-use App\Http\Controllers\Api\WhatsappVerificationController;
+
 use App\Http\Controllers\Backend\AttendanceSettingController;
 use App\Http\Controllers\Backend\AdminDashboardController;
 use App\Http\Controllers\Backend\BursarDashboardController;
@@ -204,19 +206,23 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::delete('/blogs/{id}', [BlogController::class, 'destroy']);
    
 
-     Route::get('/admin/whatsapp/account', [AdminSchoolWhatsappAccountController::class, 'show']);
-    Route::post('/admin/whatsapp/account', [AdminSchoolWhatsappAccountController::class, 'store']);
+  //whatsapp settings route
 
-    Route::get('/admin/whatsapp/credits', [AdminWhatsappCreditController::class, 'summary']);
+    Route::get('/settings/whatsapp',             [WhatsAppSettingsController::class, 'show']);
+    Route::post('/settings/whatsapp/toggle',     [WhatsAppSettingsController::class, 'toggle']);
+    Route::post('/settings/whatsapp/test',       [WhatsAppSettingsController::class, 'test']);
+    Route::get('/settings/whatsapp/queue-stats', [WhatsAppSettingsController::class, 'queueStats']);
 
-    Route::get('/admin/whatsapp/messages', [AdminWhatsappMessageController::class, 'index']);
-    Route::post('/admin/whatsapp/send-parent', [AdminWhatsappMessageController::class, 'sendToParent']);
+    Route::post('/whatsapp/broadcast/results',       [WhatsAppBroadcastController::class, 'broadcastResults']);
+    Route::post('/whatsapp/broadcast/fee-reminders', [WhatsAppBroadcastController::class, 'broadcastFeeReminders']);
+    Route::post('/whatsapp/broadcast/custom',        [WhatsAppBroadcastController::class, 'customBroadcast']);
 
-    Route::post('/whatsapp/verify/admin/start', [WhatsappVerificationController::class, 'startAdmin']);
-    Route::post('/whatsapp/verify/parent/start', [WhatsappVerificationController::class, 'startParent']);
-    Route::post('/whatsapp/verify/code', [WhatsappVerificationController::class, 'verify']);
 
-    Route::get   ('/settings/domain',         [SchoolDomainController::class, 'show']);
+
+
+
+
+     Route::get   ('/settings/domain',         [SchoolDomainController::class, 'show']);
     Route::post  ('/settings/domain',         [SchoolDomainController::class, 'register']);
     Route::post  ('/settings/domain/verify',  [SchoolDomainController::class, 'verify']);
     Route::delete('/settings/domain/{id}',    [SchoolDomainController::class, 'remove']);
@@ -226,6 +232,8 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   Route::post('/school/bank-accounts', [SchoolBankAccountController::class, 'store']);
   Route::put('/school/bank-accounts/{id}', [SchoolBankAccountController::class, 'update']);
   Route::delete('/school/bank-accounts/{id}', [SchoolBankAccountController::class, 'destroy']);
+  Route::get('/banks', [SchoolBankAccountController::class, 'banks']);
+  Route::get('/bank-account/verify', [SchoolBankAccountController::class, 'verifyAccount']);
 
   // For parent dashboard: fetch school active bank accounts
   Route::get('/schools/{schoolId}/bank-accounts', [SchoolBankAccountController::class, 'activeForSchool']);
@@ -364,6 +372,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     //resouces for students
     Route::get('/all-students', [StudentController::class, 'AllStudents']);
     Route::get('/students/show/{id}', [StudentController::class, 'ViewStudent']);
+    Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
+
     Route::Post('/students/store', [StudentController::class, 'StoreAllStudent']);
     Route::delete('/students/{id}', [StudentController::class, 'DeleteStudent']);
     Route::get('/students/edit/{id}', [StudentController::class, 'EditStudents']);
@@ -429,6 +439,12 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
   Route::post('/result-batches/{batch}/compute', [ResultBatchController::class, 'compute']);
       Route::get('/result-batches/{batch}/students', [ResultBatchController::class, 'students']);
 // routes/api.php
+
+
+
+
+
+
 
 
 
@@ -606,9 +622,13 @@ Route::delete('/student-fees/{studentFeeId}', [FeePaymentController::class, 'rem
     Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee'])
         ->name('fees.assign');
 
+// Route::post('/fees/initialize', [OnlineFeePaymentController::class, 'initialize']);
+//     Route::get('/fees/verify/{reference}', [OnlineFeePaymentController::class, 'verify']);
 
+Route::post('/fees/online/initialize', [FeePaymentController::class, 'initializeOnlinePayment']);
+Route::get('/fees/online/verify/{reference}', [FeePaymentController::class, 'verifyOnlinePayment']);
 
-
+Route::post('/paystack/webhook', [FeePaymentController::class, 'paystackWebhook']); // outside auth:sanctum
 
 //Route for app settings
 Route::post('/save-settings', [SettingController::class, 'saveSettings']);
@@ -681,12 +701,19 @@ Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'
 Route::post('/biometric-validate', [BiometricQRController::class, 'validateCode']);
 
 
+
+
+
+
+
+
+
+
 });
 
 
 
-
-
+   
 // Route::middleware(['customdomain'])->group(function () {
 //     // Routes that need custom domain resolution
 //     Route::post('/login', [AuthController::class, 'login']);
@@ -700,7 +727,7 @@ Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
 
 
 Route::middleware('auth:sanctum')->post('/terms/bulk-create', [TermController::class, 'bulkCreate']);
-
+// Route::post('/paystack/webhook', [OnlineFeePaymentController::class, 'webhook']);
 
 
 

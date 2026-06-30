@@ -4,6 +4,7 @@ use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Jobs\ProcessAutoFeeInvoicesJob;
+use App\Models\SchoolSetting;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -22,3 +23,21 @@ Schedule::command('subscriptions:auto-renew-wallet')->everyMinute();
 Schedule::command('results:scan-incomplete')->everyMinute();
 Schedule::command('results:scan-incomplete')->everyMinute();
 Schedule::command('results:scan-anomalies')->everyMinute();
+
+
+Schedule::call(function () {
+    SchoolSetting::where('whatsapp_monthly_limit', '>', 0)
+        ->update([
+            'whatsapp_messages_sent'    => 0,
+            'whatsapp_usage_reset_date' => now(),
+        ]);
+})->monthly()->name('reset-whatsapp-usage')->withoutOverlapping();
+
+
+
+
+
+
+
+
+

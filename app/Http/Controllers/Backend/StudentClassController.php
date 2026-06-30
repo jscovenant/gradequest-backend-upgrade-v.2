@@ -17,9 +17,13 @@ class StudentClassController extends Controller
 
     public function index()
     {
-        $schoolId = Auth::user()->school_id;
+        $user = Auth::user();
 
-        $levels = StudentClass::where('school_id', $schoolId)->orderBy('name')->get();
+        if(!$user){
+            return response()->json("User not Authenticated!");
+        }
+
+        $levels = StudentClass::where('school_id', $user->school_id)->orderBy('name')->get();
 
         return response()->json($levels);
     }
