@@ -39,13 +39,26 @@ public function store(Request $request)
         'account_number'  => 'required|string|max:20',
         'currency'        => 'nullable|string|max:8',
         'is_active'       => 'nullable|boolean',
+        'online_payment_enabled' => 'nullable|boolean',
+        'accepts_online_payment' => 'nullable|boolean',
         'sort_order'      => 'nullable|integer|min:0|max:1000',
     ]);
+
+    $existing = SchoolBankAccount::where('school_id', $school->id)->first();
+
+    if ($existing) {
+        return response()->json([
+            'message' => 'A bank account has already been added. Please update the existing account instead.'
+        ], 422);
+    }
+
+    $onlinePaymentEnabled = $request->has('online_payment_enabled')
+        ? $request->boolean('online_payment_enabled')
+        : $request->boolean('accepts_online_payment', false);
 
     DB::beginTransaction();
 
     try {
-
         /**
          * STEP 1
          * Verify the account number.
@@ -68,36 +81,29 @@ public function store(Request $request)
          */
         $validated['account_name'] = $resolvedName;
 
+        $paystackSubaccountCode = null;
+
         /**
          * STEP 2
-         * Create Paystack Subaccount.
+         * Create Paystack Subaccount only when online payment is enabled.
          */
-        $subaccount = Http::withToken(config('services.paystack.secret'))
-            ->post('https://api.paystack.co/subaccount', [
-                'business_name'     => $school->name,
-                'settlement_bank'   => $validated['bank_code'],
-                'account_number'    => $validated['account_number'],
-                'percentage_charge' => 0,
-            ]);
+        if ($onlinePaymentEnabled) {
+            $subaccount = Http::withToken(config('services.paystack.secret'))
+                ->post('https://api.paystack.co/subaccount', [
+                    'business_name'     => $school->school_name ?? $school->name ?? 'School',
+                    'settlement_bank'   => $validated['bank_code'],
+                    'account_number'    => $validated['account_number'],
+                    'percentage_charge' => 0,
+                ]);
 
-        if (! $subaccount->successful() || ! $subaccount->json('status')) {
-            throw new \Exception(
-                $subaccount->json('message') ?? 'Unable to create Paystack subaccount.'
-            );
+            if (! $subaccount->successful() || ! $subaccount->json('status')) {
+                throw new \Exception(
+                    $subaccount->json('message') ?? 'Unable to create Paystack subaccount.'
+                );
+            }
+
+            $paystackSubaccountCode = $subaccount->json('data.subaccount_code');
         }
-
-        /**
-         * STEP 3
-         * Save everything.
-         */
-
-        $existing = SchoolBankAccount::where('school_id', $school->id)->first();
-
-          if ($existing) {
-              return response()->json([
-                  'message' => 'A bank account has already been added. Please update the existing account instead.'
-              ], 422);
-          }
 
 
         $item = SchoolBankAccount::create([
@@ -108,8 +114,9 @@ public function store(Request $request)
             'account_number' => $validated['account_number'],
             'currency' => $validated['currency'] ?? 'NGN',
             'is_active' => $validated['is_active'] ?? true,
+            'online_payment_enabled' => $onlinePaymentEnabled,
             'sort_order' => $validated['sort_order'] ?? 0,
-            'paystack_subaccount_code' => $subaccount->json('data.subaccount_code'),
+            'paystack_subaccount_code' => $paystackSubaccountCode,
         ]);
 
         DB::commit();
@@ -177,10 +184,50 @@ public function verifyAccount(Request $request)
       'account_number' => 'sometimes|required|string|max:20',
       'currency' => 'nullable|string|max:8',
       'is_active' => 'nullable|boolean',
+      'online_payment_enabled' => 'nullable|boolean',
+      'accepts_online_payment' => 'nullable|boolean',
       'sort_order' => 'nullable|integer|min:0|max:1000',
     ]);
 
-    $item->update($validated);
+    DB::beginTransaction();
+
+    try {
+      if ($request->has('online_payment_enabled') || $request->has('accepts_online_payment')) {
+        $onlinePaymentEnabled = $request->has('online_payment_enabled')
+          ? $request->boolean('online_payment_enabled')
+          : $request->boolean('accepts_online_payment');
+
+        $validated['online_payment_enabled'] = $onlinePaymentEnabled;
+
+        if ($onlinePaymentEnabled && empty($item->paystack_subaccount_code)) {
+          $bankCode = $validated['bank_code'] ?? $item->bank_code;
+          $accountNumber = $validated['account_number'] ?? $item->account_number;
+
+          $subaccount = Http::withToken(config('services.paystack.secret'))
+            ->post('https://api.paystack.co/subaccount', [
+              'business_name' => $request->user()->school?->school_name ?? $request->user()->school?->name ?? 'School',
+              'settlement_bank' => $bankCode,
+              'account_number' => $accountNumber,
+              'percentage_charge' => 0,
+            ]);
+
+          if (! $subaccount->successful() || ! $subaccount->json('status')) {
+            throw new \Exception($subaccount->json('message') ?? 'Unable to create Paystack subaccount.');
+          }
+
+          $validated['paystack_subaccount_code'] = $subaccount->json('data.subaccount_code');
+        }
+      }
+
+      unset($validated['accepts_online_payment']);
+      $item->update($validated);
+
+      DB::commit();
+    } catch (\Throwable $e) {
+      DB::rollBack();
+
+      return response()->json(['message' => $e->getMessage()], 422);
+    }
 
     return response()->json([
       'message' => 'Bank account updated.',
@@ -205,7 +252,7 @@ public function verifyAccount(Request $request)
     $items = SchoolBankAccount::where('school_id', $schoolId)
       ->where('is_active', true)
       ->orderBy('sort_order')
-      ->get(['id','bank_name','bank_code','account_name','account_number','currency']);
+      ->get(['id','bank_name','bank_code','account_name','account_number','currency','online_payment_enabled']);
 
     return response()->json($items);
   }

@@ -12,18 +12,29 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('school_settings', function (Blueprint $table) {
-            $table->integer('whatsapp_monthly_limit')->default(0);
-    // 0 = no access, -1 = unlimited, 200 = 200 msgs/month
-    $table->integer('whatsapp_messages_sent')->default(0);
-    $table->date('whatsapp_usage_reset_date')->nullable();
-            $table->boolean('whatsapp_enabled')->default(false);
+            if (! Schema::hasColumn('school_settings', 'whatsapp_monthly_limit')) {
+                $table->integer('whatsapp_monthly_limit')->default(0);
+            }
+
+            if (! Schema::hasColumn('school_settings', 'whatsapp_messages_sent')) {
+                $table->integer('whatsapp_messages_sent')->default(0);
+            }
+
+            if (! Schema::hasColumn('school_settings', 'whatsapp_usage_reset_date')) {
+                $table->date('whatsapp_usage_reset_date')->nullable();
+            }
+
+            if (! Schema::hasColumn('school_settings', 'whatsapp_enabled')) {
+                $table->boolean('whatsapp_enabled')->default(false);
+            }
         });
 
 
-        // Also ensure parents table has whatsapp number
-            Schema::table('users', function (Blueprint $table) {
+        Schema::table('users', function (Blueprint $table) {
+            if (! Schema::hasColumn('users', 'whatsapp_number')) {
                 $table->string('whatsapp_number')->nullable();
-            });
+            }
+        });
     }
 
     /**
@@ -31,8 +42,25 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('schools', function (Blueprint $table) {
-            //
+        Schema::table('school_settings', function (Blueprint $table) {
+            $columns = [
+                'whatsapp_monthly_limit',
+                'whatsapp_messages_sent',
+                'whatsapp_usage_reset_date',
+                'whatsapp_enabled',
+            ];
+
+            foreach ($columns as $column) {
+                if (Schema::hasColumn('school_settings', $column)) {
+                    $table->dropColumn($column);
+                }
+            }
+        });
+
+        Schema::table('users', function (Blueprint $table) {
+            if (Schema::hasColumn('users', 'whatsapp_number')) {
+                $table->dropColumn('whatsapp_number');
+            }
         });
     }
 };

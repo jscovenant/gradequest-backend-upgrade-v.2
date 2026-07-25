@@ -16,6 +16,7 @@ use App\Models\Subject;
 use App\Models\Term;
 use App\Models\User;
 use App\Services\Results\SubjectService;
+use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use App\Models\TeacherEnrollment;
@@ -41,7 +42,8 @@ class ResultBatchController extends Controller
   public function __construct(
     private ResultRepository $repo,
     private ResultComputeService $computeService,
-    private SubjectService $subjectService
+    private SubjectService $subjectService,
+    private SchoolBillingService $schoolBillingService
   ) {}
 
   /**
@@ -235,6 +237,13 @@ public function resultForm(int $batchId, int $studentId)
         ], 409);
     }
 
+    $billingStatus = $this->schoolBillingService->resultEntryStatus(
+        $schoolId,
+        $student->id,
+        (string) $batch->session,
+        (string) $batch->term
+    );
+
     // Subjects
     $subjects = $this->subjectService->subjectsForDepartment(
         $schoolId,
@@ -326,6 +335,7 @@ public function resultForm(int $batchId, int $studentId)
         'terms' => $termNames,
         'previous_terms' => $previousTerms,
         'carry_over_preview' => $carryOverPreview,
+        'billing' => $billingStatus,
         'warnings' => !$student->department_id
             ? ['Student has no department assigned, so no subjects were returned.']
             : [],

@@ -5,10 +5,15 @@ namespace App\Http\Controllers\Backend;
 use App\Http\Controllers\Controller;
 use App\Jobs\{SendResultNotification, SendFeeReminder, SendCustomNotification};
 use App\Models\{Average, Invoice, User};
+use App\Services\SubscriptionGate;
 use Illuminate\Http\Request;
  
 class WhatsAppBroadcastController extends Controller
 {
+    public function __construct(private SubscriptionGate $subscriptionGate)
+    {
+    }
+
     // POST /whatsapp/broadcast/results
     public function broadcastResults(Request $request)
     {
@@ -30,6 +35,11 @@ class WhatsAppBroadcastController extends Controller
             return response()->json([
                 'message' => 'No students found with results for the selected term, session and class.',
             ], 404);
+        }
+
+        $usageCheck = $this->inspectWhatsappUsage($request, $studentIds->count());
+        if ($usageCheck) {
+            return $usageCheck;
         }
  
         $loop = 0;
@@ -62,6 +72,11 @@ class WhatsAppBroadcastController extends Controller
             return response()->json([
                 'message' => 'No overdue unpaid invoices found.',
             ], 404);
+        }
+
+        $usageCheck = $this->inspectWhatsappUsage($request, $invoices->count());
+        if ($usageCheck) {
+            return $usageCheck;
         }
  
         foreach ($invoices as $invoice) {
@@ -97,6 +112,11 @@ class WhatsAppBroadcastController extends Controller
                 'message' => 'No parents with WhatsApp numbers found.',
             ], 404);
         }
+
+        $usageCheck = $this->inspectWhatsappUsage($request, $parents->count());
+        if ($usageCheck) {
+            return $usageCheck;
+        }
  
         $loop = 0;
         foreach ($parents as $parent) {
@@ -110,6 +130,34 @@ class WhatsAppBroadcastController extends Controller
         return response()->json([
             'message' => "{$parents->count()} custom message(s) queued for WhatsApp delivery.",
         ]);
+    }
+
+    private function inspectWhatsappUsage(Request $request, int $recipientCount)
+    {
+        $result = $this->subscriptionGate->inspect(
+            $request->user(),
+            'whatsapp_notifications',
+            'usage',
+            $recipientCount
+        );
+
+        if (! $result['allowed']) {
+            return response()->json([
+                'message' => $result['message'],
+                'reason' => $result['reason'],
+                'subscription' => [
+                    'feature_key' => 'whatsapp_notifications',
+                    'limit_key' => 'usage',
+                    'limit' => $result['limit'] ?? null,
+                    'used' => $result['used'] ?? null,
+                    'requested' => $recipientCount,
+                ],
+            ], $result['status'] ?? 403);
+        }
+
+        $this->subscriptionGate->recordUsage($request->user(), 'whatsapp_notifications', $recipientCount);
+
+        return null;
     }
 }
  

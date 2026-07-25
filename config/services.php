@@ -45,8 +45,9 @@ return [
 
 
     'paystack' => [
-    'secret' => env('PAYSTACK_SECRET_KEY'),
-],
+        'secret' => env('PAYSTACK_SECRET_KEY'),
+        'platform_fee_naira' => env('PAYSTACK_PLATFORM_FEE_NAIRA', 1000),
+    ],
 
     'paystack_public' => [
         'public' => env('PAYSTACK_PUBLIC_KEY'),

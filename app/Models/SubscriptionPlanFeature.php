@@ -10,6 +10,11 @@ class SubscriptionPlanFeature extends Model
     use HasFactory;
     
     protected $guarded = [];
+
+    protected $casts = [
+        'is_enabled' => 'boolean',
+        'limit_count' => 'integer',
+    ];
     
     
       public function plan()

@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
+use App\Models\AcademicSession;
 use App\Models\Term;
+use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 
@@ -32,6 +34,8 @@ class TermController extends Controller
 
         $validated = $request->validate([
             'name' => 'required|string|max:100',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
         ]);
 
         // Check for duplicate term name
@@ -45,6 +49,8 @@ class TermController extends Controller
 
         $term = new Term();
         $term->name = $validated['name'];
+        $term->start_date = $validated['start_date'] ?? null;
+        $term->end_date = $validated['end_date'] ?? null;
         $term->school_id = $auth->school_id;
         $term->save();
 
@@ -63,8 +69,10 @@ class TermController extends Controller
     public function update(Request $request, $id)
     {
         $schoolId = Auth::user()->school_id;
-        $request->validate([
+        $validated = $request->validate([
             'name' => 'required|string|max:255',
+            'start_date' => 'nullable|date',
+            'end_date' => 'nullable|date|after_or_equal:start_date',
         ]);
 
     
@@ -72,7 +80,9 @@ class TermController extends Controller
 
         
         $term->update([
-            'name' => $request->name,
+            'name' => $validated['name'],
+            'start_date' => $validated['start_date'] ?? null,
+            'end_date' => $validated['end_date'] ?? null,
         ]);
     
         return response()->json(['message' => 'Term updated successfully']);
@@ -108,6 +118,19 @@ class TermController extends Controller
         // Activate selected term
         $term->status = 'Active';
         $term->save();
+
+        $session = AcademicSession::where('school_id', $schoolId)
+            ->where('is_current', 1)
+            ->orderByDesc('id')
+            ->first()
+            ?: AcademicSession::where('school_id', $schoolId)
+                ->where('status', 'Active')
+                ->orderByDesc('id')
+                ->first();
+
+        if ($session) {
+            app(SchoolBillingService::class)->billingPeriodFor($schoolId, $session, $term, Auth::id(), 'term_activated');
+        }
     
         return response()->json(['message' => 'Term set as active']);
     }

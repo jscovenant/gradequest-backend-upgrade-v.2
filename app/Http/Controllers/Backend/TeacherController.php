@@ -31,7 +31,7 @@ class TeacherController extends Controller
     {
         $auth = Auth::user();
     
-        $query = User::where('role', 'teacher')
+        $query = User::withRole('teacher')
             ->where('school_id', $auth->school_id);
     
         if ($request->search) {
@@ -65,9 +65,12 @@ class TeacherController extends Controller
 public function viewTeacher($id)
 {
     try {
+        $auth = Auth::user();
+
         $teacher = User::with(['teacherEnrollment.level'])
             ->where('id', $id)
-            ->where('role', 'teacher')
+            ->forSchool($auth->school_id)
+            ->withRole('teacher')
             ->first();
 
         if (!$teacher) {
@@ -184,9 +187,12 @@ public function StoreTeacher(Request $request)
 public function editTeacher($id)
 {
     try {
+        $auth = Auth::user();
+
         $teacher = User::with(['teacherEnrollment.level'])
             ->where('id', $id)
-            ->where('role', 'teacher')
+            ->forSchool($auth->school_id)
+            ->withRole('teacher')
             ->first();
 
         if (!$teacher) {
@@ -218,7 +224,7 @@ public function editTeacher($id)
 
 public function updateTeacher(Request $request, $id)
 {
-  
+    $auth = Auth::user();
 
     $validated = $request->validate([
         'firstname' => 'required|string|max:100',
@@ -233,7 +239,10 @@ public function updateTeacher(Request $request, $id)
         'photo' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
     ]);
 
-    $teacher = User::where('id', $id)->where('role', 'teacher')->firstOrFail();
+    $teacher = User::where('id', $id)
+        ->forSchool($auth->school_id)
+        ->withRole('teacher')
+        ->firstOrFail();
 
     $teacher->fill($validated);
 
@@ -255,7 +264,10 @@ public function updateTeacher(Request $request, $id)
     if ($request->filled('level_id')) {
         $teacher->teacherEnrollment()->updateOrCreate(
             ['user_id' => $teacher->id],
-            ['level_id' => $request->level_id]
+            [
+                'level_id' => $request->level_id,
+                'school_id' => $auth->school_id,
+            ]
         );
     }
 
@@ -269,7 +281,11 @@ public function updateTeacher(Request $request, $id)
 
 public function deleteTeacher($id)
 {
-    $teacher = User::where('role', 'teacher')->findOrFail($id);
+    $auth = Auth::user();
+
+    $teacher = User::withRole('teacher')
+        ->forSchool($auth->school_id)
+        ->findOrFail($id);
     $teacher->delete();
 
     return response()->json(['message' => 'Teacher deleted successfully']);

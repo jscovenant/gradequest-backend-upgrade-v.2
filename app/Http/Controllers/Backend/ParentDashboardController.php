@@ -29,7 +29,12 @@ class ParentDashboardController extends Controller
             ->join('users as u', 'u.id', '=', 'ps.student_id')
             ->leftJoin('student_classes as sc', 'sc.id', '=', 'u.level_id')
             ->where('ps.parent_id', $parentId)
-            ->where('ps.school_id', $schoolId)
+            ->where('u.school_id', $schoolId)
+            ->whereRaw('LOWER(u.role) = ?', ['student'])
+            ->where(function ($query) use ($schoolId) {
+                $query->where('ps.school_id', $schoolId)
+                    ->orWhereNull('ps.school_id');
+            })
             ->select([
                 'u.id',
                 'u.firstname',

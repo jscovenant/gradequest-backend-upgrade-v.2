@@ -13,6 +13,7 @@ use App\Models\Subject;
 use App\Models\Term;
 use App\Models\User;
 use App\Repositories\ResultRepository;
+use App\Services\SchoolBillingService;
 use App\Services\Results\SubjectService;
 use App\Services\ResultService;
 use Illuminate\Http\JsonResponse;
@@ -33,7 +34,8 @@ class StudentResultController extends Controller
    */
   public function __construct(
     private ResultRepository $repo,
-    private SubjectService $subjectService
+    private SubjectService $subjectService,
+    private SchoolBillingService $schoolBillingService
   ) {}
 
   /**
@@ -249,6 +251,20 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
     $batchRow = DB::table('result_batches')->where('id', $batch)->first();
     if (!$batchRow) {
         return response()->json(['message' => 'Batch not found'], 404);
+    }
+
+    $billingStatus = $this->schoolBillingService->resultEntryStatus(
+        (int) $batchRow->school_id,
+        $student,
+        (string) $batchRow->session,
+        (string) $batchRow->term
+    );
+
+    if (! $billingStatus['allowed']) {
+        return response()->json([
+            'message' => $billingStatus['message'],
+            'billing' => $billingStatus,
+        ], 402);
     }
 
     $srId = null;
@@ -608,4 +624,3 @@ private function getBase64Image($path)
            . base64_encode(file_get_contents(public_path($path)));
 }
   }
-

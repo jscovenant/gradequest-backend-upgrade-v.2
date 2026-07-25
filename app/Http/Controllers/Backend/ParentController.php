@@ -76,13 +76,13 @@ public function assignChild(Request $request)
     // Verify parent belongs to same school & is parent role
     $parent = User::where('id', $parentId)
         ->where('school_id', $schoolId)
-        ->where('role', 'parent')
+        ->withRole('parent')
         ->firstOrFail();
 
     // Verify students belong to same school & role student
     $validStudents = User::whereIn('id', $studentIds)
         ->where('school_id', $schoolId)
-        ->where('role', 'student')
+        ->withRole('student')
         ->pluck('id')
         ->toArray();
 
@@ -148,7 +148,7 @@ public function assignChild(Request $request)
 
     $parent = User::where('id', $parentId)
         ->where('school_id', $auth->school_id)
-        ->where('role', 'Parent')
+        ->withRole('parent')
         ->with(['children' => function ($query) {
             $query->select('users.id', 'firstname', 'surname', 'reg_no', 'level_id')
                 ->with('level:id,name');
@@ -200,7 +200,7 @@ public function assignChild(Request $request)
     {
         $auth = Auth::user();
 
-        $parents = User::where('role', 'Parent')
+        $parents = User::withRole('parent')
             ->where('school_id', $auth->school_id)
             ->select('id', 'firstname', 'surname', 'email', 'phone')
             ->latest()
@@ -250,7 +250,7 @@ public function getByClasses(Request $request)
 
     // Students + assignment info
     $students = User::query()
-        ->where('users.role', 'student')
+        ->whereRaw('LOWER(users.role) = ?', ['student'])
         ->where('users.school_id', $auth->school_id)
         ->whereIn('users.level_id', $validClassIds)
         ->leftJoin('parent_students as ps', 'ps.student_id', '=', 'users.id')
@@ -286,7 +286,7 @@ public function edit($id)
 
     $parent = User::where('id', $id)
         ->where('school_id', $auth->school_id)
-        ->where('role', 'Parent')
+        ->withRole('parent')
         ->first();
 
     if (!$parent) {
@@ -321,7 +321,7 @@ public function update(Request $request, $id)
 
     $parent = User::where('id', $id)
         ->where('school_id', $auth->school_id)
-        ->where('role', 'Parent')
+        ->withRole('parent')
         ->first();
 
     if (!$parent) {
@@ -362,9 +362,13 @@ public function update(Request $request, $id)
 
     
     
-    public function destroy($id)
+public function destroy($id)
 {
-    $parent = User::role('Parent')->find($id);
+    $auth = Auth::user();
+
+    $parent = User::forSchool($auth->school_id)
+        ->withRole('parent')
+        ->find($id);
 
     if (!$parent) {
         return response()->json(['message' => 'Parent not found'], 404);

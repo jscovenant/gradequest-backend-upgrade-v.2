@@ -14,15 +14,17 @@ return new class extends Migration
         Schema::create('sub_payments', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
+            $table->foreignId('subscription_plan_id')->nullable()->constrained('subscription_plans')->nullOnDelete();
             $table->bigInteger('subscription_id')->nullable();
             $table->string('reference')->unique();
-            $table->string('paystack_id')->unique();
+            $table->string('paystack_id')->nullable()->unique();
             $table->decimal('amount', 10, 2);
-            $table->string('status'); // e.g., successful, failed, pending
-            $table->string('channel')->nullable(); // e.g., card, bank
+            $table->string('status'); 
+            $table->string('channel')->nullable(); 
             $table->string('card_type')->nullable();
             $table->string('last4')->nullable();
-            $table->timestamp('paid_at');
+            $table->timestamp('paid_at')->nullable();
+            $table->timestamp('starts_at')->nullable();
             $table->timestamps();
         });
     }

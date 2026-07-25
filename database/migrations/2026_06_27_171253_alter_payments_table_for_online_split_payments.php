@@ -9,40 +9,48 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('payments', function (Blueprint $table) {
-            // Tracks online payment state; existing manually-recorded rows
-            // default to 'success' since they were already received.
-            $table->enum('status', ['pending', 'success', 'failed'])
-                ->default('success')
-                ->after('payment_method');
+            if (! Schema::hasColumn('payments', 'status')) {
+                $table->enum('status', ['pending', 'success', 'failed'])
+                    ->default('success')
+                    ->after('payment_method');
+            }
 
-            // GradeQuest's one-time-per-term cut on this specific transaction,
-            // in naira — 0 for transactions that didn't carry the fee.
-            $table->decimal('platform_fee', 10, 0)->default(0)->after('amount');
+            if (! Schema::hasColumn('payments', 'platform_fee')) {
+                $table->decimal('platform_fee', 10, 0)->default(0)->after('amount');
+            }
 
-            // Raw Paystack verify/webhook payload, for audit/debugging.
-            $table->json('paystack_response')->nullable()->after('reference');
+            if (! Schema::hasColumn('payments', 'paystack_response')) {
+                $table->json('paystack_response')->nullable()->after('reference');
+            }
 
-            // The parent/user who initiated an online payment.
-            // Distinct from received_by, which is for staff-recorded offline payments.
-            $table->unsignedBigInteger('paid_by')->nullable()->after('received_by');
+            if (! Schema::hasColumn('payments', 'paid_by')) {
+                $table->unsignedBigInteger('paid_by')->nullable()->after('received_by');
+            }
         });
 
-        // received_by was NOT NULL — online, self-service payments have no
-        // staff "receiver", so it needs to be nullable. This requires
-        // doctrine/dbal (composer require doctrine/dbal). If you'd rather
-        // skip that dependency, run this raw statement manually instead
-        // and remove the block below:
-        // ALTER TABLE payments MODIFY received_by BIGINT UNSIGNED NULL;
-        Schema::table('payments', function (Blueprint $table) {
-            $table->unsignedBigInteger('received_by')->nullable()->change();
-        });
+        if (Schema::hasColumn('payments', 'received_by')) {
+            Schema::table('payments', function (Blueprint $table) {
+                $table->unsignedBigInteger('received_by')->nullable()->change();
+            });
+        }
     }
 
     public function down(): void
     {
         Schema::table('payments', function (Blueprint $table) {
-            $table->dropColumn(['status', 'platform_fee', 'paystack_response', 'paid_by']);
-            $table->unsignedBigInteger('received_by')->nullable(false)->change();
+            $columns = ['status', 'platform_fee', 'paystack_response', 'paid_by'];
+
+            foreach ($columns as $column) {
+                if (Schema::hasColumn('payments', $column)) {
+                    $table->dropColumn($column);
+                }
+            }
         });
+
+        if (Schema::hasColumn('payments', 'received_by')) {
+            Schema::table('payments', function (Blueprint $table) {
+                $table->unsignedBigInteger('received_by')->nullable(false)->change();
+            });
+        }
     }
 };

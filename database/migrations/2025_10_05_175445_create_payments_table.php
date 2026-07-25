@@ -11,14 +11,26 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('payments', function (Blueprint $table) {
-            $table->id();
-             $table->foreignId('student_fee_id')->constrained('student_fees')->cascadeOnDelete();
-            $table->decimal('amount', 10, 2);
-            $table->string('payment_method')->nullable(); 
-            $table->string('reference')->unique();
-            $table->foreignId('received_by')->constrained('users');
-            $table->timestamps();
+        Schema::table('payments', function (Blueprint $table) {
+            if (! Schema::hasColumn('payments', 'student_fee_id')) {
+                $table->foreignId('student_fee_id')
+                    ->nullable()
+                    ->after('id')
+                    ->constrained('student_fees')
+                    ->nullOnDelete();
+            }
+
+            if (! Schema::hasColumn('payments', 'payment_method')) {
+                $table->string('payment_method')->nullable()->after('amount');
+            }
+
+            if (! Schema::hasColumn('payments', 'received_by')) {
+                $table->foreignId('received_by')
+                    ->nullable()
+                    ->after('reference')
+                    ->constrained('users')
+                    ->nullOnDelete();
+            }
         });
     }
 
@@ -27,6 +39,18 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('payments');
+        Schema::table('payments', function (Blueprint $table) {
+            if (Schema::hasColumn('payments', 'student_fee_id')) {
+                $table->dropConstrainedForeignId('student_fee_id');
+            }
+
+            if (Schema::hasColumn('payments', 'received_by')) {
+                $table->dropConstrainedForeignId('received_by');
+            }
+
+            if (Schema::hasColumn('payments', 'payment_method')) {
+                $table->dropColumn('payment_method');
+            }
+        });
     }
 };

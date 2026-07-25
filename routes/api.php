@@ -26,13 +26,13 @@ use App\Http\Controllers\SchoolLogoController;
 use App\Http\Controllers\SettingController;
 use App\Http\Controllers\WalletController;
 use App\Http\Controllers\Backend\SchoolBankAccountController;
+use App\Http\Controllers\Backend\SchoolBillingController;
 use Illuminate\Http\Request;
 
 use App\Http\Controllers\Backend\TimetableController;
 
 use Illuminate\Support\Facades\Route;
 
-use App\Http\Controllers\Backend\BiometricQRController;
 use App\Http\Controllers\Backend\TeacherSubjectController;
 use App\Http\Controllers\Backend\WhatsAppSettingsController;
 use App\Http\Controllers\Backend\WhatsAppBroadcastController;
@@ -69,8 +69,11 @@ use App\Http\Controllers\Backend\InvoiceNotificationController;
 use App\Http\Controllers\Backend\TeacherDashboardController;
 use App\Http\Controllers\Backend\StudentDashboardController;
 use App\Http\Controllers\Backend\ParentDashboardController;
-  use App\Http\Controllers\Backend\ParentStudentFeesController;
+use App\Http\Controllers\Backend\ParentStudentFeesController;
 use App\Http\Controllers\Backend\PublicDemoBookingController;
+use App\Http\Controllers\Backend\PublicFeePaymentController;
+use App\Http\Controllers\Backend\GradequestInvoicePaymentController;
+use App\Http\Controllers\Backend\GradequestBillingPolicyController;
 use App\Http\Controllers\Frontend\HomeController;
 
     Route::post('/login', [AuthController::class, 'login']);
@@ -85,6 +88,10 @@ Route::get('/testimonials', [TestimonialController::class, 'index']);
 Route::get('/testimonials/{id}', [TestimonialController::class, 'edit']);     
 Route::put('/testimonials/{id}', [TestimonialController::class, 'update']);
 Route::post('/demo-bookings', [PublicDemoBookingController::class, 'store']);
+Route::get('/public/fee-payment/school', [PublicFeePaymentController::class, 'school']);
+Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 'student']);
+Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize']);
+Route::get('/public/fee-payment/verify/{reference}', [PublicFeePaymentController::class, 'verify']);
 
 Route::get('/frontend/subscription-plans', [HomeController::class, 'subscriptionPlans']);
 
@@ -109,7 +116,7 @@ Route::get('/result/{studentId}', [ResultController::class, 'showStudentResult']
 
 
 
-Route::middleware('auth:sanctum')->group(function () {
+Route::middleware(['auth:sanctum', 'tenant', 'school.billing.clearance'])->group(function () {
     
     //Route for activating account
 Route::get('/user/onboarding-status', [ActivationController::class, 'onboardingStatus']);
@@ -198,6 +205,14 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     
     Route::get('/monthly-revenue-stats', [SuperAdminController::class, 'monthlyRevenueStats']);
     Route::post('/platform-logs/delete-multiple', [SuperAdminController::class, 'deleteMultiple']);
+    Route::get('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'index']);
+    Route::put('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'update']);
+    Route::get('/superadmin/billing-policy/schools', [GradequestBillingPolicyController::class, 'schools']);
+    Route::get('/superadmin/billing-periods', [GradequestBillingPolicyController::class, 'billingPeriods']);
+    Route::post('/superadmin/billing-periods/sync-current', [GradequestBillingPolicyController::class, 'syncSchoolCurrentBillingPeriod']);
+    Route::put('/superadmin/billing-periods/{billingPeriod}', [GradequestBillingPolicyController::class, 'updateBillingPeriod']);
+    Route::post('/superadmin/billing-temporary-access', [GradequestBillingPolicyController::class, 'grantTemporaryAccess']);
+    Route::delete('/superadmin/billing-temporary-access/{temporaryAccess}', [GradequestBillingPolicyController::class, 'revokeTemporaryAccess']);
     
       Route::post('/create-blog', [BlogController::class, 'store']);
        Route::get('/blogs', [BlogController::class, 'index']);
@@ -209,13 +224,18 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   //whatsapp settings route
 
     Route::get('/settings/whatsapp',             [WhatsAppSettingsController::class, 'show']);
-    Route::post('/settings/whatsapp/toggle',     [WhatsAppSettingsController::class, 'toggle']);
-    Route::post('/settings/whatsapp/test',       [WhatsAppSettingsController::class, 'test']);
+    Route::post('/settings/whatsapp/toggle',     [WhatsAppSettingsController::class, 'toggle'])
+        ->middleware('subscription.feature:whatsapp_notifications');
+    Route::post('/settings/whatsapp/test',       [WhatsAppSettingsController::class, 'test'])
+        ->middleware('subscription.feature:whatsapp_notifications');
     Route::get('/settings/whatsapp/queue-stats', [WhatsAppSettingsController::class, 'queueStats']);
 
-    Route::post('/whatsapp/broadcast/results',       [WhatsAppBroadcastController::class, 'broadcastResults']);
-    Route::post('/whatsapp/broadcast/fee-reminders', [WhatsAppBroadcastController::class, 'broadcastFeeReminders']);
-    Route::post('/whatsapp/broadcast/custom',        [WhatsAppBroadcastController::class, 'customBroadcast']);
+    Route::post('/whatsapp/broadcast/results',       [WhatsAppBroadcastController::class, 'broadcastResults'])
+        ->middleware('subscription.feature:whatsapp_notifications,usage');
+    Route::post('/whatsapp/broadcast/fee-reminders', [WhatsAppBroadcastController::class, 'broadcastFeeReminders'])
+        ->middleware('subscription.feature:whatsapp_notifications,usage');
+    Route::post('/whatsapp/broadcast/custom',        [WhatsAppBroadcastController::class, 'customBroadcast'])
+        ->middleware('subscription.feature:whatsapp_notifications,usage');
 
 
 
@@ -234,6 +254,17 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   Route::delete('/school/bank-accounts/{id}', [SchoolBankAccountController::class, 'destroy']);
   Route::get('/banks', [SchoolBankAccountController::class, 'banks']);
   Route::get('/bank-account/verify', [SchoolBankAccountController::class, 'verifyAccount']);
+
+  Route::get('/school/billing/dashboard', [SchoolBillingController::class, 'dashboard']);
+  Route::get('/school/billing/settings', [SchoolBillingController::class, 'settings']);
+  Route::put('/school/billing/settings', [SchoolBillingController::class, 'updateSettings']);
+  Route::post('/school/billing/offline-invoice/generate', [SchoolBillingController::class, 'generateOfflineInvoice']);
+  Route::post('/school/billing/offline-invoices/{invoice}/payments', [SchoolBillingController::class, 'recordInvoicePayment']);
+  Route::get('/school/billing/invoices', [SchoolBillingController::class, 'invoices']);
+  Route::get('/school/billing/audits', [SchoolBillingController::class, 'audits']);
+  Route::get('/school/billing/invoices/{invoice}/payment', [GradequestInvoicePaymentController::class, 'show']);
+  Route::post('/school/billing/invoices/{invoice}/payment/initialize', [GradequestInvoicePaymentController::class, 'initialize']);
+  Route::get('/school/billing/invoice-payments/verify/{reference}', [GradequestInvoicePaymentController::class, 'verify']);
 
   // For parent dashboard: fetch school active bank accounts
   Route::get('/schools/{schoolId}/bank-accounts', [SchoolBankAccountController::class, 'activeForSchool']);
@@ -293,7 +324,8 @@ Route::get('/parent/children/{id}', [ParentController::class, 'getChild']);
 
 Route::get('/attendance', [AttendanceController::class, 'index']);  
 Route::get('/attendance/classes', [AttendanceController::class, 'classes']);
-Route::post('/attendance', [AttendanceController::class, 'store']);  
+Route::post('/attendance', [AttendanceController::class, 'store'])
+    ->middleware('subscription.feature:attendance_management');  
 Route::get('/student-report', [AttendanceController::class, 'report']);
 
 
@@ -357,6 +389,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
         Route::get('/dashboard/counts', [TeacherDashboardController::class, 'counts']);
         Route::get('/performance-stats', [TeacherDashboardController::class, 'performanceStats']);
         Route::get('/access-stats', [TeacherDashboardController::class, 'accessStats']);
+        Route::get('/action-center', [TeacherDashboardController::class, 'actionCenter']);
+        Route::get('/student-performance', [TeacherDashboardController::class, 'studentPerformance']);
     });
 
 
@@ -374,7 +408,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/students/show/{id}', [StudentController::class, 'ViewStudent']);
     Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
 
-    Route::Post('/students/store', [StudentController::class, 'StoreAllStudent']);
+    Route::Post('/students/store', [StudentController::class, 'StoreAllStudent'])
+        ->middleware('subscription.feature:student_management,students');
     Route::delete('/students/{id}', [StudentController::class, 'DeleteStudent']);
     Route::get('/students/edit/{id}', [StudentController::class, 'EditStudents']);
     Route::put('/students/update/{id}', [StudentController::class, 'UpdateStudent']);
@@ -415,7 +450,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/student-department', [StudentController::class, 'Department']);
 
     //route for affective and psychomotor domain
-    Route::post('/save-ratings', [StudentController::class, 'saveRatings']);
+    Route::post('/save-ratings', [StudentController::class, 'saveRatings'])
+        ->middleware('subscription.feature:result_management');
     Route::post('/decrypt-password', [StudentController::class, 'decryptPassword']);
 
     //Financial reports route
@@ -423,20 +459,24 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
         Route::get('/dashboard', [FinanceDashboardController::class, 'index']);
 
-        Route::apiResource('records', FinancialRecordController::class);
+        Route::apiResource('records', FinancialRecordController::class)
+            ->middleware(['store' => 'subscription.feature:finance_management']);
             Route::get('/reports/income', [FinanceDashboardController::class, 'generateIncomeReport']);
     Route::get('/reports/income/export', [FinanceDashboardController::class, 'exportIncomeReport']);
     Route::apiResource('categories', FinancialCategoryController::class)
-        ->only(['index', 'store', 'destroy']);
+        ->only(['index', 'store', 'destroy'])
+        ->middleware(['store' => 'subscription.feature:finance_management']);
         
     });
 
 
 
      // Batches
-  Route::post('/result-batches/resolve', [ResultBatchController::class, 'resolve']);
+  Route::post('/result-batches/resolve', [ResultBatchController::class, 'resolve'])
+      ->middleware('subscription.feature:result_management');
   Route::get('/result-batches/{batch}', [ResultBatchController::class, 'show']);
-  Route::post('/result-batches/{batch}/compute', [ResultBatchController::class, 'compute']);
+  Route::post('/result-batches/{batch}/compute', [ResultBatchController::class, 'compute'])
+      ->middleware('subscription.feature:result_management');
       Route::get('/result-batches/{batch}/students', [ResultBatchController::class, 'students']);
 // routes/api.php
 
@@ -451,7 +491,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
 
   // Student results in a batch
-  Route::post('/result-batches/{batch}/students/{student}/upsert', [StudentResultController::class, 'upsert']);
+  Route::post('/result-batches/{batch}/students/{student}/upsert', [StudentResultController::class, 'upsert'])
+      ->middleware('subscription.feature:result_management');
   Route::get('/result-batches/{batch}/students/{student}', [StudentResultController::class, 'showInBatch']);
      Route::get('/result-batches/{batch}/students/{student}/result-form', [ResultBatchController::class, 'resultForm']);
   // Report card (v2-first, legacy fallback)
@@ -463,7 +504,8 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
   
 
     Route::get('/result-batches/{batch}/broadsheet', [BroadsheetV2Controller::class, 'index']);
-    Route::post('/result-batches/{batch}/broadsheet/compute', [BroadsheetV2Controller::class, 'compute']);
+    Route::post('/result-batches/{batch}/broadsheet/compute', [BroadsheetV2Controller::class, 'compute'])
+        ->middleware('subscription.feature:result_management');
     Route::get('/result-batches/{batch}/broadsheet/export', [BroadsheetV2Controller::class, 'export']);
     Route::get('/result-batches/{batch}/broadsheet/students/{student}', [BroadsheetV2Controller::class, 'student']);
 
@@ -483,7 +525,8 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
 
     Route::get('/search-student/{admissionNo}', [ResultController::class, 'findByAdmissionNo']);
-    Route::post('/results/store', [ResultController::class, 'saveResult']);
+    Route::post('/results/store', [ResultController::class, 'saveResult'])
+        ->middleware('subscription.feature:result_management');
     // Fix route name to match frontend call
     Route::get('/edit-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'getResultDataByStudent'])
         ->where('session', '.*')
@@ -491,7 +534,9 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     
 
 
-    Route::put('/update-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'updateStudentResult'])->where('session', '.*')
+    Route::put('/update-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'updateStudentResult'])
+        ->middleware('subscription.feature:result_management')
+        ->where('session', '.*')
         ->where('term', '.*');
     Route::delete('/delete-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'deleteResult'])
         ->where('session', '.*')
@@ -512,7 +557,8 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
     //route for all department
     Route::get('/departments', [DepartmentController::class, 'index']);
-    Route::post('/departments', [DepartmentController::class, 'store']);
+    Route::post('/departments', [DepartmentController::class, 'store'])
+        ->middleware('subscription.feature:settings_management');
     Route::get('/departments/{id}', [DepartmentController::class, 'show']);
     Route::put('/departments/{id}', [DepartmentController::class, 'update']);
     Route::delete('/departments/{id}', [DepartmentController::class, 'destroy']);
@@ -523,7 +569,8 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
 Route::get('/sections', [SubjectController::class, 'getSections']);
 
-    Route::post('/departments/{id}/subjects', [SubjectController::class, 'storeSubject']);
+    Route::post('/departments/{id}/subjects', [SubjectController::class, 'storeSubject'])
+        ->middleware('subscription.feature:settings_management');
     Route::get('/subjects/{id}', [SubjectController::class, 'edit']);
     Route::put('/subjects/{id}', [SubjectController::class, 'update']);
 
@@ -532,7 +579,8 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
 
     //Route foracademic sessions
     Route::get('/sessions', [SessionController::class, 'index']);
-    Route::post('/sessions', [SessionController::class, 'store']);
+    Route::post('/sessions', [SessionController::class, 'store'])
+        ->middleware('subscription.feature:settings_management');
     Route::put('/sessions/{id}', [SessionController::class, 'update']);
     Route::get('/sessions/{id}', [SessionController::class, 'show']);
     Route::delete('/sessions/{id}', [SessionController::class, 'destroy']);
@@ -541,7 +589,8 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
 
     //route for terms
     Route::get('/terms', [TermController::class, 'index']);
-    Route::post('/terms', [TermController::class, 'store']);
+    Route::post('/terms', [TermController::class, 'store'])
+        ->middleware('subscription.feature:settings_management');
     Route::get('/terms/{id}', [TermController::class, 'show']);
     Route::put('/terms/{id}', [TermController::class, 'update']);
     Route::put('/terms/{id}/status', [TermController::class, 'updateStatus']);
@@ -572,13 +621,15 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
 Route::get('/teacher-subjects', [TeacherSubjectController::class, 'index']);
 Route::get('/subjects', [TeacherSubjectController::class, 'allSubjects']);
 Route::get('/teachers', [TeacherSubjectController::class, 'allTeachers']);
-Route::post('/teacher-subjects', [TeacherSubjectController::class, 'store']);
+Route::post('/teacher-subjects', [TeacherSubjectController::class, 'store'])
+    ->middleware('subscription.feature:teacher_management');
 Route::delete('/teacher-subjects/{teacher_id}/{subject_id}', [TeacherSubjectController::class, 'destroy']);
 
 //end route
 
 //Route for teachers
-Route::post('/register-teacher', [TeacherController::class, 'StoreTeacher']);
+Route::post('/register-teacher', [TeacherController::class, 'StoreTeacher'])
+    ->middleware('subscription.feature:teacher_management,teachers');
 Route::get('/all-teachers', [TeacherController::class, 'getAllTeachers']);
 Route::delete('/teachers/{id}', [TeacherController::class, 'deleteTeacher']);
 Route::put('/teachers/{id}', [TeacherController::class, 'updateTeacher']);
@@ -589,20 +640,9 @@ Route::get('/teachers/view/{id}', [TeacherController::class, 'viewTeacher']);
 
 
 
-Route::prefix('biometric-qr')->group(function () {
-    Route::post('/find-staff', [BiometricQRController::class, 'findStaff']);
-    Route::post('/generate', [BiometricQRController::class, 'generateForStaff']);
-    Route::get('/all', [BiometricQRController::class, 'show']);
-Route::delete('/{id}', [BiometricQRController::class, 'destroy']);
-
-
-});
-
-
-
-    
       Route::get('/fee-types', [FeeTypeController::class, 'index']);
-    Route::post('/fee-types', [FeeTypeController::class, 'store']);
+    Route::post('/fee-types', [FeeTypeController::class, 'store'])
+        ->middleware('subscription.feature:fee_management');
     Route::get('/fee-types/{id}', [FeeTypeController::class, 'show']);
     Route::put('/fee-types/{id}', [FeeTypeController::class, 'update']);
     Route::delete('/fee-types/{id}', [FeeTypeController::class, 'destroy']);
@@ -610,7 +650,8 @@ Route::delete('/{id}', [BiometricQRController::class, 'destroy']);
 
     Route::get('/fees/structure/{sectionId}/{sessionId}', [FeePaymentController::class, 'getFeeStructure']);
      Route::get('/students/search', [StudentController::class, 'search']); 
-    Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee']); 
+    Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee'])
+        ->middleware('subscription.feature:fee_management'); 
   Route::get('/fees/student/details', [FeePaymentController::class, 'studentFeeDetails']);
 
    Route::post('/fees/fetch-types', [FeePaymentController::class, 'fetchFeeTypes'])
@@ -620,22 +661,26 @@ Route::delete('/{id}', [BiometricQRController::class, 'destroy']);
 Route::delete('/student-fees/{studentFeeId}', [FeePaymentController::class, 'removeAssignedFee']);
 
     Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee'])
+        ->middleware('subscription.feature:fee_management')
         ->name('fees.assign');
 
 // Route::post('/fees/initialize', [OnlineFeePaymentController::class, 'initialize']);
 //     Route::get('/fees/verify/{reference}', [OnlineFeePaymentController::class, 'verify']);
 
-Route::post('/fees/online/initialize', [FeePaymentController::class, 'initializeOnlinePayment']);
+Route::post('/fees/online/initialize', [FeePaymentController::class, 'initializeOnlinePayment'])
+    ->middleware('subscription.feature:online_payment');
 Route::get('/fees/online/verify/{reference}', [FeePaymentController::class, 'verifyOnlinePayment']);
 
 Route::post('/paystack/webhook', [FeePaymentController::class, 'paystackWebhook']); // outside auth:sanctum
 
 //Route for app settings
-Route::post('/save-settings', [SettingController::class, 'saveSettings']);
+Route::post('/save-settings', [SettingController::class, 'saveSettings'])
+    ->middleware('subscription.feature:settings_management');
 Route::get('/get-settings', [SettingController::class, 'getSettings']);
  Route::get('/settings/auto-admission-status', [SettingController::class, 'getAutoAdmissionStatus']);
 
-Route::post('/settings/auto-admission', [SettingController::class,  'updateAutoAdmission']);
+Route::post('/settings/auto-admission', [SettingController::class,  'updateAutoAdmission'])
+    ->middleware('subscription.feature:settings_management');
     //Route for checkout
 Route::post('/initialize-payment', [WalletController::class, 'initialize']);
 Route::get('/verify-payment/{reference}', [WalletController::class, 'verify']);
@@ -675,12 +720,8 @@ Route::get('/subscription/verify/{reference}', [SubscriptionController::class, '
 Route::get('/subscription/user', [SubscriptionController::class, 'profile']);
 Route::get('/subscription/billing', [SubscriptionController::class, 'billingHistory']);
 
-Route::get('/subscription/plans', function () {
-    return \App\Models\SubscriptionPlan::orderBy('price')->get();
-});
-   Route::post('/subscription/cancel', [SubscriptionController::class, 'cancelSubscription']);
-   
-   
+Route::get('/subscription/plans', [SubscriptionController::class, 'availablePlans']);
+Route::post('/subscription/cancel', [SubscriptionController::class, 'cancelSubscription']);
 
 
 
@@ -693,12 +734,16 @@ Route::get('/user/subscription/details', [SubscriptionController::class, 'getUse
 Route::post('/paystack/webhook', [SubscriptionController::class, 'handleWebhook'])->name('paystack.webhook');
 
 Route::prefix('staff-attendance')->group(function () {
-    Route::post('/mark', [StaffAttendanceController::class, 'mark']);
+    Route::get('/session', [StaffAttendanceController::class, 'currentSession'])
+        ->middleware('subscription.feature:attendance_management');
+    Route::post('/session', [StaffAttendanceController::class, 'generateSession'])
+        ->middleware('subscription.feature:attendance_management');
+    Route::post('/mark', [StaffAttendanceController::class, 'mark'])
+        ->middleware('subscription.feature:attendance_management');
      Route::get('/logs', [StaffAttendanceController::class, 'logs']);
 });
 Route::get('/attendance-settings', [AttendanceSettingController::class, 'show']);
 Route::put('/attendance-settings', [AttendanceSettingController::class, 'update']);
-Route::post('/biometric-validate', [BiometricQRController::class, 'validateCode']);
 
 
 
@@ -720,18 +765,11 @@ Route::post('/biometric-validate', [BiometricQRController::class, 'validateCode'
 // });
 
 
-Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
+Route::middleware(['auth:sanctum', 'tenant'])->get('/user', function (Request $request) {
     return $request->user();
 });
 
 
 
-Route::middleware('auth:sanctum')->post('/terms/bulk-create', [TermController::class, 'bulkCreate']);
+Route::middleware(['auth:sanctum', 'tenant'])->post('/terms/bulk-create', [TermController::class, 'bulkCreate']);
 // Route::post('/paystack/webhook', [OnlineFeePaymentController::class, 'webhook']);
-
-
-
-
-
-
-

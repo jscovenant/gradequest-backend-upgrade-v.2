@@ -5,17 +5,18 @@ namespace App\Models;
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Spatie\Permission\Traits\HasRoles;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
-
+use App\Traits\HasSubscriptionUsageGuard;
 
 
 class User extends Authenticatable
 {
     use HasRoles;
     use HasApiTokens;
-
+   use HasSubscriptionUsageGuard;
     use HasFactory, Notifiable;
 
     /**
@@ -52,6 +53,20 @@ protected $casts = [
      'twilio_auth_token' => 'encrypted',
 ];
 
+
+public function scopeForSchool(Builder $query, ?int $schoolId): Builder
+{
+    if (! $schoolId) {
+        return $query;
+    }
+
+    return $query->where($query->getModel()->getTable() . '.school_id', $schoolId);
+}
+
+public function scopeWithRole(Builder $query, string $role): Builder
+{
+    return $query->whereRaw('LOWER(role) = ?', [strtolower($role)]);
+}
 
 
 public function schoolSubscriptions()

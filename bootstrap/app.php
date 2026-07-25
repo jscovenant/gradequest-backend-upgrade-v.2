@@ -2,6 +2,9 @@
 
 use App\Http\Middleware\CustomRole;
 use App\Http\Middleware\CorsMiddleware;
+use App\Http\Middleware\EnsureSchoolBillingClearance;
+use App\Http\Middleware\EnsureTenantAccess;
+use App\Http\Middleware\EnsureSubscriptionFeature;
 use App\Http\Middleware\ResolveSchoolFromDomain;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -38,6 +41,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'role_or_permission'=> \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
             'customdomain'      => \App\Http\Middleware\CustomDomain::class, 
             'cors'              => CorsMiddleware::class,
+            'tenant'            => EnsureTenantAccess::class,
+            'subscription.feature' => EnsureSubscriptionFeature::class,
+            'school.billing.clearance' => EnsureSchoolBillingClearance::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

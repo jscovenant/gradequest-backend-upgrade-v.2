@@ -8,12 +8,20 @@ use Illuminate\Support\Facades\DB;
 
 class PlatformFeeService
 {
+    public function __construct(private SchoolBillingService $billing)
+    {
+    }
+
     /**
      * Flat platform fee, in naira, charged once per student_fee record
      * (i.e. once per student per term per academic session).
      */
-    public function feeAmountNaira(): int
+    public function feeAmountNaira(?StudentFee $studentFee = null): int
     {
+        if ($studentFee) {
+            return (int) round($this->billing->pricePerStudentForSchool((int) $studentFee->school_id));
+        }
+
         return (int) config('services.paystack.platform_fee_naira', 1000); 
     }
 
@@ -39,7 +47,7 @@ class PlatformFeeService
                 return 0; // another installment is currently in-flight claiming the fee
             }
 
-            $fee = $this->feeAmountNaira();
+            $fee = $this->feeAmountNaira($studentFee);
 
             if ($installmentNaira < $fee) {
                 return 0; // this installment is too small to bear the flat fee — wait for a bigger one

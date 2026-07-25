@@ -54,7 +54,7 @@ class BusarController extends Controller
     public function index()
     {
         $auth = Auth::user();
-        $bursars = User::where('role', 'Bursar')
+        $bursars = User::withRole('bursar')
                        ->where('school_id', $auth->school_id)
                        ->get();
 
@@ -67,7 +67,7 @@ class BusarController extends Controller
 {
     $auth = Auth::user();
 
-    $bursar = User::where('role', 'Bursar')
+    $bursar = User::withRole('bursar')
         ->where('school_id', $auth->school_id) // optional, if you want to restrict to your school
         ->findOrFail($id);
 
@@ -99,7 +99,7 @@ public function edit($id)
     // 🔹 Fetch bursar in the same school
     $bursar = User::where('id', $id)
         ->where('school_id', $auth->school_id)
-        ->where('role', 'Bursar')
+        ->withRole('bursar')
         ->firstOrFail();
 
     // 🔹 Decrypt default password
@@ -126,7 +126,11 @@ public function edit($id)
     // ✅ Update bursar details
    public function update(Request $request, $id)
 {
-    $bursar = User::where('role', 'Bursar')->findOrFail($id);
+    $auth = Auth::user();
+
+    $bursar = User::withRole('bursar')
+        ->forSchool($auth->school_id)
+        ->findOrFail($id);
 
     $request->validate([
         'firstname' => 'sometimes|required|string|max:100',
@@ -158,7 +162,11 @@ public function edit($id)
     // ✅ Delete bursar
     public function destroy($id)
     {
-        $bursar = User::where('role', 'Bursar')->findOrFail($id);
+        $auth = Auth::user();
+
+        $bursar = User::withRole('bursar')
+            ->forSchool($auth->school_id)
+            ->findOrFail($id);
         $bursar->delete();
 
         return response()->json([
@@ -173,7 +181,11 @@ public function edit($id)
         'user_id' => 'required|integer|exists:users,id',
     ]);
 
-    $student = User::findOrFail($request->user_id);
+    $auth = Auth::user();
+
+    $student = User::withRole('bursar')
+        ->forSchool($auth->school_id)
+        ->findOrFail($request->user_id);
 
     if (!$student->default_password) {
         return response()->json([

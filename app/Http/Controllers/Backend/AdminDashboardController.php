@@ -41,9 +41,9 @@ class AdminDashboardController extends Controller
     // === SCHOOL USERS COUNTS (Students, Teachers, Parents) IN ONE QUERY ===
     $schoolUsers = User::where('school_id', $auth->school_id)
         ->selectRaw("
-            SUM(CASE WHEN role = 'Student' THEN 1 ELSE 0 END) as students,
-            SUM(CASE WHEN role = 'Teacher' THEN 1 ELSE 0 END) as teachers,
-            SUM(CASE WHEN role = 'Parent' THEN 1 ELSE 0 END) as parents
+            SUM(CASE WHEN LOWER(role) = 'student' THEN 1 ELSE 0 END) as students,
+            SUM(CASE WHEN LOWER(role) = 'teacher' THEN 1 ELSE 0 END) as teachers,
+            SUM(CASE WHEN LOWER(role) = 'parent' THEN 1 ELSE 0 END) as parents
         ")
         ->first();
 
@@ -231,6 +231,27 @@ public function getTopPerformingStudents(Request $request)
         ->where('term', $activeTerm->name)
         ->orderByDesc('total_average')
         ->paginate($limit, ['*'], 'page', $currentPage);
+
+    if ($paginated->total() === 0) {
+        $students = User::with('level:id,name')
+            ->where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->orderBy('surname')
+            ->paginate($limit, ['id', 'firstname', 'surname', 'reg_no', 'level_id'], 'page', $currentPage);
+
+        return response()->json([
+            'data' => $students->map(fn ($student) => [
+                'admission_no' => $student->reg_no ?? 'N/A',
+                'name' => trim(($student->firstname ?? '') . ' ' . ($student->surname ?? '')),
+                'class' => $student->level->name ?? 'N/A',
+                'score' => 0,
+            ])->values(),
+            'total' => $students->total(),
+            'session_used' => $currentSession->name,
+            'term_used' => $activeTerm->name,
+            'message' => 'No performance averages found yet. Showing registered students.',
+        ]);
+    }
 
     $results = $paginated->map(function ($item) {
         return [

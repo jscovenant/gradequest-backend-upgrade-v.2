@@ -12,7 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('wallets', function (Blueprint $table) {
-            $table->bigInteger('school_id');
+            if (! Schema::hasColumn('wallets', 'school_id')) {
+                $table->bigInteger('school_id');
+            }
         });
     }
 
@@ -21,8 +23,10 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('wallets_', function (Blueprint $table) {
-            //
+        Schema::table('wallets', function (Blueprint $table) {
+            if (Schema::hasColumn('wallets', 'school_id')) {
+                $table->dropColumn('school_id');
+            }
         });
     }
 };

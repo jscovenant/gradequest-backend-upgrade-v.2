@@ -25,6 +25,11 @@ class AttendanceSettingController extends Controller
                 'grace_minutes' => 10,
                 'staff_checkout_time' => null,
                 'absent_after_time' => null,
+                'school_latitude' => null,
+                'school_longitude' => null,
+                'allowed_radius_meters' => 100,
+                'qr_expires_seconds' => 300,
+                'require_location_verification' => true,
                 'is_active' => true,
             ]
         );
@@ -46,6 +51,11 @@ class AttendanceSettingController extends Controller
             'grace_minutes' => 'required|integer|min:0|max:180',
             'staff_checkout_time' => 'nullable|date_format:H:i',
             'absent_after_time' => 'nullable|date_format:H:i',
+            'school_latitude' => 'nullable|numeric|between:-90,90',
+            'school_longitude' => 'nullable|numeric|between:-180,180',
+            'allowed_radius_meters' => 'required|integer|min:10|max:5000',
+            'qr_expires_seconds' => 'required|integer|min:60|max:600',
+            'require_location_verification' => 'nullable|boolean',
             'is_active' => 'nullable|boolean',
         ]);
 
@@ -62,6 +72,11 @@ class AttendanceSettingController extends Controller
                 'absent_after_time' => isset($validated['absent_after_time'])
                     ? $validated['absent_after_time'] . ':00'
                     : null,
+                'school_latitude' => $validated['school_latitude'] ?? null,
+                'school_longitude' => $validated['school_longitude'] ?? null,
+                'allowed_radius_meters' => $validated['allowed_radius_meters'],
+                'qr_expires_seconds' => $validated['qr_expires_seconds'],
+                'require_location_verification' => $validated['require_location_verification'] ?? true,
                 'is_active' => $validated['is_active'] ?? true,
             ]
         );

@@ -31,11 +31,13 @@ use Illuminate\Support\Str;
 
 use App\Models\UserHasAffectiveDomain;
 use App\Models\UserHasPsychomotorDomain;
+use App\Services\SchoolBillingService;
 
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use App\Exceptions\SubscriptionLimitExceededException;
 
 
 class StudentController extends Controller
@@ -117,7 +119,7 @@ class StudentController extends Controller
     // BASE STUDENT QUERY
     // ========================
     $studentsQuery = User::with('level')
-        ->where('role', 'student')
+        ->withRole('student')
         ->where('school_id', $user->school_id);
 
     $levelsQuery = StudentClass::where('school_id', $user->school_id);
@@ -274,10 +276,22 @@ public function storeAllStudent(Request $request)
 {
     $auth = Auth::user();
 
-    // ✅ Step 1: Fetch school setting BEFORE validation
+    
     $schoolSetting = SchoolSetting::where('id', $auth->school_id)->firstOrFail();
 
-    // ✅ Step 2: Validation
+   
+
+    
+if (strtolower((string) $request->input('role')) === 'student') {
+    try {
+        $auth->assertCanAddStudents();
+    } catch (SubscriptionLimitExceededException $e) {
+        return response()->json([
+            'message' => $e->getMessage(),
+        ], 403);
+    }
+}
+
     $request->validate([
         'firstname'      => 'required|string',
         'surname'        => 'required|string',
@@ -379,7 +393,12 @@ public function storeAllStudent(Request $request)
 
     public function EditStudents($id)
     {
-        $student = User::with('department')->findOrFail($id);
+        $auth = Auth::user();
+
+        $student = User::with('department')
+            ->forSchool($auth->school_id)
+            ->withRole('student')
+            ->findOrFail($id);
     
         return response()->json([
             'id' => $student->id,
@@ -420,7 +439,11 @@ public function storeAllStudent(Request $request)
             'reg_no' => 'nullable|string', 
         ]);
     
-        $student = User::findOrFail($id);
+        $auth = Auth::user();
+
+        $student = User::forSchool($auth->school_id)
+            ->withRole('student')
+            ->findOrFail($id);
     
         $student->firstname = $request->firstname;
         $student->surname = $request->surname;
@@ -472,6 +495,16 @@ public function storeAllStudent(Request $request)
 
     public function getStudentPerformance($id)
     {
+        $auth = Auth::user();
+
+        $student = User::forSchool($auth->school_id)
+            ->withRole('student')
+            ->find($id);
+
+        if (! $student) {
+            return response()->json(['message' => 'Student not found.'], 404);
+        }
+
         // Get latest session for this student
         $latestSession = Average::where('user_id', $id)
             ->orderBy('session', 'desc')
@@ -646,7 +679,7 @@ public function getStudentsByClass(Request $request)
 
     // Admin is allowed for all classes in same school
     $students = User::where('school_id', $schoolId)
-        ->where('role', 'Student')
+        ->withRole('student')
         ->where('level_id', $classId)
         ->with('level')
         ->get()
@@ -698,7 +731,7 @@ public function promoteStudents(Request $request)
 
     // Safety: ensure students belong to this school + are in from_class
     $validCount = User::where('school_id', $schoolId)
-        ->where('role', 'Student')
+        ->withRole('student')
         ->where('level_id', $fromClass)
         ->whereIn('id', $studentIds)
         ->count();
@@ -709,8 +742,40 @@ public function promoteStudents(Request $request)
         ], 422);
     }
 
+    $billing = app(SchoolBillingService::class);
+    $blockedStudents = User::where('school_id', $schoolId)
+        ->withRole('student')
+        ->where('level_id', $fromClass)
+        ->whereIn('id', $studentIds)
+        ->get(['id', 'firstname', 'surname', 'reg_no'])
+        ->map(function (User $student) use ($billing, $schoolId) {
+            $status = $billing->studentAcademicClearanceStatus((int) $schoolId, (int) $student->id);
+
+            if ($status['allowed']) {
+                return null;
+            }
+
+            return [
+                'id' => $student->id,
+                'name' => trim($student->firstname . ' ' . $student->surname),
+                'reg_no' => $student->reg_no,
+                'blocked_terms_count' => $status['blocked_terms_count'],
+                'blocked_terms' => $status['blocked_terms'],
+            ];
+        })
+        ->filter()
+        ->values();
+
+    if ($blockedStudents->isNotEmpty()) {
+        return response()->json([
+            'message' => 'Access denied. Please settle all outstanding fees for the selected student(s) before promotion.',
+            'reason' => 'student_outstanding_billing_required',
+            'blocked_students' => $blockedStudents,
+        ], 402);
+    }
+
     User::where('school_id', $schoolId)
-        ->where('role', 'Student')
+        ->withRole('student')
         ->where('level_id', $fromClass)
         ->whereIn('id', $studentIds)
         ->update(['level_id' => $toClass]);
@@ -723,9 +788,11 @@ public function promoteStudents(Request $request)
 
     public function saveRatings(Request $request)
     {
+        $auth = Auth::user();
+
         $request->validate([
             'user_id' => 'required|integer',
-            'school_id' => 'required|integer',
+            'school_id' => 'required|integer|in:' . $auth->school_id,
             'affective' => 'nullable|array',
             'affective.*.id' => 'required|integer',
             'affective.*.rate' => 'required|integer|min:1|max:4',
@@ -733,6 +800,15 @@ public function promoteStudents(Request $request)
             'psychomotor.*.id' => 'required|integer',
             'psychomotor.*.rate' => 'required|integer|min:1|max:4',
         ]);
+
+        $studentExists = User::forSchool($auth->school_id)
+            ->withRole('student')
+            ->where('id', $request->user_id)
+            ->exists();
+
+        if (! $studentExists) {
+            return response()->json(['message' => 'Student not found.'], 404);
+        }
 
         // Save Affective ratings
         if (!empty($request->affective)) {
@@ -777,7 +853,11 @@ public function promoteStudents(Request $request)
         'user_id' => 'required|integer|exists:users,id',
     ]);
 
-    $student = User::findOrFail($request->user_id);
+    $auth = Auth::user();
+
+    $student = User::forSchool($auth->school_id)
+        ->withRole('student')
+        ->findOrFail($request->user_id);
 
     if (!$student->default_password) {
         return response()->json([

@@ -48,6 +48,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use App\Traits\HandlesFeatureLimits;
 use App\Traits\CheckFeeStatus;
+use App\Services\SchoolBillingService;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use App\Jobs\SendResultNotification;
 
@@ -263,6 +264,20 @@ public function findByAdmissionNo(string $admissionNo)
         $userId = $request->user_id;
         $auth = Auth::user();
         $schoolId = $auth->school_id;
+
+        $billingStatus = app(SchoolBillingService::class)->resultEntryStatus(
+            (int) $schoolId,
+            (int) $userId,
+            (string) $request->session,
+            (string) $term
+        );
+
+        if (! $billingStatus['allowed']) {
+            return response()->json([
+                'message' => $billingStatus['message'],
+                'billing' => $billingStatus,
+            ], 402);
+        }
     
         // Charge logic inside transaction
        DB::beginTransaction();
@@ -528,6 +543,20 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
     ]);
 
     $auth = Auth::user();
+
+    $billingStatus = app(SchoolBillingService::class)->resultEntryStatus(
+        (int) $auth->school_id,
+        (int) $studentId,
+        (string) $session,
+        (string) $term
+    );
+
+    if (! $billingStatus['allowed']) {
+        return response()->json([
+            'message' => $billingStatus['message'],
+            'billing' => $billingStatus,
+        ], 402);
+    }
 
     $termModel = match ($term) {
         'First Term' => \App\Models\FirstTermResult::class,

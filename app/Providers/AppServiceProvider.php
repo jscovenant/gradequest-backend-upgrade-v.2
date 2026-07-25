@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Models\PaymentGateway;
 use App\Models\Subscription;
+use App\Support\CurrentSchool;
 use Illuminate\Pagination\Paginator;
 use App\Observers\SubscriptionObserver;
 use Illuminate\Support\Facades\Gate;
@@ -17,7 +18,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->scoped(CurrentSchool::class, function ($app) {
+            return new CurrentSchool($app['request']);
+        });
     }
 
     /**

@@ -12,9 +12,16 @@ class SubscriptionPlan extends Model
     protected $guarded = [];
     
     protected $casts = [
-    'features' => 'array',
-     'duration_in_days' => 'integer',
-];
+        'features' => 'array',
+        'duration_in_days' => 'integer',
+        'price' => 'decimal:2',
+        'price_per_student' => 'decimal:2',
+        'max_students' => 'integer',
+        'max_teachers' => 'integer',
+        'whatsapp_enabled' => 'boolean',
+        'whatsapp_monthly_credits' => 'integer',
+        'is_active' => 'boolean',
+    ];
 
 
         

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Payment;
+use App\Models\SchoolBankAccount;
 use App\Models\StudentFee;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -10,7 +11,10 @@ use RuntimeException;
 
 class FeePaymentService
 {
-    public function __construct(private PlatformFeeService $platformFeeService)
+    public function __construct(
+        private PlatformFeeService $platformFeeService,
+        private SchoolBillingService $schoolBillingService
+    )
     {
     }
 
@@ -25,9 +29,15 @@ class FeePaymentService
         string $payerEmail,
         ?int $parentId = null
     ): array {
-        $school = $studentFee->student->school; 
+        $school = $studentFee->student->school;
+        $bankAccount = SchoolBankAccount::where('school_id', $school->id)
+            ->where('is_active', true)
+            ->where('online_payment_enabled', true)
+            ->whereNotNull('paystack_subaccount_code')
+            ->orderBy('sort_order')
+            ->first();
 
-        if (empty($school->paystack_subaccount_code)) {
+        if (! $bankAccount) {
             throw new RuntimeException('This school has not completed payment setup yet.');
         }
 
@@ -41,7 +51,7 @@ class FeePaymentService
             'reference' => $reference,
             'email' => $payerEmail,
             'amount' => $amountNaira * 100,
-            'subaccount' => $school->paystack_subaccount_code,
+            'subaccount' => $bankAccount->paystack_subaccount_code,
             'bearer' => 'account', // GradeQuest absorbs Paystack's processing fee
             'metadata' => [
                 'school_id' => $school->id,
@@ -133,9 +143,11 @@ class FeePaymentService
 
         if ($paystackStatus === 'success') {
             $payment->update(['status' => 'success', 'paystack_response' => $rawData]);
+            $this->applySuccessfulPaymentToStudentFee($payment->fresh());
 
             if ($payment->platform_fee > 0) {
                 $this->platformFeeService->confirmCharge($payment->reference);
+                $this->schoolBillingService->markOnlineEntitlementFromPayment($payment->fresh());
             }
         } else {
             $payment->update(['status' => 'failed', 'paystack_response' => $rawData]);
@@ -144,5 +156,23 @@ class FeePaymentService
                 $this->platformFeeService->releaseCharge($payment->reference);
             }
         }
+    }
+
+    private function applySuccessfulPaymentToStudentFee(Payment $payment): void
+    {
+        $studentFee = StudentFee::find($payment->student_fee_id);
+
+        if (! $studentFee) {
+            return;
+        }
+
+        $amountPaid = (float) $studentFee->amount_paid + (float) $payment->amount;
+        $balance = max(0, (float) $studentFee->total_amount - $amountPaid);
+
+        $studentFee->update([
+            'amount_paid' => $amountPaid,
+            'balance' => $balance,
+            'status' => $balance <= 0 ? 'paid' : 'partial',
+        ]);
     }
 }
