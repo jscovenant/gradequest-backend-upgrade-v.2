@@ -11,6 +11,8 @@ class WhatsAppBroadcastDelivery extends Model
     use BelongsToSchool;
     use HasFactory;
 
+    protected $table = 'whatsapp_broadcast_deliveries';
+
     protected $guarded = [];
 
     protected $casts = [
