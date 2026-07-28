@@ -14,8 +14,6 @@ class BroadsheetV2Service
             throw ValidationException::withMessages(['batch' => 'Batch not found']);
         }
 
-        $subjects = $this->loadSubjectsForBatch($batch);
-
         $studentResults = DB::table('student_results_v2 as sr')
             ->join('users as u', 'u.id', '=', 'sr.user_id')
             ->where('sr.batch_id', $batchId)
@@ -39,6 +37,7 @@ class BroadsheetV2Service
             ->get();
 
         $srIds = $studentResults->pluck('student_result_id')->all();
+        $subjects = $this->loadSubjectsForBatch($batch, $srIds);
         $subjectIds = array_map(fn($s) => $s['id'], $subjects);
 
         $subjectResults = collect();
@@ -50,10 +49,12 @@ class BroadsheetV2Service
                     'student_result_id',
                     'subject_id',
                     'ca_raw',
+                    'ca_total',
                     'exam',
                     'total',
                     'grade',
                     'remark',
+                    'subject_position',
                     'comment',
                     'signature',
                     'carry_over_enabled',
@@ -161,30 +162,79 @@ class BroadsheetV2Service
     public function export(array $data, string $format)
     {
         $format = strtolower($format);
-        if ($format !== 'csv') $format = 'csv';
+        if (!in_array($format, ['csv', 'xls', 'xlsx', 'excel'], true)) $format = 'csv';
 
         $subjects = $data['subjects'];
         $rows = $data['rows'];
 
-        $headers = array_merge(
-            ['Reg No', 'Name'],
-            array_map(fn($s) => $s['name'], $subjects),
-            ['Average', 'Position']
-        );
+        $headers = ['Reg No', 'Name'];
+        foreach ($subjects as $subject) {
+            $headers[] = $subject['name'] . ' CA';
+            $headers[] = $subject['name'] . ' Exam';
+            $headers[] = $subject['name'] . ' Total';
+            $headers[] = $subject['name'] . ' Grade';
+        }
+        $headers[] = 'Total Score';
+        $headers[] = 'Average';
+        $headers[] = 'Overall Grade';
+        $headers[] = 'Overall Position';
+
+        $lines = [];
+        foreach ($rows as $r) {
+            $line = [$r['reg_no'], $r['name']];
+            $totalScore = 0;
+
+            foreach ($subjects as $s) {
+                $sid = (string)$s['id'];
+                $cell = $r['subjects'][$sid] ?? [];
+                $subjectTotal = $cell['effective_total'] ?? $cell['total'] ?? null;
+                if (is_numeric($subjectTotal)) {
+                    $totalScore += (float)$subjectTotal;
+                }
+
+                $line[] = $cell['ca_total'] ?? null;
+                $line[] = $cell['exam'] ?? null;
+                $line[] = $subjectTotal;
+                $line[] = $cell['grade'] ?? null;
+            }
+
+            $line[] = $totalScore;
+            $line[] = $r['overall']['average'];
+            $line[] = $r['overall']['grade'];
+            $line[] = $r['overall']['position'];
+            $lines[] = $line;
+        }
+
+        if (in_array($format, ['xls', 'xlsx', 'excel'], true)) {
+            $fileName = 'broadsheet_batch_' . ($data['batch']['id'] ?? 'x') . '.xls';
+
+            $html = '<html><head><meta charset="UTF-8"></head><body><table border="1">';
+            $html .= '<tr>';
+            foreach ($headers as $header) {
+                $html .= '<th>' . htmlspecialchars((string)$header, ENT_QUOTES, 'UTF-8') . '</th>';
+            }
+            $html .= '</tr>';
+
+            foreach ($lines as $line) {
+                $html .= '<tr>';
+                foreach ($line as $cell) {
+                    $html .= '<td>' . htmlspecialchars((string)($cell ?? ''), ENT_QUOTES, 'UTF-8') . '</td>';
+                }
+                $html .= '</tr>';
+            }
+
+            $html .= '</table></body></html>';
+
+            return response($html, 200, [
+                'Content-Type' => 'application/vnd.ms-excel; charset=UTF-8',
+                'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+            ]);
+        }
 
         $out = fopen('php://temp', 'r+');
         fputcsv($out, $headers);
 
-        foreach ($rows as $r) {
-            $line = [$r['reg_no'], $r['name']];
-
-            foreach ($subjects as $s) {
-                $sid = (string)$s['id'];
-                $line[] = $r['subjects'][$sid]['effective_total'] ?? null;
-            }
-
-            $line[] = $r['overall']['average'];
-            $line[] = $r['overall']['position'];
+        foreach ($lines as $line) {
             fputcsv($out, $line);
         }
 
@@ -202,8 +252,25 @@ class BroadsheetV2Service
 
     // ------------------ internals ------------------
 
-    private function loadSubjectsForBatch(object $batch): array
+    private function loadSubjectsForBatch(object $batch, array $studentResultIds = []): array
     {
+        if (!empty($studentResultIds)) {
+            $subjectsFromSavedResults = DB::table('subject_results_v2 as sr')
+                ->join('subjects as s', 's.id', '=', 'sr.subject_id')
+                ->whereIn('sr.student_result_id', $studentResultIds)
+                ->select(['s.id', 's.name'])
+                ->distinct()
+                ->orderBy('s.name')
+                ->get()
+                ->map(fn($s) => ['id' => (int)$s->id, 'name' => (string)$s->name])
+                ->values()
+                ->all();
+
+            if (!empty($subjectsFromSavedResults)) {
+                return $subjectsFromSavedResults;
+            }
+        }
+
         return DB::table('subjects')
             ->where('class_id', (int)$batch->class_id)
             ->where(function ($qq) use ($batch) {
@@ -230,6 +297,7 @@ class BroadsheetV2Service
 
         return [
             'ca' => $this->decodeMaybeJson($r->ca_raw),
+            'ca_total' => $r->ca_total !== null ? (float)$r->ca_total : null,
             'exam' => $exam,
             'total' => $total,
             'effective_total' => $effectiveTotal,
@@ -241,7 +309,7 @@ class BroadsheetV2Service
             'carry_over_json' => $this->decodeMaybeJson($r->carry_over_json),
             'cumulative_total' => $r->cumulative_total !== null ? (float)$r->cumulative_total : null,
             'cumulative_average' => $r->cumulative_average !== null ? (float)$r->cumulative_average : null,
-            'position' => null,
+            'position' => $r->subject_position !== null ? (string)$r->subject_position : null,
         ];
     }
 
@@ -249,6 +317,7 @@ class BroadsheetV2Service
     {
         return [
             'ca' => null,
+            'ca_total' => null,
             'exam' => null,
             'total' => null,
             'effective_total' => null,

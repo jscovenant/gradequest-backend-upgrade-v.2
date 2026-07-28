@@ -16,6 +16,7 @@ use App\Models\Subject;
 use App\Models\GradeSetting;
 use Illuminate\Http\Request;
 use App\Models\SchoolSetting;
+use App\Models\ResultTemplateSetting;
 use App\Models\SubjectEnroll;
 use Illuminate\Support\Carbon;
 use App\Models\AcademicSession;
@@ -69,15 +70,17 @@ public function AllResults(Request $request)
     $user = Auth::user();
 
     // Fetch all sessions and all terms (NOT filtering)
-    $sessions = AcademicSession::where('school_id', $user->school_id)->get();
-    $allTerms = Term::where('school_id', $user->school_id)->pluck('name');
+    $sessions = AcademicSession::where('school_id', $user->school_id)->whereNull('archived_at')->get();
+    $allTerms = Term::where('school_id', $user->school_id)->whereNull('archived_at')->pluck('name');
 
     // Active (still returned, but NOT used to restrict results)
     $activeTerm = Term::where('school_id', $user->school_id)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->first();
 
     $currentSession = AcademicSession::where('school_id', $user->school_id)
+        ->whereNull('archived_at')
         ->where('is_current', 1)
         ->first();
 
@@ -93,6 +96,7 @@ public function AllResults(Request $request)
             ->pluck('level_id');
 
         $classes = StudentClass::where('school_id', $user->school_id)
+            ->whereNull('archived_at')
             ->whereIn('id', $teacherClassIds)
             ->get();
 
@@ -126,7 +130,7 @@ public function AllResults(Request $request)
 
     } else {
 
-        $classes = StudentClass::where('school_id', $user->school_id)->get();
+        $classes = StudentClass::where('school_id', $user->school_id)->whereNull('archived_at')->get();
 
         if ($request->filled('class_id')) {
             $query->where('class_id', $request->class_id);
@@ -171,6 +175,7 @@ public function AllResults(Request $request)
 public function getClasses(Request $request){
     $auth = Auth::user();
     $classes = StudentClass::where('school_id', $auth->school_id)
+            ->whereNull('archived_at')
             ->orderBy('name')
             ->get(['id', 'name']);
 
@@ -200,12 +205,13 @@ public function findByAdmissionNo(string $admissionNo)
         return response()->json(['message' => 'Student not found'], 404);
     }
 
-    $term = Term::where('school_id', $auth->school_id)->latest()->first();
-    $session = AcademicSession::where('school_id', $auth->school_id)->latest()->first();
+    $term = Term::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
+    $session = AcademicSession::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
 
     $subjects = [];
     if ($student->department_id) {
         $subjects = Subject::where('department_id', $student->department_id)
+            ->whereNull('archived_at')
             ->select('id', 'name')
             ->orderBy('name')
             ->get();
@@ -277,6 +283,16 @@ public function findByAdmissionNo(string $admissionNo)
                 'message' => $billingStatus['message'],
                 'billing' => $billingStatus,
             ], 402);
+        }
+
+        $columnPolicy = $this->resultColumnPolicy((int) $schoolId, (int) $request->class_id, (string) $term);
+        $legacyViolation = $this->findLegacyColumnPolicyViolation($request->results ?? [], $columnPolicy);
+        if ($legacyViolation) {
+            return response()->json([
+                'status' => 'error',
+                'message' => $legacyViolation,
+                'report_column_policy' => $columnPolicy,
+            ], 422);
         }
     
         // Charge logic inside transaction
@@ -500,6 +516,7 @@ public function getResultDataByStudent($studentId, $session, $classId, $term)
         'department_id' => $student->department_id,
         'school_id'     => $auth->school_id,
     ])
+        ->whereNull('archived_at')
         ->select('id', 'name')
         ->orderBy('name')
         ->get();
@@ -702,6 +719,7 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
             // Subjects
             $subjects = Subject::where('school_id', $user->school_id)
                 ->where('class_id', $classId)
+                ->whereNull('archived_at')
                 ->get();
 
             // Dynamic model resolution
@@ -885,10 +903,12 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
         $schoolId = Auth::user()->school_id;
 
         $classes = \App\Models\StudentClass::select('id', 'name')->where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->orderBy('name')
             ->get();
 
         $sessions = \App\Models\AcademicSession::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->pluck('name')
             ->unique()
             ->values();
@@ -1084,6 +1104,70 @@ public function verifyResult(Request $request)
 //     ]);
 // }
     
+
+private function resultColumnPolicy(int $schoolId, int $classId, string $term): array
+{
+    $class = StudentClass::find($classId);
+    $sectionId = $class?->section_id;
+    $setting = ResultTemplateSetting::firstOrCreate(
+        ['school_id' => $schoolId],
+        ResultTemplateSetting::defaults($schoolId)
+    )->normalized();
+
+    $columns = ResultTemplateSetting::DEFAULT_REPORT_COLUMN_OPTIONS;
+    $rules = $setting['display_options']['report_column_rules'] ?? [];
+    $matched = collect($rules)
+        ->filter(function ($rule) use ($sectionId, $term) {
+            if (! is_array($rule)) {
+                return false;
+            }
+
+            $ruleSection = $rule['section_id'] ?? 'all';
+            $sectionMatches = $ruleSection === 'all' || (string) $ruleSection === (string) $sectionId;
+            $ruleTerm = strtolower(trim((string) ($rule['term'] ?? 'all')));
+            $termMatches = $ruleTerm === 'all' || $ruleTerm === strtolower(trim($term));
+
+            return $sectionMatches && $termMatches;
+        })
+        ->sortBy(function ($rule) {
+            $sectionScore = (($rule['section_id'] ?? 'all') === 'all') ? 0 : 2;
+            $termScore = strtolower(trim((string) ($rule['term'] ?? 'all'))) === 'all' ? 0 : 1;
+
+            return $sectionScore + $termScore;
+        });
+
+    foreach ($matched as $rule) {
+        $columns = array_merge($columns, is_array($rule['columns'] ?? null) ? $rule['columns'] : []);
+    }
+
+    return [
+        'section_id' => $sectionId,
+        'section_name' => $class?->section?->name,
+        'term' => $term,
+        'columns' => $columns,
+    ];
+}
+
+private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?string
+{
+    $columns = $policy['columns'] ?? [];
+
+    foreach ($rows as $row) {
+        if (! empty($row['firstterm']) && empty($columns['show_first_term'])) {
+            return 'First Term scores are not enabled for this report-card setting. Please update Result Design before including First Term scores.';
+        }
+
+        if (! empty($row['secondterm']) && empty($columns['show_second_term'])) {
+            return 'Second Term scores are not enabled for this report-card setting. Please update Result Design before including Second Term scores.';
+        }
+
+        if (! empty($row['average']) && empty($columns['show_cumulative_average'])) {
+            return 'Average column is not enabled for this report-card setting. Please update Result Design before including average scores.';
+        }
+    }
+
+    return null;
+}
 
 
 }

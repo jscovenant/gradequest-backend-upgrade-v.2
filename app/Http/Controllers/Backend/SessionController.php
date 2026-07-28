@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Backend;
 use Illuminate\Http\Request;
 use App\Models\AcademicSession;
 use App\Http\Controllers\Controller;
+use App\Services\AcademicSetupArchiveService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 
@@ -13,9 +14,12 @@ class SessionController extends Controller
     
 
 
-    public function index()
+    public function index(Request $request)
     {
-        $sessions = AcademicSession::where('school_id', Auth::user()->school_id)->get();
+        $sessions = AcademicSession::where('school_id', Auth::user()->school_id)
+            ->when($request->boolean('archived'), fn ($query) => $query->whereNotNull('archived_at'))
+            ->when(!$request->boolean('archived') && !$request->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
+            ->get();
         return response()->json($sessions);
     }
 
@@ -42,20 +46,64 @@ class SessionController extends Controller
 
     public function destroy($id)
     {
-        $session = AcademicSession::findOrFail($id);
+        $session = AcademicSession::where('school_id', Auth::user()->school_id)->findOrFail($id);
 
         if ($session->school_id !== Auth::user()->school_id) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
-        $session->delete();
-        return response()->json(['message' => 'Session deleted successfully']);
+        $usedInResults = app(AcademicSetupArchiveService::class)->sessionHasResultRecords($session);
+
+        $session->forceFill([
+            'archived_at' => now(),
+            'is_current' => false,
+            'status' => 'Inactive',
+        ])->save();
+
+        return response()->json([
+            'message' => $usedInResults
+                ? 'This academic session is already used in results. It has been archived instead and will no longer appear for future result entry.'
+                : 'Academic session archived successfully.',
+            'archived' => true,
+            'used_in_results' => $usedInResults,
+        ]);
+    }
+
+    public function restore($id)
+    {
+        $schoolId = Auth::user()->school_id;
+
+        $session = AcademicSession::where('school_id', $schoolId)
+            ->whereNotNull('archived_at')
+            ->find($id);
+
+        if (!$session) {
+            return response()->json(['message' => 'Archived academic session not found.'], 404);
+        }
+
+        $exists = AcademicSession::where('school_id', $schoolId)
+            ->where('name', $session->name)
+            ->where('id', '!=', $session->id)
+            ->whereNull('archived_at')
+            ->exists();
+
+        if ($exists) {
+            return response()->json(['message' => 'An active academic session with this name already exists. Rename it before restoring.'], 422);
+        }
+
+        $session->forceFill(['archived_at' => null])->save();
+
+        return response()->json([
+            'message' => 'Academic session restored successfully.',
+            'archived' => false,
+        ]);
     }
 
 
     public function show($id)
 {
     $session = AcademicSession::where('school_id', Auth::user()->school_id)
+                ->whereNull('archived_at')
                 ->findOrFail($id);
 
     return response()->json($session);
@@ -70,7 +118,7 @@ class SessionController extends Controller
         'end_date' => 'required|date|after_or_equal:start_date',
     ]);
 
-    $session = AcademicSession::findOrFail($id);
+    $session = AcademicSession::whereNull('archived_at')->findOrFail($id);
 
     // Ensure session belongs to the authenticated user's school
     if ($session->school_id !== Auth::user()->school_id) {
@@ -96,10 +144,12 @@ public function setCurrent($id)
 
     // School-based scope
     AcademicSession::where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
         ->update(['is_current' => false]);
 
     AcademicSession::where('id', $id)
         ->where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
         ->update(['is_current' => true]);
 
     return response()->json([

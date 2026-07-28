@@ -51,6 +51,11 @@ protected $casts = [
     'password_reset_expires_at' => 'datetime',
     'default_password' => 'encrypted', 
      'twilio_auth_token' => 'encrypted',
+    'student_status_changed_at' => 'datetime',
+    'teacher_status_changed_at' => 'datetime',
+    'phone_validated_at' => 'datetime',
+    'whatsapp_verified_at' => 'datetime',
+    'whatsapp_verification_expires_at' => 'datetime',
 ];
 
 

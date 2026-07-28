@@ -8,13 +8,16 @@ use App\Http\Requests\Result\UpsertStudentResultRequest;
 use App\Http\Requests\Result\GetReportCardRequest;
 use App\Models\AcademicSession;
 use App\Models\SchoolSetting;
+use App\Models\ResultTemplateSetting;
 use App\Models\StudentClass;
 use App\Models\Subject;
 use App\Models\Term;
 use App\Models\User;
 use App\Repositories\ResultRepository;
 use App\Services\SchoolBillingService;
+use App\Services\SchoolFeeAccessPolicyService;
 use App\Services\Results\SubjectService;
+use App\Services\Results\ResultComputeService;
 use App\Services\ResultService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
@@ -35,7 +38,9 @@ class StudentResultController extends Controller
   public function __construct(
     private ResultRepository $repo,
     private SubjectService $subjectService,
-    private SchoolBillingService $schoolBillingService
+    private ResultComputeService $computeService,
+    private SchoolBillingService $schoolBillingService,
+    private SchoolFeeAccessPolicyService $feeAccessPolicyService
   ) {}
 
   /**
@@ -89,6 +94,7 @@ public function findByAdmissionNo($admissionNo)
 
     $activeTermName = Term::query()
         ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->orderByRaw('COALESCE(sort_order, 999999) ASC')
         ->orderBy('id')
@@ -96,6 +102,7 @@ public function findByAdmissionNo($admissionNo)
 
     $currentSessionName = AcademicSession::query()
         ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('is_current', 1)
         ->orderByDesc('id')
         ->value('name');
@@ -103,6 +110,7 @@ public function findByAdmissionNo($admissionNo)
     if (!$currentSessionName) {
         $currentSessionName = AcademicSession::query()
             ->where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->where('status', 'Active')
             ->orderByDesc('id')
             ->value('name');
@@ -155,6 +163,7 @@ public function carryOverPreview(Request $request, User $student)
 
     if (!$currentTermName) {
         $active = Term::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->where('status', 'Active')
             ->first();
         $currentTermName = $active?->name;
@@ -166,6 +175,7 @@ public function carryOverPreview(Request $request, User $student)
 
     // 2) Get ordered terms for school (use sort_order, then id)
     $allTerms = Term::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->orderBy('sort_order')
         ->orderBy('id')
         ->pluck('name')
@@ -253,6 +263,43 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
         return response()->json(['message' => 'Batch not found'], 404);
     }
 
+    if (($batchRow->status ?? null) === 'published') {
+        return response()->json([
+            'message' => 'This result has already been published. Ask the admin or principal to reopen it before making corrections.',
+        ], 409);
+    }
+
+    $authUser = $request->user();
+    if (! $authUser || (int) $authUser->school_id !== (int) $batchRow->school_id) {
+        return response()->json(['message' => 'You are not allowed to access this result batch.'], 403);
+    }
+
+    $studentRow = DB::table('users')
+        ->where('id', $student)
+        ->where('school_id', (int) $batchRow->school_id)
+        ->whereRaw('LOWER(role) = ?', ['student'])
+        ->first();
+
+    if (! $studentRow || (int) $studentRow->level_id !== (int) $batchRow->class_id) {
+        return response()->json(['message' => 'This student does not belong to the selected result batch class.'], 403);
+    }
+
+    $role = strtolower((string) $authUser->role);
+    if ($role === 'teacher') {
+        $assigned = TeacherEnrollment::query()
+            ->where('school_id', (int) $batchRow->school_id)
+            ->where('user_id', (int) $authUser->id)
+            ->where('enroll', '1')
+            ->where('level_id', (int) $batchRow->class_id)
+            ->exists();
+
+        if (! $assigned) {
+            return response()->json(['message' => 'You can only save results for students in your assigned class.'], 403);
+        }
+    } elseif (! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+        return response()->json(['message' => 'Only authorized school staff can save results.'], 403);
+    }
+
     $billingStatus = $this->schoolBillingService->resultEntryStatus(
         (int) $batchRow->school_id,
         $student,
@@ -265,6 +312,20 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
             'message' => $billingStatus['message'],
             'billing' => $billingStatus,
         ], 402);
+    }
+
+    $columnPolicy = $this->resultColumnPolicy(
+        (int) $batchRow->school_id,
+        (int) $batchRow->class_id,
+        (string) $batchRow->term
+    );
+
+    $carryViolation = $this->findCarryOverPolicyViolation($request->input('results', []), $columnPolicy);
+    if ($carryViolation) {
+        return response()->json([
+            'message' => $carryViolation,
+            'report_column_policy' => $columnPolicy,
+        ], 422);
     }
 
     $srId = null;
@@ -430,12 +491,15 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
         }
     });
 
+    $computeSummary = $this->computeService->computeBatch($batch);
+
     UpdateResultSubmissionMonitorJob::dispatch($batch)->afterCommit();
     ScanBatchResultAnomaliesJob::dispatch($batch)->afterCommit();
 
     return response()->json([
         'message' => 'Saved',
         'student_result_id' => $srId,
+        'computed' => $computeSummary,
     ]);
 }
 
@@ -482,6 +546,31 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 public function reportCard(GetReportCardRequest $request): JsonResponse
 {
     try {
+        $viewer = $request->user();
+        if ($viewer && strtolower((string) $viewer->role) === 'student' && (int) $viewer->id !== (int) $request->student_id) {
+            return response()->json([
+                'message' => 'You are not allowed to view another student result.',
+            ], 403);
+        }
+
+        if ($viewer) {
+            $feeAccess = $this->feeAccessPolicyService->assertResultAccess(
+                $viewer,
+                (int) $request->school_id,
+                (int) $request->student_id,
+                (string) $request->session,
+                (string) $request->term
+            );
+
+            if ($feeAccess) {
+                return response()->json([
+                    'message' => $feeAccess['message'],
+                    'status' => 'fee_access_restricted',
+                    'fee_access' => $feeAccess,
+                ], 403);
+            }
+        }
+
         // Find the matching batch
         $batch = $this->repo->findBatch(
             (int) $request->school_id,
@@ -492,9 +581,20 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
 
         // Always load school once (needed for theme + branding)
         $school = SchoolSetting::findOrFail($request->school_id);
+        $templateSetting = ResultTemplateSetting::firstOrCreate(
+            ['school_id' => (int) $request->school_id],
+            ResultTemplateSetting::defaults((int) $request->school_id)
+        )->normalized();
 
         // If batch exists, try v2 result first
         if ($batch) {
+            if (! $this->canViewUnpublishedResult($request, $batch)) {
+                return response()->json([
+                    'message' => 'Result is not yet published. Please check back after the school releases it.',
+                    'status' => 'not_published',
+                ], 403);
+            }
+
             $sr = $this->repo->getV2StudentResult($batch->id, (int) $request->student_id);
 
             if ($sr) {
@@ -519,6 +619,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
 
                 return response()->json([
                     'source' => 'v2',
+                    'result_status' => $batch->status,
                     'user' => $student,
                     'user_photo_base64' => $photoBase64,
                     'average' => [
@@ -541,6 +642,8 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                     ],
                     'term_result' => $subjects,
                     'class_name' => $class->name,
+                    'class_section_id' => $class->section_id,
+                    'class_section_name' => optional($class->section)->name,
 
                     'school_info' => [
                         'name' => $school->school_name,
@@ -556,6 +659,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                         'secondary_color' => $school->secondary_color ?? '#ffc107',
                         'background_color' => $school->background_color ?? '#ffffff',
                     ],
+                    'result_template' => $templateSetting,
 
                     'affective_domains' => $affective,
                     'psychomotor_domains' => $psychomotor,
@@ -601,6 +705,10 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
         $legacy['school_info']['name'] = $legacy['school_info']['name'] ?? $school->school_name;
         $legacy['school_info']['address'] = $legacy['school_info']['address'] ?? $school->address;
         $legacy['school_info']['phone'] = $legacy['school_info']['phone'] ?? $school->phone;
+        $legacy['result_template'] = $templateSetting;
+        $legacyClass = StudentClass::with('section')->find($request->class_id);
+        $legacy['class_section_id'] = $legacyClass?->section_id;
+        $legacy['class_section_name'] = $legacyClass?->section?->name;
 
         return response()->json($legacy);
 
@@ -611,6 +719,109 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
             'message' => 'Result not found: ' . $e->getMessage()
         ], 404);
     }
+}
+
+private function canViewUnpublishedResult(Request $request, object $batch): bool
+{
+    if (($batch->status ?? null) === 'published') {
+        return true;
+    }
+
+    $user = $request->user();
+    if (! $user) {
+        return false;
+    }
+
+    if ((int) $user->school_id !== (int) $batch->school_id) {
+        return false;
+    }
+
+    return in_array(strtolower((string) $user->role), ['admin', 'teacher', 'principal', 'super admin', 'super-admin', 'superadmin'], true);
+}
+
+private function resultColumnPolicy(int $schoolId, int $classId, string $term): array
+{
+    $class = StudentClass::find($classId);
+    $sectionId = $class?->section_id;
+    $setting = ResultTemplateSetting::firstOrCreate(
+        ['school_id' => $schoolId],
+        ResultTemplateSetting::defaults($schoolId)
+    )->normalized();
+
+    $columns = ResultTemplateSetting::DEFAULT_REPORT_COLUMN_OPTIONS;
+    $rules = $setting['display_options']['report_column_rules'] ?? [];
+    $matched = collect($rules)
+        ->filter(function ($rule) use ($sectionId, $term) {
+            if (! is_array($rule)) {
+                return false;
+            }
+
+            $ruleSection = $rule['section_id'] ?? 'all';
+            $sectionMatches = $ruleSection === 'all' || (string) $ruleSection === (string) $sectionId;
+            $ruleTerm = strtolower(trim((string) ($rule['term'] ?? 'all')));
+            $termMatches = $ruleTerm === 'all' || $ruleTerm === strtolower(trim($term));
+
+            return $sectionMatches && $termMatches;
+        })
+        ->sortBy(function ($rule) use ($sectionId) {
+            $sectionScore = (($rule['section_id'] ?? 'all') === 'all') ? 0 : 2;
+            $termScore = strtolower(trim((string) ($rule['term'] ?? 'all'))) === 'all' ? 0 : 1;
+
+            return $sectionScore + $termScore;
+        });
+
+    foreach ($matched as $rule) {
+        $columns = array_merge($columns, is_array($rule['columns'] ?? null) ? $rule['columns'] : []);
+    }
+
+    return [
+        'section_id' => $sectionId,
+        'section_name' => $class?->section?->name,
+        'term' => $term,
+        'columns' => $columns,
+        'carry_over_allowed' => (bool) (
+            ($columns['show_first_term'] ?? false)
+            || ($columns['show_second_term'] ?? false)
+            || ($columns['show_cumulative_total'] ?? false)
+            || ($columns['show_cumulative_average'] ?? false)
+        ),
+    ];
+}
+
+private function findCarryOverPolicyViolation(array $rows, array $policy): ?string
+{
+    $columns = $policy['columns'] ?? [];
+
+    foreach ($rows as $row) {
+        $carry = is_array($row['carry_over'] ?? null) ? $row['carry_over'] : null;
+        if (! $carry || empty($carry['enabled'])) {
+            continue;
+        }
+
+        foreach (($carry['terms'] ?? []) as $termName => $value) {
+            if ($value === null || $value === '') {
+                continue;
+            }
+
+            $normalized = strtolower(trim((string) $termName));
+            if (str_contains($normalized, 'first') && empty($columns['show_first_term'])) {
+                return 'First Term scores are not enabled for this report-card setting. Please update Result Design before including First Term scores.';
+            }
+            if (str_contains($normalized, 'second') && empty($columns['show_second_term'])) {
+                return 'Second Term scores are not enabled for this report-card setting. Please update Result Design before including Second Term scores.';
+            }
+        }
+
+        if (! empty($carry['cumulative_total']) && empty($columns['show_cumulative_total'])) {
+            return 'Cumulative total is not enabled for this report-card setting. Please update Result Design before including cumulative scores.';
+        }
+
+        if (! empty($carry['cumulative_average']) && empty($columns['show_cumulative_average'])) {
+            return 'Cumulative average is not enabled for this report-card setting. Please update Result Design before including cumulative average.';
+        }
+    }
+
+    return null;
 }
 
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\People\PeopleExcelImportService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Auth;
@@ -59,6 +60,41 @@ class ParentController extends Controller
     }
 
     // ✅ Assign one or more students to a parent
+public function importTemplate(Request $request, PeopleExcelImportService $service)
+{
+    $format = strtolower((string) $request->query('format', 'xlsx'));
+
+    return $service->parentTemplate((int) Auth::user()->school_id, in_array($format, ['xlsx', 'xls', 'csv'], true) ? $format : 'xlsx');
+}
+
+public function previewImport(Request $request, PeopleExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        return response()->json($service->previewParents(Auth::user(), $request->file('file')));
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
+public function importParents(Request $request, PeopleExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        $result = $service->importParents(Auth::user(), $request->file('file'));
+
+        return response()->json($result, ($result['imported'] ?? 0) > 0 ? 201 : 422);
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
 public function assignChild(Request $request)
 {
     $auth = Auth::user();
@@ -169,6 +205,11 @@ public function assignChild(Request $request)
             'surname' => $parent->surname,
             'email' => $parent->email,
             'phone' => $parent->phone,
+            'phone_normalized' => $parent->phone_normalized,
+            'phone_validated_at' => $parent->phone_validated_at,
+            'whatsapp_no' => $parent->whatsapp_no,
+            'whatsapp_number' => $parent->whatsapp_number,
+            'whatsapp_verified_at' => $parent->whatsapp_verified_at,
             'address' => $parent->address,
             'default_password' => $decryptedPassword,
         ],
@@ -202,7 +243,18 @@ public function assignChild(Request $request)
 
         $parents = User::withRole('parent')
             ->where('school_id', $auth->school_id)
-            ->select('id', 'firstname', 'surname', 'email', 'phone')
+            ->select(
+                'id',
+                'firstname',
+                'surname',
+                'email',
+                'phone',
+                'phone_normalized',
+                'phone_validated_at',
+                'whatsapp_no',
+                'whatsapp_number',
+                'whatsapp_verified_at'
+            )
             ->latest()
             ->get();
 
@@ -307,6 +359,11 @@ public function edit($id)
             'surname' => $parent->surname,
             'email' => $parent->email,
             'phone' => $parent->phone,
+            'phone_normalized' => $parent->phone_normalized,
+            'phone_validated_at' => $parent->phone_validated_at,
+            'whatsapp_no' => $parent->whatsapp_no,
+            'whatsapp_number' => $parent->whatsapp_number,
+            'whatsapp_verified_at' => $parent->whatsapp_verified_at,
             'address' => $parent->address,
             'default_password' => $decryptedPassword,
         ]

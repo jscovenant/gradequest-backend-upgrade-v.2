@@ -13,6 +13,10 @@ class Section extends Model
 
     protected $guarded = [];
 
+    protected $casts = [
+        'archived_at' => 'datetime',
+    ];
+
 
     public function level()
     {

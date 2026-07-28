@@ -51,9 +51,18 @@ class FeeTypeController extends Controller
         $feeTypes = $query->orderBy('id', 'desc')->paginate(10);
 
         // 🎯 Also fetch related data dynamically
-        $sections = Section::where('school_id', $schoolId)->select('id', 'name')->get();
-        $sessions = AcademicSession::where('school_id', $schoolId)->select('id', 'name')->get();
-        $terms = Term::where('school_id', $schoolId)->select('id', 'name')->get();
+        $sections = Section::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->select('id', 'name')
+            ->get();
+        $sessions = AcademicSession::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->select('id', 'name')
+            ->get();
+        $terms = Term::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->select('id', 'name')
+            ->get();
 
         // 🧾 Send all data together
         return response()->json([
@@ -77,6 +86,10 @@ class FeeTypeController extends Controller
             'name' => 'required|string|max:255',
             'amount' => 'required|numeric|min:0',
         ]);
+
+        if (!Section::where('school_id', $schoolId)->whereNull('archived_at')->where('id', $validated['section_id'])->exists()) {
+            return response()->json(['message' => 'Selected section is archived or unavailable.'], 422);
+        }
 
         $fee = FeeType::create([
             ...$validated,
@@ -105,6 +118,10 @@ class FeeTypeController extends Controller
             'name' => 'required|string|max:255',
             'amount' => 'required|numeric|min:0',
         ]);
+
+        if (!Section::where('school_id', $schoolId)->whereNull('archived_at')->where('id', $validated['section_id'])->exists()) {
+            return response()->json(['message' => 'Selected section is archived or unavailable.'], 422);
+        }
 
         $fee->update($validated);
 

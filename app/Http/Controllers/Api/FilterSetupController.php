@@ -23,7 +23,9 @@ public function studentClasses(Request $request)
     $user = $request->user();
     $schoolId = $user->school_id;
 
-    $query = StudentClass::where('school_id', $schoolId)->orderBy('name');
+    $query = StudentClass::where('school_id', $schoolId)
+        ->whereNull('archived_at')
+        ->orderBy('name');
 
     // ✅ If Teacher: only classes assigned to the teacher
     if ($user->role === 'Teacher') {
@@ -53,6 +55,7 @@ public function studentClasses(Request $request)
         $schoolId = $request->user()->school_id;
 
         $terms = Term::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->orderBy('name')
             ->get(['id', 'name']);
 
@@ -67,6 +70,7 @@ public function studentClasses(Request $request)
         $schoolId = $request->user()->school_id;
 
         $sessions = AcademicSession::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->orderByDesc('id')
             ->get(['id', 'name']); // if column is "session", change to ->get(['id','session as name'])
 
@@ -81,6 +85,7 @@ public function studentClasses(Request $request)
         $schoolId = $request->user()->school_id;
 
         $departments = Department::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->orderBy('name')
             ->get(['id', 'name']);
 
@@ -95,6 +100,7 @@ public function studentClasses(Request $request)
         $schoolId = $request->user()->school_id;
 
         $sections = Section::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->orderBy('name')
             ->get(['id', 'name']);
 

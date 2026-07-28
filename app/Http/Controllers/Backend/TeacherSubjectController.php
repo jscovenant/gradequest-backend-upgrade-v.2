@@ -52,6 +52,7 @@ class TeacherSubjectController extends Controller
     $school_id = Auth::user()->school_id;
 
     $subjects = Subject::where('school_id', $school_id)
+        ->whereNull('archived_at')
         ->selectRaw('MIN(id) as id, name')
         ->groupBy('name')
         ->orderBy('name')

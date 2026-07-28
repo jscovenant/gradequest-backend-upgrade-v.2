@@ -112,6 +112,10 @@ class SubscriptionGate
             return;
         }
 
+        if (! Schema::hasTable('feature_usages')) {
+            return;
+        }
+
         FeatureUsage::query()->updateOrCreate(
             [
                 'user_id' => $owner->id,
@@ -151,6 +155,17 @@ class SubscriptionGate
     private function featureConfig(Subscription $subscription, string $featureKey): ?array
     {
         $candidateKeys = $this->candidateFeatureKeys($featureKey);
+        $normalizedFeatureKey = $this->normalizeFeatureKey($featureKey);
+
+        if ($normalizedFeatureKey === 'whatsapp_notifications' && (bool) ($subscription->plan?->whatsapp_enabled ?? false)) {
+            return [
+                'feature_key' => 'whatsapp_notifications',
+                'feature_name' => 'WhatsApp Notifications',
+                'is_enabled' => true,
+                'limit_type' => 'usage',
+                'limit_count' => (int) ($subscription->plan?->whatsapp_monthly_credits ?? 0),
+            ];
+        }
 
         $relationFeature = Schema::hasTable('subscription_plan_features')
             ? SubscriptionPlanFeature::query()
@@ -234,6 +249,7 @@ class SubscriptionGate
             'online_payment' => ['online_payment', 'support_online_payment', 'fee_management', 'support_fee_management'],
             'parent_management' => ['parent_management', 'support_parent_management'],
             'bursar_management' => ['bursar_management', 'support_bursar_management'],
+            'whatsapp_notifications' => ['whatsapp_notifications', 'support_whatsapp_notifications', 'whatsapp', 'whatsapp_messages'],
         ];
 
         return array_values(array_unique(array_map(
@@ -375,6 +391,13 @@ class SubscriptionGate
 
         if ($limit <= 0) {
             return ['allowed' => true];
+        }
+
+        if (! Schema::hasTable('feature_usages')) {
+            return [
+                'allowed' => true,
+                'usage' => ['limit_key' => 'usage', 'limit' => $limit, 'used' => 0],
+            ];
         }
 
         $usage = FeatureUsage::query()

@@ -12,4 +12,9 @@ class AcademicSession extends Model
     use HasFactory;
 
     protected $guarded = [];
+
+    protected $casts = [
+        'archived_at' => 'datetime',
+        'is_current' => 'boolean',
+    ];
 }

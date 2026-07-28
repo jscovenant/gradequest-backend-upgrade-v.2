@@ -9,6 +9,10 @@ use Illuminate\Database\Eloquent\Model;
 class Term extends Model
 {
     protected $guarded = [];
+
+    protected $casts = [
+        'archived_at' => 'datetime',
+    ];
  
     use BelongsToSchool;
     use HasFactory;

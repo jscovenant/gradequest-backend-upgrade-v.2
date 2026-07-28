@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Backend;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 use App\Models\User;
@@ -12,11 +13,13 @@ use App\Models\Average;
 use App\Models\ResultPin;
 use App\Models\AcademicSession;
 use App\Models\Term;
+use App\Models\ResultTemplateSetting;
 
 use App\Models\SchoolSetting;
 use App\Models\StudentClass;
 
 use App\Services\ResultService;
+use App\Services\SchoolFeeAccessPolicyService;
 use App\Traits\CheckFeeStatus;
 use App\Repositories\ResultRepository;
 
@@ -31,7 +34,7 @@ class PublicResultController extends Controller
     // move the private method below into that controller instead OR inject the repo here too.
     protected $repo;
 
-    public function __construct(ResultRepository $repo)
+    public function __construct(ResultRepository $repo, private SchoolFeeAccessPolicyService $feeAccessPolicyService)
     {
         $this->repo = $repo;
     }
@@ -55,31 +58,21 @@ class PublicResultController extends Controller
             return response()->json(['message' => 'Student not found'], 404);
         }
 
-        // 2) Current session & active term (school scope)
-        $currentSession = AcademicSession::where('is_current', true)
-            ->where('school_id', $student->school_id)
-            ->first();
-
-        $currentTerm = Term::where('status', 'Active')
-            ->where('school_id', $student->school_id)
-            ->first();
-
-        if (!$currentSession || !$currentTerm) {
-            return response()->json([
-                'message' => 'Current academic session or active term not configured'
-            ], 500);
-        }
-
-        // 3) Validate PIN for current term/session
+        // 2) Validate PIN. The PIN decides which term/session can be viewed.
         $pin = ResultPin::where('pin', $request->pin)
             ->where('is_active', true)
-            ->where('term', $currentTerm->name)
-            ->where('session', $currentSession->name)
+            ->where('school_id', $student->school_id)
             ->first();
 
         if (!$pin) {
             return response()->json([
-                'message' => 'Invalid result PIN for the current term and academic session'
+                'message' => 'Invalid result PIN for this school'
+            ], 403);
+        }
+
+        if (! empty($pin->student_id) && (int) $pin->student_id !== (int) $student->id) {
+            return response()->json([
+                'message' => 'This result PIN is not assigned to this student'
             ], 403);
         }
 
@@ -93,19 +86,24 @@ class PublicResultController extends Controller
             return response()->json(['message' => 'Result PIN usage exceeded'], 403);
         }
 
-        // 6) Fee restriction
-        try {
-            $this->restrictIfUnpaid($student);
-        } catch (HttpException $e) {
+        // 6) School fee access policy
+        $feeAccess = $this->feeAccessPolicyService->resultAccessStatus(
+            (int) $student->school_id,
+            (int) $student->id,
+            (string) $pin->session,
+            (string) $pin->term
+        );
+        if (! ($feeAccess['allowed'] ?? false)) {
             return response()->json([
                 'status'  => 'fee_restricted',
-                'message' => $e->getMessage(),
+                'message' => $feeAccess['message'],
+                'fee_access' => $feeAccess,
             ], 403);
         }
 
         // 7) Context
-        $term    = $currentTerm->name;
-        $session = $currentSession->name;
+        $term    = (string) $pin->term;
+        $session = (string) $pin->session;
         $classId = (int) $student->level_id;
 
         // 8) Confirm result exists for current context (optional but matches your existing logic)
@@ -114,7 +112,13 @@ class PublicResultController extends Controller
             'class_id' => $classId,
             'term'     => $term,
             'session'  => $session,
-        ])->exists();
+        ])->exists() || $this->publishedV2ResultExists(
+            (int) $student->school_id,
+            $classId,
+            $term,
+            $session,
+            (int) $student->id
+        );
 
         if (!$exists) {
             return response()->json([
@@ -151,9 +155,20 @@ class PublicResultController extends Controller
 
             // Load school (branding + theme)
             $school = SchoolSetting::findOrFail($schoolId);
+            $templateSetting = ResultTemplateSetting::firstOrCreate(
+                ['school_id' => $schoolId],
+                ResultTemplateSetting::defaults($schoolId)
+            )->normalized();
 
             // Try v2 if batch exists
             if ($batch) {
+                if (($batch->status ?? null) !== 'published') {
+                    return response()->json([
+                        'message' => 'Result is not yet published. Please check back after the school releases it.',
+                        'status' => 'not_published',
+                    ], 403);
+                }
+
                 $sr = $this->repo->getV2StudentResult($batch->id, $studentId);
 
                 if ($sr) {
@@ -175,6 +190,7 @@ class PublicResultController extends Controller
 
                     return response()->json([
                         'source' => 'v2',
+                        'result_status' => $batch->status,
                         'user' => $student,
                         'user_photo_base64' => $photoBase64,
                         'average' => [
@@ -197,6 +213,8 @@ class PublicResultController extends Controller
                         ],
                         'term_result' => $subjects,
                         'class_name' => $class->name,
+                        'class_section_id' => $class->section_id,
+                        'class_section_name' => optional($class->section)->name,
                         'school_info' => [
                             'name' => $school->school_name,
                             'address' => $school->address,
@@ -207,6 +225,7 @@ class PublicResultController extends Controller
                             'secondary_color' => $school->secondary_color ?? '#ffc107',
                             'background_color' => $school->background_color ?? '#ffffff',
                         ],
+                        'result_template' => $templateSetting,
                         'affective_domains' => $affective,
                         'psychomotor_domains' => $psychomotor,
                     ]);
@@ -239,6 +258,10 @@ class PublicResultController extends Controller
             $legacy['school_info']['name'] = $legacy['school_info']['name'] ?? $school->school_name;
             $legacy['school_info']['address'] = $legacy['school_info']['address'] ?? $school->address;
             $legacy['school_info']['phone'] = $legacy['school_info']['phone'] ?? $school->phone;
+            $legacy['result_template'] = $templateSetting;
+            $legacyClass = StudentClass::with('section')->find($classId);
+            $legacy['class_section_id'] = $legacyClass?->section_id;
+            $legacy['class_section_name'] = $legacyClass?->section?->name;
 
             return response()->json($legacy);
 
@@ -263,5 +286,18 @@ private function getBase64Image($path)
     
     return 'data:' . mime_content_type(public_path($path)) . ';base64,' 
            . base64_encode(file_get_contents(public_path($path)));
+}
+
+private function publishedV2ResultExists(int $schoolId, int $classId, string $term, string $session, int $studentId): bool
+{
+    return DB::table('result_batches as b')
+        ->join('student_results_v2 as sr', 'sr.batch_id', '=', 'b.id')
+        ->where('b.school_id', $schoolId)
+        ->where('b.class_id', $classId)
+        ->where('b.term', $term)
+        ->where('b.session', $session)
+        ->where('b.status', 'published')
+        ->where('sr.user_id', $studentId)
+        ->exists();
 }
 }

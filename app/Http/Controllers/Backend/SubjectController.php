@@ -8,6 +8,7 @@ use App\Models\Department;
 use Illuminate\Http\Request;
 use App\Http\Controllers\Controller;
 use App\Models\Level;
+use App\Services\AcademicSetupArchiveService;
 use Illuminate\Support\Facades\Auth;
 
 class SubjectController extends Controller
@@ -15,9 +16,12 @@ class SubjectController extends Controller
     //
 
  // Get all subjects for a department
- public function getAllSubjects($departmentId)
+ public function getAllSubjects(Request $request, $departmentId)
  {
-     $subjects = Subject::where('department_id', $departmentId)->get();
+     $subjects = Subject::where('department_id', $departmentId)
+        ->when($request->boolean('archived'), fn ($query) => $query->whereNotNull('archived_at'))
+        ->when(!$request->boolean('archived') && !$request->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
+        ->get();
 
      return response()->json($subjects);
  }
@@ -28,7 +32,9 @@ public function getSections()
 {
     $schoolId = Auth::user()->school_id;
 
-    $sections = Section::where('school_id', $schoolId)->get();
+    $sections = Section::where('school_id', $schoolId)
+        ->whereNull('archived_at')
+        ->get();
 
     return response()->json($sections);
 }
@@ -43,7 +49,16 @@ public function assignSection(Request $request)
         'subject_ids.*' => 'exists:subjects,id'
     ]);
 
+    $section = Section::where('school_id', Auth::user()->school_id)
+        ->whereNull('archived_at')
+        ->find($request->section_id);
+
+    if (!$section) {
+        return response()->json(['message' => 'Selected section is archived or unavailable.'], 422);
+    }
+
     Subject::whereIn('id', $request->subject_ids)
+        ->whereNull('archived_at')
         ->update(['section_id' => $request->section_id]);
 
     return response()->json(['message' => 'Subjects successfully assigned to section']);
@@ -69,6 +84,7 @@ public function assignSection(Request $request)
      $existingSubject = Subject::where('name', $request->name)
          ->where('department_id', $department->id)
          ->where('school_id', $schoolId)
+         ->whereNull('archived_at')
          ->first();
  
      if ($existingSubject) {
@@ -79,7 +95,10 @@ public function assignSection(Request $request)
  
      // Generate subject code
      $prefix = strtoupper(substr($department->name, 0, 3)); // e.g., "SCI" for Science
-     $subjectCount = Subject::where('department_id', $department->id)->count();
+     $subjectCount = Subject::where('department_id', $department->id)
+        ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
+        ->count();
      $subjectNumber = str_pad($subjectCount + 1, 3, '0', STR_PAD_LEFT);
      $subjectCode = $prefix . $subjectNumber;
  
@@ -101,7 +120,9 @@ public function assignSection(Request $request)
 // Show a specific subject
             public function edit($id)
             {
-            $subject = Subject::findOrFail($id);
+            $subject = Subject::where('school_id', Auth::user()->school_id)
+                ->whereNull('archived_at')
+                ->findOrFail($id);
             return response()->json($subject);
             }
 
@@ -118,11 +139,18 @@ public function assignSection(Request $request)
             $exists = Subject::where('name', $request->name)
             ->where('school_id', $schoolId)
             ->where('id', '!=', $id)
+            ->whereNull('archived_at')
             ->exists();
 
-          
+            if ($exists) {
+                return response()->json([
+                    'message' => 'Subject with this name already exists.'
+                ], 422);
+            }
 
-            $subject = Subject::findOrFail($id);
+            $subject = Subject::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->findOrFail($id);
             $subject->name = $request->name;
             $subject->save();
 
@@ -135,14 +163,53 @@ public function assignSection(Request $request)
  // Delete a subject
  public function destroy($id)
  {
-     $subject = Subject::find($id);
+     $subject = Subject::where('school_id', Auth::user()->school_id)->find($id);
 
      if (!$subject) {
          return response()->json(['message' => 'Subject not found'], 404);
      }
 
-     $subject->delete();
+     $usedInResults = app(AcademicSetupArchiveService::class)->subjectHasResultRecords($subject);
 
-     return response()->json(['message' => 'Subject deleted successfully']);
+     $subject->forceFill(['archived_at' => now()])->save();
+
+     return response()->json([
+         'message' => $usedInResults
+            ? 'This subject is already used in results. It has been archived instead and will no longer appear for future result entry.'
+            : 'Subject archived successfully.',
+         'archived' => true,
+         'used_in_results' => $usedInResults,
+     ]);
+ }
+
+ public function restore($id)
+ {
+     $schoolId = Auth::user()->school_id;
+
+     $subject = Subject::where('school_id', $schoolId)
+        ->whereNotNull('archived_at')
+        ->find($id);
+
+     if (!$subject) {
+         return response()->json(['message' => 'Archived subject not found'], 404);
+     }
+
+     $exists = Subject::where('name', $subject->name)
+        ->where('department_id', $subject->department_id)
+        ->where('school_id', $schoolId)
+        ->where('id', '!=', $subject->id)
+        ->whereNull('archived_at')
+        ->exists();
+
+     if ($exists) {
+         return response()->json(['message' => 'An active subject with this name already exists in this department. Rename it before restoring.'], 422);
+     }
+
+     $subject->forceFill(['archived_at' => null])->save();
+
+     return response()->json([
+        'message' => 'Subject restored successfully.',
+        'archived' => false,
+     ]);
  }
 }

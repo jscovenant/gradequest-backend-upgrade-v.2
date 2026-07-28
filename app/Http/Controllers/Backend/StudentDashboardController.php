@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 class StudentDashboardController extends Controller
 {
@@ -194,7 +195,127 @@ if ($classId) {
     ->where('b.school_id', $schoolId)
     ->avg(DB::raw("COALESCE(sr.cumulative_average, COALESCE(NULLIF(sr.total,''),0) + 0)"));
 
-$averageAllTime = $averageAllTime ? round((float) $averageAllTime, 1) : 0;
+        $averageAllTime = $averageAllTime ? round((float) $averageAllTime, 1) : 0;
+
+        $currentSession = DB::table('academic_sessions')
+            ->where('school_id', $schoolId)
+            ->where('is_current', 1)
+            ->orderByDesc('id')
+            ->first();
+
+        $currentTerm = DB::table('terms')
+            ->where('school_id', $schoolId)
+            ->where('status', 'Active')
+            ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+            ->orderBy('id')
+            ->first();
+
+        $currentResult = null;
+        if ($currentSession && $currentTerm && $classId) {
+            $batch = DB::table('result_batches')
+                ->where('school_id', $schoolId)
+                ->where('class_id', $classId)
+                ->where('session', $currentSession->name)
+                ->where('term', $currentTerm->name)
+                ->first();
+
+            if ($batch) {
+                $studentResult = DB::table('student_results_v2')
+                    ->where('batch_id', $batch->id)
+                    ->where('user_id', $studentId)
+                    ->first();
+
+                $currentResult = [
+                    'batch_id' => $batch->id,
+                    'school_id' => $schoolId,
+                    'student_id' => $studentId,
+                    'class_id' => $classId,
+                    'class_name' => $classInfo?->name,
+                    'term' => $currentTerm->name,
+                    'session' => $currentSession->name,
+                    'status' => $batch->status,
+                    'is_published' => strtolower((string) $batch->status) === 'published',
+                    'has_result' => (bool) $studentResult,
+                    'average' => $studentResult?->total_average,
+                    'grade' => $studentResult?->total_grade,
+                    'position' => $studentResult?->position,
+                    'updated_at' => $studentResult?->updated_at ?? $batch->updated_at,
+                ];
+            } else {
+                $currentResult = [
+                    'school_id' => $schoolId,
+                    'student_id' => $studentId,
+                    'class_id' => $classId,
+                    'class_name' => $classInfo?->name,
+                    'term' => $currentTerm->name,
+                    'session' => $currentSession->name,
+                    'status' => 'not_started',
+                    'is_published' => false,
+                    'has_result' => false,
+                ];
+            }
+        }
+
+        $latestPublishedResultQuery = DB::table('student_results_v2 as sr')
+            ->join('result_batches as b', 'b.id', '=', 'sr.batch_id')
+            ->where('sr.user_id', $studentId)
+            ->where('b.school_id', $schoolId)
+            ->whereRaw('LOWER(COALESCE(b.status, "")) = ?', ['published'])
+            ->orderByDesc(DB::raw('COALESCE(b.published_at, b.updated_at)'))
+            ->orderByDesc('b.id');
+
+        if (Schema::hasTable('student_classes')) {
+            $latestPublishedResultQuery->leftJoin('student_classes as sc', 'sc.id', '=', 'b.class_id')
+                ->select(
+                    'b.id as batch_id',
+                    'b.school_id',
+                    'sr.user_id as student_id',
+                    'b.class_id',
+                    'sc.name as class_name',
+                    'b.term',
+                    'b.session',
+                    'b.status',
+                    'b.published_at',
+                    'b.updated_at',
+                    'sr.total_average as average',
+                    'sr.total_grade as grade',
+                    'sr.position'
+                );
+        } else {
+            $latestPublishedResultQuery->select(
+                'b.id as batch_id',
+                'b.school_id',
+                'sr.user_id as student_id',
+                'b.class_id',
+                'b.term',
+                'b.session',
+                'b.status',
+                'b.published_at',
+                'b.updated_at',
+                'sr.total_average as average',
+                'sr.total_grade as grade',
+                'sr.position'
+            );
+        }
+
+        $latestPublishedResult = $latestPublishedResultQuery->first();
+
+        $latestPublishedResultPayload = $latestPublishedResult ? [
+            'batch_id' => $latestPublishedResult->batch_id,
+            'school_id' => $latestPublishedResult->school_id,
+            'student_id' => $latestPublishedResult->student_id,
+            'class_id' => $latestPublishedResult->class_id,
+            'class_name' => $latestPublishedResult->class_name ?? null,
+            'term' => $latestPublishedResult->term,
+            'session' => $latestPublishedResult->session,
+            'status' => $latestPublishedResult->status,
+            'is_published' => true,
+            'has_result' => true,
+            'average' => $latestPublishedResult->average,
+            'grade' => $latestPublishedResult->grade,
+            'position' => $latestPublishedResult->position,
+            'updated_at' => $latestPublishedResult->published_at ?? $latestPublishedResult->updated_at,
+        ] : null;
 
         return response()->json([
             'student' => [
@@ -227,6 +348,8 @@ $averageAllTime = $averageAllTime ? round((float) $averageAllTime, 1) : 0;
             ],
             'next_class' => $nextClass,
             'recent_notifications' => $recentNotifications,
+            'current_result' => $currentResult,
+            'latest_published_result' => $latestPublishedResultPayload,
         ]);
     }
 }

@@ -14,6 +14,10 @@ class StudentClass extends Model
     protected $guarded = [];
     protected $table = 'student_classes';
 
+    protected $casts = [
+        'archived_at' => 'datetime',
+    ];
+
     
     public function user()
     {

@@ -11,10 +11,10 @@ class Average extends Model
     use HasFactory;
 
     protected $guarded = [];
-    // public function user()
-    // {
-    //     return $this->belongsTo(User::class, 'user_id', 'id');
-    // }
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id', 'id');
+    }
 
     public function section()
     {
@@ -31,10 +31,10 @@ class Average extends Model
         return $this->belongsTo(StudentClass::class, 'class_id', 'id');
     }
 
-    public function student()
-{
-    return $this->belongsTo(User::class, 'user_id');
-}
+    public function student(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'user_id', 'id');
+    }
 
 
 }

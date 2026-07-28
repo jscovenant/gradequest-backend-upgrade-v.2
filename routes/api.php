@@ -14,6 +14,7 @@ use App\Http\Controllers\Backend\StudentClassController;
 use App\Http\Controllers\Backend\StudentController;
 use App\Http\Controllers\Backend\SubjectController;
 use App\Http\Controllers\Backend\SuperAdminController;
+use App\Http\Controllers\Backend\SuperAdminTwilioController;
 use App\Http\Controllers\Backend\TeacherController;
 use App\Http\Controllers\Backend\AttendanceController;
 use App\Http\Controllers\Backend\TermController;
@@ -44,6 +45,7 @@ use App\Http\Controllers\Backend\SubscriptionPlanController;
 use App\Http\Controllers\Backend\SubscriptionController;
 use App\Http\Controllers\Backend\PaymentGatewayController;
 use App\Http\Controllers\Backend\ParentController;
+use App\Http\Controllers\Backend\ParentContactValidationController;
 use App\Http\Controllers\Backend\SchoolFeesReportController;
 use App\Http\Controllers\Backend\FinancialRecordController;
 use App\Http\Controllers\Backend\ReceiptController;
@@ -53,6 +55,7 @@ use App\Http\Controllers\Backend\ResultPinController;
 use App\Http\Controllers\Backend\FinanceDashboardController;
 use App\Http\Controllers\Backend\FinancialCategoryController;
 use App\Http\Controllers\Api\ResultBatchController;
+use App\Http\Controllers\Api\ResultTemplateSettingController;
 use App\Http\Controllers\Api\StudentResultController;
 use App\Http\Controllers\Api\FilterSetupController;
 use App\Http\Controllers\Api\BroadsheetV2Controller;
@@ -65,6 +68,7 @@ use App\Http\Controllers\Backend\AdminDashboardController;
 use App\Http\Controllers\Backend\BursarDashboardController;
 use App\Http\Controllers\Backend\FeeReminderAnalyticsController;
 use App\Http\Controllers\Backend\FeeReminderSettingsController;
+use App\Http\Controllers\Backend\FeeAccessPolicyController;
 use App\Http\Controllers\Backend\InvoiceNotificationController;
 use App\Http\Controllers\Backend\TeacherDashboardController;
 use App\Http\Controllers\Backend\StudentDashboardController;
@@ -213,6 +217,8 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::put('/superadmin/billing-periods/{billingPeriod}', [GradequestBillingPolicyController::class, 'updateBillingPeriod']);
     Route::post('/superadmin/billing-temporary-access', [GradequestBillingPolicyController::class, 'grantTemporaryAccess']);
     Route::delete('/superadmin/billing-temporary-access/{temporaryAccess}', [GradequestBillingPolicyController::class, 'revokeTemporaryAccess']);
+    Route::get('/superadmin/twilio-whatsapp/status', [SuperAdminTwilioController::class, 'status']);
+    Route::post('/superadmin/twilio-whatsapp/test', [SuperAdminTwilioController::class, 'test']);
     
       Route::post('/create-blog', [BlogController::class, 'store']);
        Route::get('/blogs', [BlogController::class, 'index']);
@@ -303,9 +309,15 @@ Route::get('/bursar-dashboard/recent-payments', [BursarDashboardController::clas
 Route::get('/bursar-dashboard/payment-method-breakdown', [BursarDashboardController::class, 'paymentMethodBreakdown']);
 Route::get('/bursar-dashboard/bank-details', [BursarDashboardController::class, 'bankDetails']);
 
-  Route::post('/parents/register', [ParentController::class, 'register']);
+Route::post('/parents/register', [ParentController::class, 'register']);
+    Route::get('/parents/import/template', [ParentController::class, 'importTemplate']);
+    Route::post('/parents/import/preview', [ParentController::class, 'previewImport']);
+    Route::post('/parents/import', [ParentController::class, 'importParents']);
     Route::get('/parents', [ParentController::class, 'allParents']);
     Route::post('/parents/assign-child', [ParentController::class, 'assignChild']);
+    Route::post('/parents/{parentId}/validate-phone', [ParentContactValidationController::class, 'validatePhone']);
+    Route::post('/parents/{parentId}/whatsapp/send-code', [ParentContactValidationController::class, 'sendWhatsappCode']);
+    Route::post('/parents/{parentId}/whatsapp/verify-code', [ParentContactValidationController::class, 'verifyWhatsappCode']);
     Route::get('/parents/{parentId}', [ParentController::class, 'viewParent']);
     Route::delete('/parents/remove-child', [ParentController::class, 'removeChild']);
     Route::get('/student-classes', [ParentController::class, 'getStudentClasses']);
@@ -325,7 +337,7 @@ Route::get('/parent/children/{id}', [ParentController::class, 'getChild']);
 Route::get('/attendance', [AttendanceController::class, 'index']);  
 Route::get('/attendance/classes', [AttendanceController::class, 'classes']);
 Route::post('/attendance', [AttendanceController::class, 'store'])
-    ->middleware('subscription.feature:attendance_management');  
+    ->middleware(['teacher.active', 'subscription.feature:attendance_management']);  
 Route::get('/student-report', [AttendanceController::class, 'report']);
 
 
@@ -405,7 +417,12 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/student/my-subjects', [StudentController::class, 'mySubjects']);
     //resouces for students
     Route::get('/all-students', [StudentController::class, 'AllStudents']);
+    Route::get('/students/import/template', [StudentController::class, 'studentImportTemplate']);
+    Route::post('/students/import/preview', [StudentController::class, 'previewStudentImport']);
+    Route::post('/students/import', [StudentController::class, 'importStudents'])
+        ->middleware('subscription.feature:student_management,students');
     Route::get('/students/show/{id}', [StudentController::class, 'ViewStudent']);
+    Route::patch('/students/{id}/lifecycle-status', [StudentController::class, 'updateStudentLifecycleStatus']);
     Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
 
     Route::Post('/students/store', [StudentController::class, 'StoreAllStudent'])
@@ -440,6 +457,7 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
  Route::prefix('sections')->group(function () {
     Route::get('/', [SectionController::class, 'index']);
     Route::post('/', [SectionController::class, 'store']);
+    Route::post('/{id}/restore', [SectionController::class, 'restore']);
     Route::get('/{id}', [SectionController::class, 'show']);
     Route::put('/{id}', [SectionController::class, 'update']);
     Route::delete('/{id}', [SectionController::class, 'destroy']);
@@ -450,8 +468,7 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/student-department', [StudentController::class, 'Department']);
 
     //route for affective and psychomotor domain
-    Route::post('/save-ratings', [StudentController::class, 'saveRatings'])
-        ->middleware('subscription.feature:result_management');
+    Route::post('/save-ratings', [StudentController::class, 'saveRatings']);
     Route::post('/decrypt-password', [StudentController::class, 'decryptPassword']);
 
     //Financial reports route
@@ -472,11 +489,16 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
 
      // Batches
-  Route::post('/result-batches/resolve', [ResultBatchController::class, 'resolve'])
-      ->middleware('subscription.feature:result_management');
+  Route::post('/result-batches/resolve', [ResultBatchController::class, 'resolve'])->middleware('teacher.active');
   Route::get('/result-batches/{batch}', [ResultBatchController::class, 'show']);
-  Route::post('/result-batches/{batch}/compute', [ResultBatchController::class, 'compute'])
-      ->middleware('subscription.feature:result_management');
+  Route::post('/result-batches/{batch}/compute', [ResultBatchController::class, 'compute']);
+  Route::get('/result-batches/{batch}/result-import/template', [ResultBatchController::class, 'resultImportTemplate'])->middleware('teacher.active');
+  Route::post('/result-batches/{batch}/result-import/preview', [ResultBatchController::class, 'previewResultImport'])->middleware('teacher.active');
+  Route::post('/result-batches/{batch}/result-import/import', [ResultBatchController::class, 'importResults'])->middleware('teacher.active');
+  Route::get('/result-batches/{batch}/review-summary', [ResultBatchController::class, 'reviewSummary']);
+  Route::post('/result-batches/{batch}/approve', [ResultBatchController::class, 'approve']);
+  Route::post('/result-batches/{batch}/publish', [ResultBatchController::class, 'publish']);
+  Route::post('/result-batches/{batch}/reopen', [ResultBatchController::class, 'reopen']);
       Route::get('/result-batches/{batch}/students', [ResultBatchController::class, 'students']);
 // routes/api.php
 
@@ -491,11 +513,12 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
 
   // Student results in a batch
-  Route::post('/result-batches/{batch}/students/{student}/upsert', [StudentResultController::class, 'upsert'])
-      ->middleware('subscription.feature:result_management');
+  Route::post('/result-batches/{batch}/students/{student}/upsert', [StudentResultController::class, 'upsert'])->middleware('teacher.active');
   Route::get('/result-batches/{batch}/students/{student}', [StudentResultController::class, 'showInBatch']);
-     Route::get('/result-batches/{batch}/students/{student}/result-form', [ResultBatchController::class, 'resultForm']);
+     Route::get('/result-batches/{batch}/students/{student}/result-form', [ResultBatchController::class, 'resultForm'])->middleware('teacher.active');
   // Report card (v2-first, legacy fallback)
+  Route::get('/result-template-settings', [ResultTemplateSettingController::class, 'show']);
+  Route::put('/result-template-settings', [ResultTemplateSettingController::class, 'update']);
   Route::get('/report-card', [StudentResultController::class, 'reportCard']);
   // routes/api.php
 Route::get('/students/{student}/carry-over-preview', [StudentResultController::class, 'carryOverPreview']);
@@ -504,14 +527,14 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
   
 
     Route::get('/result-batches/{batch}/broadsheet', [BroadsheetV2Controller::class, 'index']);
-    Route::post('/result-batches/{batch}/broadsheet/compute', [BroadsheetV2Controller::class, 'compute'])
-        ->middleware('subscription.feature:result_management');
+    Route::post('/result-batches/{batch}/broadsheet/compute', [BroadsheetV2Controller::class, 'compute']);
     Route::get('/result-batches/{batch}/broadsheet/export', [BroadsheetV2Controller::class, 'export']);
     Route::get('/result-batches/{batch}/broadsheet/students/{student}', [BroadsheetV2Controller::class, 'student']);
 
 
     Route::get('/levels', [StudentClassController::class, 'index']);
     Route::post('/levels', [StudentClassController::class, 'store']);
+    Route::post('/levels/{id}/restore', [StudentClassController::class, 'restore']);
     Route::get('/levels/{id}', [StudentClassController::class, 'show']);
     Route::put('/levels/{id}', [StudentClassController::class, 'update']);
 
@@ -525,8 +548,7 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
 
     Route::get('/search-student/{admissionNo}', [ResultController::class, 'findByAdmissionNo']);
-    Route::post('/results/store', [ResultController::class, 'saveResult'])
-        ->middleware('subscription.feature:result_management');
+    Route::post('/results/store', [ResultController::class, 'saveResult']);
     // Fix route name to match frontend call
     Route::get('/edit-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'getResultDataByStudent'])
         ->where('session', '.*')
@@ -535,7 +557,6 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
 
     Route::put('/update-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'updateStudentResult'])
-        ->middleware('subscription.feature:result_management')
         ->where('session', '.*')
         ->where('term', '.*');
     Route::delete('/delete-result/{studentId}/{session}/{classId}/{term}', [ResultController::class, 'deleteResult'])
@@ -559,6 +580,7 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     Route::get('/departments', [DepartmentController::class, 'index']);
     Route::post('/departments', [DepartmentController::class, 'store'])
         ->middleware('subscription.feature:settings_management');
+    Route::post('/departments/{id}/restore', [DepartmentController::class, 'restore']);
     Route::get('/departments/{id}', [DepartmentController::class, 'show']);
     Route::put('/departments/{id}', [DepartmentController::class, 'update']);
     Route::delete('/departments/{id}', [DepartmentController::class, 'destroy']);
@@ -573,6 +595,7 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
         ->middleware('subscription.feature:settings_management');
     Route::get('/subjects/{id}', [SubjectController::class, 'edit']);
     Route::put('/subjects/{id}', [SubjectController::class, 'update']);
+    Route::post('/subjects/{id}/restore', [SubjectController::class, 'restore']);
 
     Route::delete('/subjects/{id}', [SubjectController::class, 'destroy']);
 
@@ -581,6 +604,7 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
     Route::get('/sessions', [SessionController::class, 'index']);
     Route::post('/sessions', [SessionController::class, 'store'])
         ->middleware('subscription.feature:settings_management');
+    Route::post('/sessions/{id}/restore', [SessionController::class, 'restore']);
     Route::put('/sessions/{id}', [SessionController::class, 'update']);
     Route::get('/sessions/{id}', [SessionController::class, 'show']);
     Route::delete('/sessions/{id}', [SessionController::class, 'destroy']);
@@ -594,6 +618,7 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
     Route::get('/terms/{id}', [TermController::class, 'show']);
     Route::put('/terms/{id}', [TermController::class, 'update']);
     Route::put('/terms/{id}/status', [TermController::class, 'updateStatus']);
+    Route::post('/terms/{id}/restore', [TermController::class, 'restore']);
     Route::delete('/terms/{id}', [TermController::class, 'destroy']);
 
 
@@ -630,7 +655,12 @@ Route::delete('/teacher-subjects/{teacher_id}/{subject_id}', [TeacherSubjectCont
 //Route for teachers
 Route::post('/register-teacher', [TeacherController::class, 'StoreTeacher'])
     ->middleware('subscription.feature:teacher_management,teachers');
+Route::get('/teachers/import/template', [TeacherController::class, 'importTemplate']);
+Route::post('/teachers/import/preview', [TeacherController::class, 'previewImport']);
+Route::post('/teachers/import', [TeacherController::class, 'importTeachers'])
+    ->middleware('subscription.feature:teacher_management,teachers');
 Route::get('/all-teachers', [TeacherController::class, 'getAllTeachers']);
+Route::patch('/teachers/{id}/lifecycle-status', [TeacherController::class, 'updateLifecycleStatus']);
 Route::delete('/teachers/{id}', [TeacherController::class, 'deleteTeacher']);
 Route::put('/teachers/{id}', [TeacherController::class, 'updateTeacher']);
 Route::get('/teachers/edit/{id}', [TeacherController::class, 'editTeacher']);
@@ -704,6 +734,8 @@ Route::get('/user/wallet', [WalletController::class, 'getUserBalance']);
 
  Route::get('/settings/fee-reminders', [FeeReminderSettingsController::class, 'show']);
     Route::put('/settings/fee-reminders', [FeeReminderSettingsController::class, 'update']);
+Route::get('/settings/fee-access-policy', [FeeAccessPolicyController::class, 'show']);
+Route::put('/settings/fee-access-policy', [FeeAccessPolicyController::class, 'update']);
 
     Route::get('/analytics/fee-reminders', [FeeReminderAnalyticsController::class, 'summary']);
 
@@ -739,7 +771,7 @@ Route::prefix('staff-attendance')->group(function () {
     Route::post('/session', [StaffAttendanceController::class, 'generateSession'])
         ->middleware('subscription.feature:attendance_management');
     Route::post('/mark', [StaffAttendanceController::class, 'mark'])
-        ->middleware('subscription.feature:attendance_management');
+        ->middleware(['teacher.active', 'subscription.feature:attendance_management']);
      Route::get('/logs', [StaffAttendanceController::class, 'logs']);
 });
 Route::get('/attendance-settings', [AttendanceSettingController::class, 'show']);

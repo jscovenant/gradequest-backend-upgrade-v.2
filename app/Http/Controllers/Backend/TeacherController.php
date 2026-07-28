@@ -14,11 +14,14 @@ use App\Models\SchoolSetting;
 
 use App\Models\TeacherEnrollment;
 use App\Http\Controllers\Controller;
+use App\Services\People\PeopleExcelImportService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\DB;
 
 
 
@@ -30,9 +33,14 @@ class TeacherController extends Controller
     public function getAllTeachers(Request $request)
     {
         $auth = Auth::user();
+        $teacherStatus = $request->input('teacher_status', 'active');
     
         $query = User::withRole('teacher')
             ->where('school_id', $auth->school_id);
+
+        if ($teacherStatus !== 'all') {
+            $query->where('teacher_status', $teacherStatus);
+        }
     
         if ($request->search) {
             $query->where(function ($q) use ($request) {
@@ -54,8 +62,20 @@ class TeacherController extends Controller
             return $teacher;
         });
     
+        $statusCounts = User::withRole('teacher')
+            ->where('school_id', $auth->school_id)
+            ->selectRaw('COALESCE(teacher_status, "active") as teacher_status, COUNT(*) as total')
+            ->groupBy('teacher_status')
+            ->pluck('total', 'teacher_status');
+    
         return response()->json([
-            'teachers' => $teachers
+            'teachers' => $teachers,
+            'status_counts' => [
+                'active' => (int) ($statusCounts['active'] ?? 0),
+                'suspended' => (int) ($statusCounts['suspended'] ?? 0),
+                'inactive' => (int) ($statusCounts['inactive'] ?? 0),
+                'resigned' => (int) ($statusCounts['resigned'] ?? 0),
+            ],
         ]);
     }
     
@@ -145,6 +165,7 @@ public function StoreTeacher(Request $request)
     $user->role = $request->role;
     $user->reg_no = $final_reg_no;
     $user->status = "1";
+    $user->teacher_status = 'active';
     $user->password = $hashedPassword;
     $user->default_password = $encryptedPassword;
 
@@ -174,6 +195,88 @@ public function StoreTeacher(Request $request)
         'user' => $user,
         'reg_no' => $final_reg_no
     ], 201);
+}
+
+public function importTemplate(Request $request, PeopleExcelImportService $service)
+{
+    $format = strtolower((string) $request->query('format', 'xlsx'));
+
+    return $service->teacherTemplate((int) Auth::user()->school_id, in_array($format, ['xlsx', 'xls', 'csv'], true) ? $format : 'xlsx');
+}
+
+public function previewImport(Request $request, PeopleExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        return response()->json($service->previewTeachers(Auth::user(), $request->file('file')));
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
+public function importTeachers(Request $request, PeopleExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        $result = $service->importTeachers(Auth::user(), $request->file('file'));
+
+        return response()->json($result, ($result['imported'] ?? 0) > 0 ? 201 : 422);
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
+public function updateLifecycleStatus(Request $request, $id)
+{
+    $validated = $request->validate([
+        'teacher_status' => ['required', Rule::in(['active', 'suspended', 'inactive', 'resigned'])],
+        'reason' => ['nullable', 'string', 'max:1000'],
+    ]);
+
+    $auth = Auth::user();
+    $teacher = User::forSchool($auth->school_id)
+        ->withRole('teacher')
+        ->findOrFail($id);
+
+    $oldStatus = $teacher->teacher_status ?: 'active';
+    $newStatus = $validated['teacher_status'];
+
+    DB::transaction(function () use ($teacher, $auth, $oldStatus, $newStatus, $validated) {
+        $teacher->forceFill([
+            'teacher_status' => $newStatus,
+            'teacher_status_reason' => $validated['reason'] ?? null,
+            'teacher_status_changed_at' => now(),
+            'teacher_status_changed_by' => $auth->id,
+            'status' => $newStatus === 'active' ? 1 : 0,
+        ])->save();
+
+        DB::table('teacher_status_audit_logs')->insert([
+            'school_id' => (int) $teacher->school_id,
+            'teacher_id' => (int) $teacher->id,
+            'changed_by' => (int) $auth->id,
+            'old_status' => $oldStatus,
+            'new_status' => $newStatus,
+            'reason' => $validated['reason'] ?? null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    });
+
+    return response()->json([
+        'message' => match ($newStatus) {
+            'suspended' => 'Teacher suspended successfully.',
+            'inactive' => 'Teacher marked as inactive successfully.',
+            'resigned' => 'Teacher marked as resigned successfully.',
+            default => 'Teacher restored to active successfully.',
+        },
+        'teacher' => $teacher->fresh(['teacherEnrollment.level']),
+    ]);
 }
 
     

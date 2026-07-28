@@ -6,8 +6,10 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Result\ResolveBatchRequest;
 use App\Http\Requests\Result\UpsertStudentResultRequest;
 use App\Models\ResultBatch;
+use App\Models\ResultTemplateSetting;
 use App\Repositories\ResultRepository;
 use App\Services\Results\ResultComputeService;
+use App\Services\Results\ResultExcelImportService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 
@@ -86,30 +88,31 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
         }
     }
 
-    $activeTermName = Term::query()
-        ->where('school_id', $schoolId)
-        ->where('status', 'Active')
-        ->orderBy('sort_order', 'asc')
-        ->orderBy('id', 'asc')
-        ->value('name');
+    $selectedTermName = trim((string) $request->term);
 
-    if (!$activeTermName) {
+    $termExists = Term::query()
+        ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
+        ->whereRaw('LOWER(name) = ?', [strtolower($selectedTermName)])
+        ->exists();
+
+    if (!$termExists) {
         return response()->json([
-            'message' => 'No ACTIVE term set for this school.'
+            'message' => 'The selected term was not found for this school.'
         ], 422);
     }
 
     $batch = $this->repo->resolveBatch(
         $schoolId,
         (int) $request->class_id,
-        (string) $activeTermName,         
+        $selectedTermName,
         (string) $request->session,
         (int) $user->id
     );
 
     return response()->json([
         'batch' => $batch,
-        'active_term' => $activeTermName,
+        'selected_term' => $selectedTermName,
     ]);
 }
 
@@ -139,9 +142,162 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
    */
   public function compute(int $batch): JsonResponse
   {
-    $this->computeService->computeBatch($batch);
+    $summary = $this->computeService->computeBatch($batch);
 
-    return response()->json(['message' => 'Batch computation started']);
+    return response()->json([
+        'message' => 'Batch computed successfully',
+        'computed' => $summary,
+    ]);
+  }
+
+  public function resultImportTemplate(Request $request, ResultBatch $batch, ResultExcelImportService $importService)
+  {
+    $this->ensureCanEnterBatchResults($request, $batch);
+
+    return $importService->template(
+      $batch,
+      (string) $request->query('format', 'xls'),
+      (string) $request->query('assessment_format', 'ca_exam'),
+      $request->query('department_id') ? (int) $request->query('department_id') : null
+    );
+  }
+
+  public function previewResultImport(Request $request, ResultBatch $batch, ResultExcelImportService $importService): JsonResponse
+  {
+    $this->ensureCanEnterBatchResults($request, $batch);
+
+    $request->validate([
+      'file' => ['required', 'file', 'max:5120'],
+      'department_id' => ['nullable', 'integer'],
+    ]);
+
+    return response()->json($importService->preview(
+      $batch,
+      $request->file('file'),
+      $request->input('department_id') ? (int) $request->input('department_id') : null
+    ));
+  }
+
+  public function importResults(Request $request, ResultBatch $batch, ResultExcelImportService $importService): JsonResponse
+  {
+    $this->ensureCanEnterBatchResults($request, $batch);
+
+    $request->validate([
+      'file' => ['required', 'file', 'max:5120'],
+      'department_id' => ['nullable', 'integer'],
+    ]);
+
+    return response()->json($importService->import(
+      $batch,
+      $request->file('file'),
+      $request->input('department_id') ? (int) $request->input('department_id') : null
+    ));
+  }
+
+  public function reviewSummary(Request $request, ResultBatch $batch): JsonResponse
+  {
+    $this->ensureSameSchool($request, $batch);
+
+    return response()->json([
+      'batch' => $batch->fresh(),
+      'review' => $this->batchReviewSummary($batch),
+    ]);
+  }
+
+  public function approve(Request $request, ResultBatch $batch): JsonResponse
+  {
+    $this->ensureCanManageResultPublication($request, $batch);
+
+    $summary = $this->batchReviewSummary($batch);
+    if (! $summary['is_complete']) {
+      return response()->json([
+        'message' => 'Some students do not have saved results yet. Complete all student results before approval.',
+        'review' => $summary,
+      ], 422);
+    }
+
+    if ($summary['open_high_alerts'] > 0) {
+      return response()->json([
+        'message' => 'Some result alerts still need review before approval.',
+        'review' => $summary,
+      ], 422);
+    }
+
+    $batch->forceFill([
+      'status' => 'approved',
+      'approved_at' => now(),
+      'approved_by' => $request->user()->id,
+      'review_note' => $request->input('note'),
+      'updated_at' => now(),
+    ])->save();
+
+    return response()->json([
+      'message' => 'Results approved. They are not yet visible to parents and students until published.',
+      'batch' => $batch->fresh(),
+      'review' => $summary,
+    ]);
+  }
+
+  public function publish(Request $request, ResultBatch $batch): JsonResponse
+  {
+    $this->ensureCanManageResultPublication($request, $batch);
+
+    $summary = $this->batchReviewSummary($batch);
+    if (! $summary['is_complete']) {
+      return response()->json([
+        'message' => 'Some students do not have saved results yet. Complete all student results before publishing.',
+        'review' => $summary,
+      ], 422);
+    }
+
+    if (! in_array($batch->status, ['approved', 'published'], true)) {
+      return response()->json([
+        'message' => 'Approve the results before publishing them.',
+        'review' => $summary,
+      ], 422);
+    }
+
+    if ($summary['open_high_alerts'] > 0) {
+      return response()->json([
+        'message' => 'Some result alerts still need review before publishing.',
+        'review' => $summary,
+      ], 422);
+    }
+
+    $batch->forceFill([
+      'status' => 'published',
+      'published_at' => now(),
+      'published_by' => $request->user()->id,
+      'review_note' => $request->input('note', $batch->review_note),
+      'updated_at' => now(),
+    ])->save();
+
+    return response()->json([
+      'message' => 'Results published. Parents and students can now view them.',
+      'batch' => $batch->fresh(),
+      'review' => $summary,
+    ]);
+  }
+
+  public function reopen(Request $request, ResultBatch $batch): JsonResponse
+  {
+    $this->ensureCanManageResultPublication($request, $batch);
+
+    $batch->forceFill([
+      'status' => 'computed',
+      'approved_at' => null,
+      'approved_by' => null,
+      'published_at' => null,
+      'published_by' => null,
+      'review_note' => $request->input('note'),
+      'updated_at' => now(),
+    ])->save();
+
+    return response()->json([
+      'message' => 'Results reopened for correction. Parents and students cannot view this batch until it is published again.',
+      'batch' => $batch->fresh(),
+      'review' => $this->batchReviewSummary($batch->fresh()),
+    ]);
   }
 
   /**
@@ -197,6 +353,113 @@ public function students(Request $request, ResultBatch $batch): JsonResponse
   return response()->json(['data' => $students]);
 }
 
+private function ensureSameSchool(Request $request, ResultBatch $batch): void
+{
+  $user = $request->user();
+
+  abort_if(! $user || (int) $batch->school_id !== (int) $user->school_id, 403, 'You are not allowed to access this result batch.');
+}
+
+private function ensureCanEnterBatchResults(Request $request, ResultBatch $batch): void
+{
+  $this->ensureSameSchool($request, $batch);
+
+  $user = $request->user();
+  $role = strtolower((string) $user->role);
+
+  if (in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+    return;
+  }
+
+  abort_if($role !== 'teacher', 403, 'Only authorized school staff can upload results.');
+
+  $assigned = TeacherEnrollment::query()
+    ->where('school_id', (int) $batch->school_id)
+    ->where('user_id', (int) $user->id)
+    ->where('enroll', '1')
+    ->where('level_id', (int) $batch->class_id)
+    ->exists();
+
+  abort_if(! $assigned, 403, 'You can only upload results for students in your assigned class.');
+}
+
+private function ensureCanManageResultPublication(Request $request, ResultBatch $batch): void
+{
+  $this->ensureSameSchool($request, $batch);
+
+  $role = strtolower((string) $request->user()->role);
+  abort_if(! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true), 403, 'Only the admin or principal can approve and publish results.');
+}
+
+private function batchReviewSummary(ResultBatch $batch): array
+{
+  $totalStudents = User::query()
+    ->where('school_id', $batch->school_id)
+    ->where('role', 'Student')
+    ->where('level_id', $batch->class_id)
+    ->count();
+
+  $completedStudents = DB::table('student_results_v2 as sr')
+    ->join('users as u', 'u.id', '=', 'sr.user_id')
+    ->where('sr.batch_id', $batch->id)
+    ->where('u.school_id', $batch->school_id)
+    ->where('u.role', 'Student')
+    ->where('u.level_id', $batch->class_id)
+    ->distinct('user_id')
+    ->count('sr.user_id');
+
+  $missingStudents = User::query()
+    ->where('users.school_id', $batch->school_id)
+    ->where('users.role', 'Student')
+    ->where('users.level_id', $batch->class_id)
+    ->leftJoin('student_results_v2 as sr', function ($join) use ($batch) {
+      $join->on('sr.user_id', '=', 'users.id')
+           ->where('sr.batch_id', '=', $batch->id);
+    })
+    ->whereNull('sr.id')
+    ->orderBy('users.surname')
+    ->orderBy('users.firstname')
+    ->limit(20)
+    ->get(['users.id', 'users.firstname', 'users.surname', 'users.reg_no']);
+
+  $openAlerts = DB::table('academic_alerts')
+    ->where('batch_id', $batch->id)
+    ->where('status', 'open')
+    ->count();
+
+  $openHighAlerts = DB::table('academic_alerts')
+    ->where('batch_id', $batch->id)
+    ->where('status', 'open')
+    ->whereIn('severity', ['high', 'critical'])
+    ->count();
+
+  $missingCount = max(0, $totalStudents - $completedStudents);
+
+  $simpleStatus = match ($batch->status) {
+    'draft' => 'Teachers are still entering results.',
+    'computed' => 'Results are ready for admin review.',
+    'approved' => 'Results have been approved and are waiting to be published.',
+    'published' => $missingCount > 0
+      ? "{$missingCount} student(s) in this class still do not have a result in this published batch."
+      : 'Results have been published for parents and students.',
+    default => 'Result status is unknown.',
+  };
+
+  return [
+    'status' => $batch->status,
+    'total_students' => $totalStudents,
+    'completed_students' => $completedStudents,
+    'missing_students_count' => $missingCount,
+    'missing_students' => $missingStudents,
+    'open_alerts' => $openAlerts,
+    'open_high_alerts' => $openHighAlerts,
+    'is_complete' => $totalStudents > 0 && $missingCount === 0,
+    'can_approve' => $totalStudents > 0 && $missingCount === 0 && $openHighAlerts === 0,
+    'can_publish' => in_array($batch->status, ['approved', 'published'], true) && $totalStudents > 0 && $missingCount === 0 && $openHighAlerts === 0,
+    'simple_status' => $simpleStatus,
+  ];
+}
+
    /**
      * Best UX: return students + completed/pending status in one call.
      * Pending = student has NO student_results_v2 row for this batch.
@@ -220,8 +483,16 @@ public function resultForm(int $batchId, int $studentId)
         ->where('school_id', $schoolId)
         ->findOrFail($studentId);
 
+    $this->ensureCanEnterBatchResults(request(), $batch);
+    if ((int) $student->level_id !== (int) $batch->class_id) {
+        return response()->json([
+            'message' => 'This student does not belong to the selected result batch class.',
+        ], 403);
+    }
+
     $activeTermName = Term::query()
         ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->orderBy('sort_order', 'asc')
         ->orderBy('id', 'asc')
@@ -244,6 +515,13 @@ public function resultForm(int $batchId, int $studentId)
         (string) $batch->term
     );
 
+    if (! $billingStatus['allowed']) {
+        return response()->json([
+            'message' => $billingStatus['message'],
+            'billing' => $billingStatus,
+        ], 402);
+    }
+
     // Subjects
     $subjects = $this->subjectService->subjectsForDepartment(
         $schoolId,
@@ -261,10 +539,12 @@ public function resultForm(int $batchId, int $studentId)
             return [
                 'subject_id' => (int) $r->subject_id,
                 'ca' => $r->ca_raw ? json_decode($r->ca_raw, true) : [],
+                'ca_total' => isset($r->ca_total) ? (float) $r->ca_total : null,
                 'exam' => is_null($r->exam) ? null : (int) $r->exam,
                 'total' => is_null($r->total) ? null : (int) $r->total,
                 'grade' => $r->grade,
                 'remark' => $r->remark,
+                'subject_position' => $r->subject_position ?? null,
                 'carry_over' => $r->carry_over_json ? json_decode($r->carry_over_json, true) : null,
             ];
         });
@@ -288,6 +568,7 @@ public function resultForm(int $batchId, int $studentId)
     // Terms ordering (all your sort_order are 0, so ID order matters)
     $terms = Term::query()
         ->where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->orderBy('sort_order', 'asc')
         ->orderBy('id', 'asc')
         ->get(['name', 'sort_order']);
@@ -335,6 +616,7 @@ public function resultForm(int $batchId, int $studentId)
         'terms' => $termNames,
         'previous_terms' => $previousTerms,
         'carry_over_preview' => $carryOverPreview,
+        'report_column_policy' => $this->resultColumnPolicy($schoolId, (int) $batch->class_id, (string) $batch->term),
         'billing' => $billingStatus,
         'warnings' => !$student->department_id
             ? ['Student has no department assigned, so no subjects were returned.']
@@ -346,6 +628,55 @@ public function resultForm(int $batchId, int $studentId)
 
 
 
+
+private function resultColumnPolicy(int $schoolId, int $classId, string $term): array
+{
+    $class = \App\Models\StudentClass::find($classId);
+    $sectionId = $class?->section_id;
+    $setting = ResultTemplateSetting::firstOrCreate(
+        ['school_id' => $schoolId],
+        ResultTemplateSetting::defaults($schoolId)
+    )->normalized();
+
+    $columns = ResultTemplateSetting::DEFAULT_REPORT_COLUMN_OPTIONS;
+    $rules = $setting['display_options']['report_column_rules'] ?? [];
+    $matched = collect($rules)
+        ->filter(function ($rule) use ($sectionId, $term) {
+            if (! is_array($rule)) {
+                return false;
+            }
+
+            $ruleSection = $rule['section_id'] ?? 'all';
+            $sectionMatches = $ruleSection === 'all' || (string) $ruleSection === (string) $sectionId;
+            $ruleTerm = strtolower(trim((string) ($rule['term'] ?? 'all')));
+            $termMatches = $ruleTerm === 'all' || $ruleTerm === strtolower(trim($term));
+
+            return $sectionMatches && $termMatches;
+        })
+        ->sortBy(function ($rule) {
+            $sectionScore = (($rule['section_id'] ?? 'all') === 'all') ? 0 : 2;
+            $termScore = strtolower(trim((string) ($rule['term'] ?? 'all'))) === 'all' ? 0 : 1;
+
+            return $sectionScore + $termScore;
+        });
+
+    foreach ($matched as $rule) {
+        $columns = array_merge($columns, is_array($rule['columns'] ?? null) ? $rule['columns'] : []);
+    }
+
+    return [
+        'section_id' => $sectionId,
+        'section_name' => $class?->section?->name,
+        'term' => $term,
+        'columns' => $columns,
+        'carry_over_allowed' => (bool) (
+            ($columns['show_first_term'] ?? false)
+            || ($columns['show_second_term'] ?? false)
+            || ($columns['show_cumulative_total'] ?? false)
+            || ($columns['show_cumulative_average'] ?? false)
+        ),
+    ];
+}
 
 
 

@@ -32,6 +32,7 @@ use Illuminate\Support\Str;
 use App\Models\UserHasAffectiveDomain;
 use App\Models\UserHasPsychomotorDomain;
 use App\Services\SchoolBillingService;
+use App\Services\Students\StudentExcelImportService;
 
 
 use Illuminate\Http\JsonResponse;
@@ -84,6 +85,7 @@ class StudentController extends Controller
         // ✅ Get subjects linked to this department
         $subjects = Subject::where('department_id', $student->department_id)
             ->where('school_id', $student->school_id)
+            ->whereNull('archived_at')
             ->select('id', 'name', 'subject_id')
             ->get();
 
@@ -114,6 +116,7 @@ class StudentController extends Controller
     $page = $request->get('page', 1);
     $search = $request->input('search');
     $levelFilter = $request->input('level');
+    $studentStatus = $request->input('student_status', 'active');
 
     // ========================
     // BASE STUDENT QUERY
@@ -122,7 +125,12 @@ class StudentController extends Controller
         ->withRole('student')
         ->where('school_id', $user->school_id);
 
-    $levelsQuery = StudentClass::where('school_id', $user->school_id);
+    if ($studentStatus !== 'all') {
+        $studentsQuery->where('student_status', $studentStatus);
+    }
+
+    $levelsQuery = StudentClass::where('school_id', $user->school_id)
+        ->whereNull('archived_at');
 
     // ========================
     // TEACHER VIEW
@@ -175,11 +183,22 @@ class StudentController extends Controller
     // ========================
     $students = $studentsQuery->latest()->paginate($perPage, ['*'], 'page', $page);
     $levels = $levelsQuery->get();
+    $statusCounts = User::withRole('student')
+        ->where('school_id', $user->school_id)
+        ->selectRaw('COALESCE(student_status, "active") as student_status, COUNT(*) as total')
+        ->groupBy('student_status')
+        ->pluck('total', 'student_status');
 
     return response()->json([
         'students' => $students,
         'school_setting' => $school_setting,
         'levels' => $levels,
+        'status_counts' => [
+            'active' => (int) ($statusCounts['active'] ?? 0),
+            'alumni' => (int) ($statusCounts['alumni'] ?? 0),
+            'graduate' => (int) ($statusCounts['graduate'] ?? 0),
+            'withdrawn' => (int) ($statusCounts['withdrawn'] ?? 0),
+        ],
         'user_role' => $user->role
     ]);
 }
@@ -219,9 +238,9 @@ class StudentController extends Controller
     $sessions = AcademicSession::where('school_id', $auth->school_id)->get();
 
     // 🔹 Add available levels and departments
-    $levels = StudentClass::where('school_id', $auth->school_id)->get();
-    $departments = Department::where('school_id', $auth->school_id)->get();
-    $sections = Section::where('school_id', $auth->school_id)->get();
+    $levels = StudentClass::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
+    $departments = Department::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
+    $sections = Section::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
 
     return response()->json([
         'student' => $user,
@@ -246,6 +265,7 @@ public function Section(): JsonResponse
     // Fetch all sections belonging to the authenticated user's school
     $sections = Section::select('id', 'name')
         ->where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
         ->get();
 
     return response()->json($sections);
@@ -256,7 +276,7 @@ public function Section(): JsonResponse
   public function Level(): JsonResponse
     {
         $auth = Auth::user();
-        $levels = StudentClass::select('id', 'name')->where('school_id', $auth->school_id)->get();
+        $levels = StudentClass::select('id', 'name')->where('school_id', $auth->school_id)->whereNull('archived_at')->get();
         return response()->json($levels);
     }
     
@@ -266,7 +286,9 @@ public function Section(): JsonResponse
     {
         $auth = Auth::user();
         $departments = Department::select('id', 'name')
-        ->where('school_id', $auth->school_id)->get();
+        ->where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
+        ->get();
         return response()->json($departments);
     }
 
@@ -368,6 +390,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
     $user->school_id         = $auth->school_id;
     $user->phone             = $request->phone;
     $user->status            = 1;
+    $user->student_status    = 'active';
 
     // ✅ Step 6: Upload photo (if provided)
     if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
@@ -461,6 +484,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         $student->department_id = $request->department_id; 
         $student->phone = $request->phone;
         $student->status = "1";
+        $student->student_status = $request->student_status ?? $student->student_status ?? 'active';
     
         // ✅ Only update admission number if it was filled
         if ($request->filled('admission_no')) {
@@ -543,7 +567,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
 
 
 
-   public function DeleteStudent($id)
+  public function DeleteStudent($id)
 {
     try {
         $admin = auth::user();
@@ -600,6 +624,79 @@ if (strtolower((string) $request->input('role')) === 'student') {
     }
 }
 
+public function studentImportTemplate(Request $request, StudentExcelImportService $service)
+{
+    $format = strtolower((string) $request->query('format', 'xlsx'));
+
+    return $service->template((int) Auth::user()->school_id, in_array($format, ['xlsx', 'xls', 'csv'], true) ? $format : 'xlsx');
+}
+
+public function previewStudentImport(Request $request, StudentExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        return response()->json($service->preview(Auth::user(), $request->file('file')));
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
+public function importStudents(Request $request, StudentExcelImportService $service)
+{
+    $request->validate([
+        'file' => 'required|file|max:10240',
+    ]);
+
+    try {
+        $result = $service->import(Auth::user(), $request->file('file'));
+
+        return response()->json($result, ($result['imported'] ?? 0) > 0 ? 201 : 422);
+    } catch (SubscriptionLimitExceededException $e) {
+        return response()->json(['message' => $e->getMessage()], 403);
+    } catch (\InvalidArgumentException $e) {
+        return response()->json(['message' => $e->getMessage()], 422);
+    }
+}
+
+public function updateStudentLifecycleStatus(Request $request, $id)
+{
+    $validated = $request->validate([
+        'student_status' => ['required', Rule::in(['active', 'alumni', 'graduate'])],
+    ]);
+
+    $auth = Auth::user();
+    $student = User::forSchool($auth->school_id)
+        ->withRole('student')
+        ->findOrFail($id);
+
+    if ($validated['student_status'] === 'active') {
+        try {
+            $auth->assertCanAddStudents();
+        } catch (SubscriptionLimitExceededException $e) {
+            return response()->json(['message' => $e->getMessage()], 403);
+        }
+    }
+
+    $student->forceFill([
+        'student_status' => $validated['student_status'],
+        'status' => $validated['student_status'] === 'active' ? 1 : 0,
+        'student_status_changed_at' => now(),
+        'student_status_changed_by' => $auth->id,
+    ])->save();
+
+    return response()->json([
+        'message' => match ($validated['student_status']) {
+            'alumni' => 'Student marked as alumni successfully.',
+            'graduate' => 'Student marked as graduate successfully.',
+            default => 'Student restored to active students successfully.',
+        },
+        'student' => $student->fresh(['level', 'department', 'section']),
+    ]);
+}
+
 
 
   public function getClasses()
@@ -608,6 +705,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
     $schoolId = $user->school_id;
 
     $allClasses = StudentClass::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->select('id', 'name')
         ->orderBy('name')
         ->get();
@@ -629,6 +727,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
             ->pluck('level_id');
 
         $fromClasses = StudentClass::where('school_id', $schoolId)
+            ->whereNull('archived_at')
             ->whereIn('id', $enrolledLevelIds)
             ->select('id', 'name')
             ->orderBy('name')

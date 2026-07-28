@@ -11,10 +11,16 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (! Schema::hasTable('averages')) {
+            return;
+        }
+
         Schema::table('averages', function (Blueprint $table) {
-            
-         
-            $table->unsignedBigInteger('user_id')->change();
+            if (! Schema::hasColumn('averages', 'user_id')) {
+                $table->unsignedBigInteger('user_id')->nullable()->after('id');
+            } else {
+                $table->unsignedBigInteger('user_id')->nullable()->change();
+            }
 
             $table->foreign('user_id')
                   ->references('id')
@@ -28,8 +34,13 @@ return new class extends Migration
      */
     public function down(): void
     {
+        if (! Schema::hasTable('averages') || ! Schema::hasColumn('averages', 'user_id')) {
+            return;
+        }
+
         Schema::table('averages', function (Blueprint $table) {
-            //
+            $table->dropForeign(['user_id']);
+            $table->dropColumn('user_id');
         });
     }
 };

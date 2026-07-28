@@ -98,8 +98,12 @@ class SubscriptionController extends Controller
             ->count();
     }
 
-    protected function planBaseAmount(SubscriptionPlan $plan, User $user, bool $enforceLimit = true): float
+    protected function planBaseAmount(?SubscriptionPlan $plan, User $user, bool $enforceLimit = true): float
     {
+        if (! $plan) {
+            return 0.0;
+        }
+
         $students = $this->activeStudentCountFor($user);
         $limit = (int) ($plan->max_students ?? 0);
 
@@ -124,7 +128,7 @@ class SubscriptionController extends Controller
 
         $action = $hasActiveUnexpired ? 'upgrade' : ($current ? 'renewal' : 'purchase');
 
-        if ($hasActiveUnexpired && ! $this->isHigherPlan($plan, $current->plan)) {
+        if ($hasActiveUnexpired && $current->plan && ! $this->isHigherPlan($plan, $current->plan)) {
             abort(422, 'This school can only change package before expiry by upgrading to a higher package.');
         }
 

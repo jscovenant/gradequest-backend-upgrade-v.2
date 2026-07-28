@@ -157,13 +157,16 @@ public function getPerformanceStats()
 
     // 1️⃣ Get current session
     $currentSession = AcademicSession::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('is_current', 1)
         ->firstOrFail();
 
     $sessionName = $currentSession->name;
 
     // 2️⃣ Get all terms in this school
-    $terms = Term::where('school_id', $schoolId)->pluck('name');
+    $terms = Term::where('school_id', $schoolId)
+        ->whereNull('archived_at')
+        ->pluck('name');
 
     if ($terms->isEmpty()) {
         return response()->json([
@@ -208,10 +211,12 @@ public function getTopPerformingStudents(Request $request)
 
     // 🔹 Get active term and current session in ONE query each
     $activeTerm = Term::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->first();
 
     $currentSession = AcademicSession::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('is_current', 1)
         ->first();
 
@@ -282,6 +287,7 @@ public function getCurrentSessionAndTerm()
 
     // 🔹 Get latest active session (only needed columns)
     $session = AcademicSession::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->orderByDesc('id')
         ->select('name', 'start_date', 'end_date')
@@ -289,6 +295,7 @@ public function getCurrentSessionAndTerm()
 
     // 🔹 Get latest active term (only needed columns)
     $term = Term::where('school_id', $schoolId)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->orderByDesc('id')
         ->select('name')

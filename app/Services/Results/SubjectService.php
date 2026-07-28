@@ -18,6 +18,7 @@ class SubjectService
 
         return Subject::where('school_id', $schoolId)
             ->where('department_id', $departmentId)
+            ->whereNull('archived_at')
             ->select('id', 'name')
             ->orderBy('name')
             ->get();

@@ -11,6 +11,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (! Schema::hasTable('school_settings') || Schema::hasColumn('school_settings', 'auto_admission')) {
+            return;
+        }
+
         Schema::table('school_settings', function (Blueprint $table) {
             $table->boolean('auto_admission')->default(0)->after('prefix');
         });
@@ -21,8 +25,12 @@ return new class extends Migration
      */
     public function down(): void
     {
+        if (! Schema::hasTable('school_settings') || ! Schema::hasColumn('school_settings', 'auto_admission')) {
+            return;
+        }
+
         Schema::table('school_settings', function (Blueprint $table) {
-            //
+            $table->dropColumn('auto_admission');
         });
     }
 };

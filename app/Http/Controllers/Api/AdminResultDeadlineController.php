@@ -46,6 +46,7 @@ class AdminResultDeadlineController extends Controller
         }
 
         $batches = $query
+            ->orderByDesc('updated_at')
             ->orderByDesc('id')
             ->get([
                 'id',

@@ -172,10 +172,12 @@ public function getV2SubjectResults(int $studentResultId): array
             's.name as subject_name',
 
             'sr.ca_raw as ca',
+            'sr.ca_total',
             'sr.exam',
             'sr.total',
             'sr.grade',
             'sr.remark',
+            'sr.subject_position',
             'sr.comment',
             'sr.carry_over_enabled',
             'sr.cumulative_total',

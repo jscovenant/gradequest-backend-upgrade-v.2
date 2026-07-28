@@ -11,9 +11,18 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (! Schema::hasTable('subjects') || Schema::hasColumn('subjects', 'section_id')) {
+            return;
+        }
+
         Schema::table('subjects', function (Blueprint $table) {
-             $table->unsignedBigInteger('section_id')->nullable()->after('department_id');
-        $table->foreign('section_id')->references('id')->on('sections')->onDelete('set null');
+            $column = $table->unsignedBigInteger('section_id')->nullable();
+
+            if (Schema::hasColumn('subjects', 'department_id')) {
+                $column->after('department_id');
+            }
+
+            $table->foreign('section_id')->references('id')->on('sections')->onDelete('set null');
         });
     }
 
@@ -22,8 +31,13 @@ return new class extends Migration
      */
     public function down(): void
     {
+        if (! Schema::hasTable('subjects') || ! Schema::hasColumn('subjects', 'section_id')) {
+            return;
+        }
+
         Schema::table('subjects', function (Blueprint $table) {
-            //
+            $table->dropForeign(['section_id']);
+            $table->dropColumn('section_id');
         });
     }
 };

@@ -74,6 +74,7 @@ public function verifyEmailCode(Request $request)
             // Find existing session for this school+name (avoid duplicates)
             $session = AcademicSession::where('school_id', $auth->school_id)
                 ->where('name', $validated['name'])
+                ->whereNull('archived_at')
                 ->first();
 
             if (!$session) {
@@ -92,7 +93,7 @@ public function verifyEmailCode(Request $request)
 
             if (!empty($validated['make_current'])) {
                 // turn off current for all sessions in the school
-                AcademicSession::where('school_id', $auth->school_id)->update(['is_current' => 0]);
+                AcademicSession::where('school_id', $auth->school_id)->whereNull('archived_at')->update(['is_current' => 0]);
 
                 // set this session current
                 $session->is_current = 1;
@@ -131,7 +132,7 @@ public function verifyEmailCode(Request $request)
             $created = [];
 
             foreach ($termsToCreate as $name) {
-                $term = Term::where('school_id', $auth->school_id)->where('name', $name)->first();
+                $term = Term::where('school_id', $auth->school_id)->where('name', $name)->whereNull('archived_at')->first();
                 if (!$term) {
                     $term = new Term();
                     $term->school_id = $auth->school_id;
@@ -146,10 +147,10 @@ public function verifyEmailCode(Request $request)
                 $currentName = $validated['current_term'] ?? '1st Term';
 
                 // deactivate all terms for school
-                Term::where('school_id', $auth->school_id)->update(['status' => 'Inactive']);
+                Term::where('school_id', $auth->school_id)->whereNull('archived_at')->update(['status' => 'Inactive']);
 
                 // activate selected
-                $term = Term::where('school_id', $auth->school_id)->where('name', $currentName)->first();
+                $term = Term::where('school_id', $auth->school_id)->where('name', $currentName)->whereNull('archived_at')->first();
 
                 if (!$term) {
                     return response()->json([
@@ -201,9 +202,10 @@ public function activateBonus()
     }
 
     $session = AcademicSession::where('school_id', $user->school_id)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->first();
-    $terms = Term::where('school_id', $user->school_id)->count();
+    $terms = Term::where('school_id', $user->school_id)->whereNull('archived_at')->count();
 
     if (!$user->email_verified_at || !$session || $terms < 3) {
         return response()->json(['message' => 'Complete activation steps first'], 422);
@@ -281,11 +283,12 @@ public function onboardingStatus()
 
     // Check if active session exists
     $session = AcademicSession::where('school_id', $user->school_id)
+        ->whereNull('archived_at')
         ->where('status', 'Active')
         ->first();
 
     // Count terms for the school
-    $termCount = Term::where('school_id', $user->school_id)->count();
+    $termCount = Term::where('school_id', $user->school_id)->whereNull('archived_at')->count();
 
     return response()->json([
         'email_verified' => !is_null($user->email_verified_at),
