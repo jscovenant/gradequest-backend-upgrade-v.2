@@ -66,9 +66,11 @@ class CurrentSchool
 
         return in_array($role, [
             'superadmin',
+            'platformstaff',
             'platformadmin',
             'supportadmin',
             'salesadmin',
+            'salesrepresentative',
             'financeadmin',
         ], true);
     }

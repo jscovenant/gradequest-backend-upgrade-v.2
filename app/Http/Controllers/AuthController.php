@@ -128,6 +128,10 @@ public function login(Request $request)
                 ? asset($user->schoolsetting->logo)
                 : asset('img/school-default.png'),
         ] : null,
+        'must_change_password' => (bool) $user->force_password_change,
+        'super_admin_type' => $user->super_admin_type,
+        'super_admin_type_label' => $user->isSuperAdminUser() ? $user->superAdminTypeLabel() : null,
+        'super_admin_permissions' => $user->superAdminPermissions(),
     ];
 
     return response()->json([
@@ -136,6 +140,51 @@ public function login(Request $request)
         'token_type'   => 'Bearer',
         'user'         => $safeUser,
     ], Response::HTTP_OK);
+}
+
+public function changeInitialPassword(Request $request)
+{
+    $user = $request->user();
+
+    $validated = $request->validate([
+        'current_password' => ['required', 'string'],
+        'password' => ['required', 'confirmed', Password::min(8)->mixedCase()->numbers()],
+    ]);
+
+    if (! Hash::check($validated['current_password'], $user->password)) {
+        return response()->json([
+            'message' => 'Current password is incorrect.',
+        ], Response::HTTP_UNPROCESSABLE_ENTITY);
+    }
+
+    if (Hash::check($validated['password'], $user->password)) {
+        return response()->json([
+            'message' => 'New password must be different from the temporary password.',
+        ], Response::HTTP_UNPROCESSABLE_ENTITY);
+    }
+
+    $user->forceFill([
+        'password' => Hash::make($validated['password']),
+        'default_password' => null,
+        'force_password_change' => false,
+        'password_changed_at' => now(),
+    ])->save();
+
+    return response()->json([
+        'message' => 'Password changed successfully.',
+        'user' => [
+            'id' => $user->id,
+            'firstname' => $user->firstname,
+            'email' => $user->email,
+            'reg_no' => $user->reg_no,
+            'school_id' => $user->school_id,
+            'role' => $user->role,
+            'must_change_password' => false,
+            'super_admin_type' => $user->super_admin_type,
+            'super_admin_type_label' => $user->isSuperAdminUser() ? $user->superAdminTypeLabel() : null,
+            'super_admin_permissions' => $user->superAdminPermissions(),
+        ],
+    ]);
 }
 
     /**
@@ -377,4 +426,3 @@ public function resetPassword(Request $request)
     return response()->json(['message' => 'Password reset successfully.']);
 }
 }
-

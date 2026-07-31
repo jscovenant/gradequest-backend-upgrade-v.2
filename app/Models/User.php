@@ -50,12 +50,23 @@ protected $casts = [
     'password' => 'hashed',
     'password_reset_expires_at' => 'datetime',
     'default_password' => 'encrypted', 
-     'twilio_auth_token' => 'encrypted',
+    'force_password_change' => 'boolean',
+    'password_changed_at' => 'datetime',
+    'twilio_auth_token' => 'encrypted',
     'student_status_changed_at' => 'datetime',
     'teacher_status_changed_at' => 'datetime',
     'phone_validated_at' => 'datetime',
     'whatsapp_verified_at' => 'datetime',
     'whatsapp_verification_expires_at' => 'datetime',
+    'super_admin_permissions' => 'array',
+];
+
+public const SUPER_ADMIN_PERMISSION_MAP = [
+    'owner' => ['dashboard', 'billing', 'finance', 'support', 'sales', 'marketing', 'content', 'settings', 'audit', 'staff'],
+    'operations' => ['dashboard', 'support', 'billing', 'audit'],
+    'finance' => ['dashboard', 'billing', 'finance', 'audit'],
+    'support' => ['dashboard', 'support', 'audit'],
+    'sales_manager' => ['dashboard', 'sales', 'marketing', 'audit'],
 ];
 
 
@@ -71,6 +82,55 @@ public function scopeForSchool(Builder $query, ?int $schoolId): Builder
 public function scopeWithRole(Builder $query, string $role): Builder
 {
     return $query->whereRaw('LOWER(role) = ?', [strtolower($role)]);
+}
+
+public function isSuperAdminUser(): bool
+{
+    $role = strtolower(str_replace([' ', '-', '_'], '', (string) $this->role));
+
+    return in_array($role, ['superadmin', 'platformstaff'], true);
+}
+
+public function superAdminTypeLabel(): string
+{
+    return match ($this->super_admin_type ?: 'owner') {
+        'operations' => 'Operations Admin',
+        'finance' => 'Finance Admin',
+        'support' => 'Support Admin',
+        'sales_manager' => 'Sales Manager',
+        default => 'Super Admin Owner',
+    };
+}
+
+public function superAdminPermissions(): array
+{
+    if (! $this->isSuperAdminUser()) {
+        return [];
+    }
+
+    $type = $this->super_admin_type ?: 'owner';
+    $defaults = self::SUPER_ADMIN_PERMISSION_MAP[$type] ?? self::SUPER_ADMIN_PERMISSION_MAP['owner'];
+    $custom = is_array($this->super_admin_permissions) ? $this->super_admin_permissions : [];
+
+    return array_values(array_unique(array_filter(array_merge($defaults, $custom))));
+}
+
+public function hasSuperAdminPermission(string $permission): bool
+{
+    if (! $this->isSuperAdminUser()) {
+        return false;
+    }
+
+    if (strtolower(str_replace([' ', '-', '_'], '', (string) $this->role)) === 'superadmin') {
+        return true;
+    }
+
+    if ($permission === ($this->super_admin_type ?: 'owner')) {
+        return true;
+    }
+
+    return in_array('all', $this->superAdminPermissions(), true)
+        || in_array($permission, $this->superAdminPermissions(), true);
 }
 
 

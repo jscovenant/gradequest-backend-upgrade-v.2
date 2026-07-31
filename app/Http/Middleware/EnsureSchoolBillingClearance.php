@@ -99,7 +99,9 @@ class EnsureSchoolBillingClearance
             'platformadmin',
             'supportadmin',
             'salesadmin',
+            'salesrepresentative',
             'financeadmin',
+            'platformstaff',
             'owner',
         ], true);
     }

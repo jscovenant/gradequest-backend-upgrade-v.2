@@ -13,6 +13,7 @@ use App\Models\User;
 use App\Models\Subscription;
 use Illuminate\Support\Facades\Log;
 use App\Mail\WelcomeBonusMail;
+use App\Services\WelcomeWalletCreditService;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
 
@@ -198,7 +199,7 @@ public function activateBonus()
     $user = User::find(Auth::id());
 
     if ($user->bonus_given) {
-        return response()->json(['message' => 'Bonus already claimed'], 409);
+        return response()->json(['message' => 'Welcome credit already claimed'], 409);
     }
 
     $session = AcademicSession::where('school_id', $user->school_id)
@@ -211,54 +212,12 @@ public function activateBonus()
         return response()->json(['message' => 'Complete activation steps first'], 422);
     }
 
-    // Wallet
-    $wallet = Wallet::firstOrCreate(
-        ['user_id' => $user->id],
-        ['school_id' => $user->school_id, 'balance' => 0]
-    );
+    $credit = app(WelcomeWalletCreditService::class)->grantToAdmin($user);
 
-    $wallet->balance += 500;
-    $wallet->save();
-
-    WalletTransaction::create([
-        'user_id' => $user->id,
-        'amount' => 500,
-        'type' => 'credit',
-        'school_id' => $user->school_id,
-        'description' => '₦500 Welcome Bonus',
-        'reference_id' => Str::uuid(),
-    ]);
-
-    // Mark bonus
     $user->bonus_given = true;
     $user->status = 1;
     $user->save();
 
-    // =============================
-    // AUTO-SUBSCRIBE USER TO FREE PLAN
-    // =============================
-    $freePlanId = 7; 
-
-    Subscription::where('user_id', $user->id)
-        ->where('subscription_plan_id', $freePlanId)
-        ->delete();
-
-    Subscription::create([
-        'user_id' => $user->id,
-        'subscription_plan_id' => $freePlanId,
-        'authorization_code' => null,
-        'auto_renew' => false,
-        'auto_renew_source' => null,
-        'customer_code' => null,
-        'email_token' => null,
-        'subscription_code' => Str::uuid(),
-        'status' => 'active',
-        'notified_about_expiry' => false,
-        'starts_at' => now(),
-        'ends_at' => now()->addDays(30), // Free plan duration
-    ]);
-
-    // EMAIL
     try {
         Mail::to($user->email)->send(new WelcomeBonusMail($user));
     } catch (\Exception $e) {
@@ -266,12 +225,12 @@ public function activateBonus()
     }
 
     return response()->json([
-        'message' => '₦500 bonus credited successfully. Free plan activated!',
-        'bonus_amount' => 500,
+        'message' => 'Welcome wallet credit added successfully. Use it within 30 days to subscribe to GradeQuestPlus.',
+        'bonus_amount' => WelcomeWalletCreditService::AMOUNT,
+        'expires_at' => $credit?->expires_at,
         'user' => $user->only(['name', 'email']),
     ]);
 }
-
 
 public function onboardingStatus()
 {
@@ -302,3 +261,4 @@ public function onboardingStatus()
 
 
 }
+

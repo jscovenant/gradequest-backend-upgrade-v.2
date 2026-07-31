@@ -19,7 +19,28 @@ class PlatformFeeService
     public function feeAmountNaira(?StudentFee $studentFee = null): int
     {
         if ($studentFee) {
-            return (int) round($this->billing->pricePerStudentForSchool((int) $studentFee->school_id));
+            $schoolId = (int) $studentFee->school_id;
+            $amount = (int) round($this->billing->pricePerStudentForSchool($schoolId));
+
+            if ($amount > 0) {
+                return $amount;
+            }
+
+            $schoolSettingAmount = DB::table('school_billing_settings')
+                ->where('school_id', $schoolId)
+                ->value('platform_fee_per_student');
+
+            if ((float) $schoolSettingAmount > 0) {
+                return (int) round((float) $schoolSettingAmount);
+            }
+
+            $policyAmount = DB::table('gradequest_billing_policies')
+                ->orderByDesc('id')
+                ->value('platform_fee_per_student');
+
+            if ((float) $policyAmount > 0) {
+                return (int) round((float) $policyAmount);
+            }
         }
 
         return (int) config('services.paystack.platform_fee_naira', 1000); 
@@ -35,12 +56,27 @@ class PlatformFeeService
     public function resolveCharge(StudentFee $studentFee, int $installmentNaira, string $reference): int
     {
         return DB::transaction(function () use ($studentFee, $installmentNaira, $reference) {
-            $existing = PlatformFeeCharge::where('student_fee_id', $studentFee->id)
+            $periodIdentity = [
+                'school_id' => (int) $studentFee->school_id,
+                'student_id' => (int) $studentFee->student_id,
+                'session_id' => (int) $studentFee->session_id,
+                'term_id' => (int) $studentFee->term_id,
+            ];
+
+            $existing = PlatformFeeCharge::where($periodIdentity)
                 ->lockForUpdate()
                 ->first();
 
             if ($existing?->status === 'confirmed') {
                 return 0; // already collected for this student's fee record
+            }
+
+            if (
+                $existing?->status === 'pending'
+                && $existing->paystack_reference === $reference
+                && $existing->updated_at->gt(now()->subMinutes(30))
+            ) {
+                return $this->feeAmountNaira($studentFee); // same in-flight transaction, keep the split amount stable
             }
 
             if ($existing?->status === 'pending' && $existing->updated_at->gt(now()->subMinutes(30))) {
@@ -53,10 +89,11 @@ class PlatformFeeService
                 return 0; // this installment is too small to bear the flat fee — wait for a bigger one
             }
 
-            PlatformFeeCharge::updateOrCreate(
-                ['student_fee_id' => $studentFee->id],
-                ['status' => 'pending', 'paystack_reference' => $reference]
-            );
+            PlatformFeeCharge::updateOrCreate($periodIdentity, [
+                'student_fee_id' => $studentFee->id,
+                'status' => 'pending',
+                'paystack_reference' => $reference,
+            ]);
 
             return $fee;
         });

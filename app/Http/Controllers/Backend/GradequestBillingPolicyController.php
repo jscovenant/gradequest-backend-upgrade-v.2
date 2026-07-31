@@ -286,7 +286,8 @@ class GradequestBillingPolicyController extends Controller
 
     private function authorizePlatform(Request $request): void
     {
-        $role = strtolower(str_replace(['-', '_', ' '], '', (string) $request->user()->role));
-        abort_unless(in_array($role, ['superadmin', 'platformadmin', 'owner'], true), 403);
+        $user = $request->user();
+
+        abort_unless($user && $user->isSuperAdminUser(), 403);
     }
 }

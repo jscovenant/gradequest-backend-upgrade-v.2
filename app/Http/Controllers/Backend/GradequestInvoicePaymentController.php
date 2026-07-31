@@ -161,8 +161,6 @@ class GradequestInvoicePaymentController extends Controller
 
     private function isPlatformUser($user): bool
     {
-        $role = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
-
-        return in_array($role, ['superadmin', 'platformadmin', 'financeadmin', 'owner'], true);
+        return $user && $user->isSuperAdminUser();
     }
 }

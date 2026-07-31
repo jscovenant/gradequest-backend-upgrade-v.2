@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
 use App\Models\SchoolBankAccount;
+use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -11,6 +12,10 @@ use Illuminate\Support\Facades\Log;
 
 class SchoolBankAccountController extends Controller
 {
+  public function __construct(private SchoolBillingService $billing)
+  {
+  }
+
   // School admin: list own bank accounts
   public function index(Request $request)
   {
@@ -119,6 +124,12 @@ public function store(Request $request)
             'paystack_subaccount_code' => $paystackSubaccountCode,
         ]);
 
+        $this->syncSchoolPaymentMode(
+            (int) $school->id,
+            $onlinePaymentEnabled ? 'online' : 'offline',
+            (int) $request->user()->id
+        );
+
         DB::commit();
 
         return response()->json([
@@ -222,6 +233,14 @@ public function verifyAccount(Request $request)
       unset($validated['accepts_online_payment']);
       $item->update($validated);
 
+      if (isset($onlinePaymentEnabled)) {
+        $this->syncSchoolPaymentMode(
+          (int) $schoolId,
+          $onlinePaymentEnabled ? 'online' : 'offline',
+          (int) $request->user()->id
+        );
+      }
+
       DB::commit();
     } catch (\Throwable $e) {
       DB::rollBack();
@@ -273,6 +292,14 @@ public function verifyAccount(Request $request)
 
     return response()->json($response->json('data'));
 }
+
+  private function syncSchoolPaymentMode(int $schoolId, string $paymentMode, int $actorId): void
+  {
+    $this->billing->updateSettings($schoolId, [
+      'payment_mode' => $paymentMode,
+      'block_results_when_unpaid' => true,
+    ], $actorId);
+  }
 
 
 }

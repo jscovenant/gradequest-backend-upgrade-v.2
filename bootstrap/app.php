@@ -3,6 +3,7 @@
 use App\Http\Middleware\CustomRole;
 use App\Http\Middleware\CorsMiddleware;
 use App\Http\Middleware\EnsureSchoolBillingClearance;
+use App\Http\Middleware\EnsureSuperAdminAccess;
 use App\Http\Middleware\EnsureTeacherIsActive;
 use App\Http\Middleware\EnsureTenantAccess;
 use App\Http\Middleware\EnsureSubscriptionFeature;
@@ -45,6 +46,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'tenant'            => EnsureTenantAccess::class,
             'subscription.feature' => EnsureSubscriptionFeature::class,
             'school.billing.clearance' => EnsureSchoolBillingClearance::class,
+            'superadmin.access' => EnsureSuperAdminAccess::class,
             'teacher.active' => EnsureTeacherIsActive::class,
         ]);
     })

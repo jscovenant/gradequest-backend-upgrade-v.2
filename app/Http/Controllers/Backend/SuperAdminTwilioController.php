@@ -53,8 +53,8 @@ class SuperAdminTwilioController extends Controller
 
     private function isSuperAdmin(Request $request): bool
     {
-        $role = strtolower(str_replace(['-', '_', ' '], '', (string) $request->user()?->role));
+        $user = $request->user();
 
-        return $role === 'superadmin';
+        return $user && $user->isSuperAdminUser();
     }
 }

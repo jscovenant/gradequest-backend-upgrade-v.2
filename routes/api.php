@@ -14,6 +14,9 @@ use App\Http\Controllers\Backend\StudentClassController;
 use App\Http\Controllers\Backend\StudentController;
 use App\Http\Controllers\Backend\SubjectController;
 use App\Http\Controllers\Backend\SuperAdminController;
+use App\Http\Controllers\Backend\PlatformStaffController;
+use App\Http\Controllers\Backend\SalesRepresentativeController;
+use App\Http\Controllers\Backend\SalesPayoutController;
 use App\Http\Controllers\Backend\SuperAdminTwilioController;
 use App\Http\Controllers\Backend\TeacherController;
 use App\Http\Controllers\Backend\AttendanceController;
@@ -60,6 +63,9 @@ use App\Http\Controllers\Api\StudentResultController;
 use App\Http\Controllers\Api\FilterSetupController;
 use App\Http\Controllers\Api\BroadsheetV2Controller;
 use App\Http\Controllers\Api\CbtOnboardingController;
+use App\Http\Controllers\Api\CbtExamController;
+use App\Http\Controllers\Api\CbtOfflineLicenseController;
+use App\Http\Controllers\Api\CbtStudentExamController;
 
 use App\Http\Controllers\Api\SchoolDomainController;
 
@@ -96,6 +102,7 @@ Route::get('/public/fee-payment/school', [PublicFeePaymentController::class, 'sc
 Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 'student']);
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize']);
 Route::get('/public/fee-payment/verify/{reference}', [PublicFeePaymentController::class, 'verify']);
+Route::post('/public/paystack/sales-payout-webhook', [\App\Http\Controllers\Backend\SalesPayoutWebhookController::class, 'handle']);
 
 Route::get('/frontend/subscription-plans', [HomeController::class, 'subscriptionPlans']);
 
@@ -116,9 +123,7 @@ Route::get('/result/{studentId}', [ResultController::class, 'showStudentResult']
  
 
  
-
-
-
+Route::middleware(['auth:sanctum', 'tenant'])->post('/auth/change-initial-password', [AuthController::class, 'changeInitialPassword']);
 
 Route::middleware(['auth:sanctum', 'tenant', 'school.billing.clearance'])->group(function () {
     
@@ -190,41 +195,73 @@ Route::post('/notifications/read/{id}', function (Request $request, $id) {
 
 
 
-Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']);
-    Route::get('/admin/demo-bookings/{id}', [PublicDemoBookingController::class, 'show']);
-    Route::patch('/admin/demo-bookings/{id}/status', [PublicDemoBookingController::class, 'updateStatus']);
+Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index'])->middleware('superadmin.access:sales,support,owner');
+    Route::get('/admin/demo-bookings/{id}', [PublicDemoBookingController::class, 'show'])->middleware('superadmin.access:sales,support,owner');
+    Route::patch('/admin/demo-bookings/{id}/status', [PublicDemoBookingController::class, 'updateStatus'])->middleware('superadmin.access:sales,support,owner');
 
     //route for super-admin
-    Route::get('/admin-users', [SuperAdminController::class, 'getAdminUsers']);
-    Route::get('/admin-users/view/{id}', [SuperAdminController::class, 'showAdmin']);
+    Route::get('/admin-users', [SuperAdminController::class, 'getAdminUsers'])->middleware('superadmin.access:support,billing,finance,owner');
+    Route::get('/admin-users/view/{id}', [SuperAdminController::class, 'showAdmin'])->middleware('superadmin.access:support,billing,finance,owner');
     Route::get('/user/features', [SuperAdminController::class, 'getUserFeatures']);
-    Route::get('/admin/subscriptions', [SuperAdminController::class, 'getSubscribers']);
+    Route::get('/admin/subscriptions', [SuperAdminController::class, 'getSubscribers'])->middleware('superadmin.access:billing,finance,owner');
 
-    Route::get('/admin-users/{id}', [SuperAdminController::class, 'edit']);
-    Route::put('/admin-users/{id}', [SuperAdminController::class, 'update']);
-    Route::delete('/admin-users/{id}', [SuperAdminController::class, 'destroy']);
-    Route::get('/platform-logs', [SuperAdminController::class, 'getLogs']);
-    Route::post('/send-marketing-emails', [SuperAdminController::class, 'sendMarketingEmail']);
-    Route::get('/mail/admin-users', [SuperAdminController::class, 'mailAdminUsers']);
+    Route::get('/admin-users/{id}', [SuperAdminController::class, 'edit'])->middleware('superadmin.access:support,owner');
+    Route::put('/admin-users/{id}', [SuperAdminController::class, 'update'])->middleware('superadmin.access:support,owner');
+    Route::delete('/admin-users/{id}', [SuperAdminController::class, 'destroy'])->middleware('superadmin.access:owner');
+    Route::get('/platform-logs', [SuperAdminController::class, 'getLogs'])->middleware('superadmin.access:audit,owner');
+    Route::post('/send-marketing-emails', [SuperAdminController::class, 'sendMarketingEmail'])->middleware('superadmin.access:marketing,owner');
+    Route::get('/mail/admin-users', [SuperAdminController::class, 'mailAdminUsers'])->middleware('superadmin.access:marketing,owner');
     
-    Route::get('/monthly-revenue-stats', [SuperAdminController::class, 'monthlyRevenueStats']);
-    Route::post('/platform-logs/delete-multiple', [SuperAdminController::class, 'deleteMultiple']);
-    Route::get('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'index']);
-    Route::put('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'update']);
-    Route::get('/superadmin/billing-policy/schools', [GradequestBillingPolicyController::class, 'schools']);
-    Route::get('/superadmin/billing-periods', [GradequestBillingPolicyController::class, 'billingPeriods']);
-    Route::post('/superadmin/billing-periods/sync-current', [GradequestBillingPolicyController::class, 'syncSchoolCurrentBillingPeriod']);
-    Route::put('/superadmin/billing-periods/{billingPeriod}', [GradequestBillingPolicyController::class, 'updateBillingPeriod']);
-    Route::post('/superadmin/billing-temporary-access', [GradequestBillingPolicyController::class, 'grantTemporaryAccess']);
-    Route::delete('/superadmin/billing-temporary-access/{temporaryAccess}', [GradequestBillingPolicyController::class, 'revokeTemporaryAccess']);
-    Route::get('/superadmin/twilio-whatsapp/status', [SuperAdminTwilioController::class, 'status']);
-    Route::post('/superadmin/twilio-whatsapp/test', [SuperAdminTwilioController::class, 'test']);
+    Route::get('/monthly-revenue-stats', [SuperAdminController::class, 'monthlyRevenueStats'])->middleware('superadmin.access:finance,billing,owner');
+    Route::post('/platform-logs/delete-multiple', [SuperAdminController::class, 'deleteMultiple'])->middleware('superadmin.access:owner');
+    Route::get('/superadmin/platform-staff', [PlatformStaffController::class, 'index'])->middleware('superadmin.access:staff,owner');
+    Route::post('/superadmin/platform-staff', [PlatformStaffController::class, 'store'])->middleware('superadmin.access:owner');
+    Route::put('/superadmin/platform-staff/{staff}', [PlatformStaffController::class, 'update'])->middleware('superadmin.access:owner');
+    Route::delete('/superadmin/platform-staff/{staff}', [PlatformStaffController::class, 'destroy'])->middleware('superadmin.access:owner');
+    Route::post('/superadmin/platform-staff/{staff}/send-login', [PlatformStaffController::class, 'sendLoginDetails'])->middleware('superadmin.access:owner');
+    Route::get('/superadmin/sales-representatives', [SalesRepresentativeController::class, 'index'])->middleware('superadmin.access:sales,finance,owner');
+    Route::post('/superadmin/sales-representatives', [SalesRepresentativeController::class, 'store'])->middleware('superadmin.access:sales,owner');
+    Route::get('/superadmin/sales-representatives/{salesRepresentative}', [SalesRepresentativeController::class, 'show'])->middleware('superadmin.access:sales,finance,owner');
+    Route::put('/superadmin/sales-representatives/{salesRepresentative}', [SalesRepresentativeController::class, 'update'])->middleware('superadmin.access:sales,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/assign', [SalesRepresentativeController::class, 'assign'])->middleware('superadmin.access:sales,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/send-login', [SalesRepresentativeController::class, 'sendLoginDetails'])->middleware('superadmin.access:sales,owner');
+    Route::get('/superadmin/sales-leads', [SalesRepresentativeController::class, 'allLeads'])->middleware('superadmin.access:sales,owner');
+    Route::patch('/superadmin/sales-leads/{lead}/stage', [SalesRepresentativeController::class, 'updateLeadStage'])->middleware('superadmin.access:sales,owner');
+    Route::post('/superadmin/sales-leads/{lead}/convert', [SalesRepresentativeController::class, 'convertLeadToSchool'])->middleware('superadmin.access:sales,owner');
+    Route::patch('/superadmin/sales-commissions/{commission}/status', [SalesRepresentativeController::class, 'updateCommissionStatus'])->middleware('superadmin.access:finance,owner');
+    Route::get('/superadmin/sales-payouts', [SalesPayoutController::class, 'index'])->middleware('superadmin.access:finance,owner');
+    Route::get('/superadmin/sales-payout-policy', [SalesPayoutController::class, 'policy'])->middleware('superadmin.access:finance,owner');
+    Route::put('/superadmin/sales-payout-policy', [SalesPayoutController::class, 'updatePolicy'])->middleware('superadmin.access:owner');
+    Route::get('/superadmin/sales-payouts/representatives', [SalesPayoutController::class, 'representatives'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-payouts/approve-eligible', [SalesPayoutController::class, 'approveEligible'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-payouts/monthly', [SalesPayoutController::class, 'createMonthly'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/bank', [SalesPayoutController::class, 'saveBank'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/commissions/approve', [SalesPayoutController::class, 'approvePending'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/payouts', [SalesPayoutController::class, 'createBatch'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-payouts/{batch}/initiate', [SalesPayoutController::class, 'initiate'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-payouts/{batch}/mark-paid', [SalesPayoutController::class, 'markPaid'])->middleware('superadmin.access:finance,owner');
+    Route::get('/sales/workspace', [SalesRepresentativeController::class, 'workspace']);
+    Route::get('/sales/leads', [SalesRepresentativeController::class, 'myLeads']);
+    Route::post('/sales/leads', [SalesRepresentativeController::class, 'storeMyLead']);
+    Route::get('/sales/commissions', [SalesRepresentativeController::class, 'myCommissions']);
+    Route::get('/sales/payout-profile', [SalesPayoutController::class, 'myProfile']);
+    Route::post('/sales/payout-profile/bank', [SalesPayoutController::class, 'saveMyBank']);
+    Route::get('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'index'])->middleware('superadmin.access:billing,finance,owner');
+    Route::put('/superadmin/billing-policy', [GradequestBillingPolicyController::class, 'update'])->middleware('superadmin.access:owner');
+    Route::get('/superadmin/billing-policy/schools', [GradequestBillingPolicyController::class, 'schools'])->middleware('superadmin.access:billing,finance,owner');
+    Route::get('/superadmin/billing-periods', [GradequestBillingPolicyController::class, 'billingPeriods'])->middleware('superadmin.access:billing,finance,owner');
+    Route::post('/superadmin/billing-periods/sync-current', [GradequestBillingPolicyController::class, 'syncSchoolCurrentBillingPeriod'])->middleware('superadmin.access:billing,owner');
+    Route::put('/superadmin/billing-periods/{billingPeriod}', [GradequestBillingPolicyController::class, 'updateBillingPeriod'])->middleware('superadmin.access:billing,owner');
+    Route::post('/superadmin/billing-temporary-access', [GradequestBillingPolicyController::class, 'grantTemporaryAccess'])->middleware('superadmin.access:billing,owner');
+    Route::delete('/superadmin/billing-temporary-access/{temporaryAccess}', [GradequestBillingPolicyController::class, 'revokeTemporaryAccess'])->middleware('superadmin.access:billing,owner');
+    Route::get('/superadmin/twilio-whatsapp/status', [SuperAdminTwilioController::class, 'status'])->middleware('superadmin.access:support,owner');
+    Route::post('/superadmin/twilio-whatsapp/test', [SuperAdminTwilioController::class, 'test'])->middleware('superadmin.access:support,owner');
     
-      Route::post('/create-blog', [BlogController::class, 'store']);
-       Route::get('/blogs', [BlogController::class, 'index']);
-       Route::get('/edit-blog/{id}', [BlogController::class, 'edit']);
-    Route::post('/update-blog/{id}', [BlogController::class, 'update']);
-    Route::delete('/blogs/{id}', [BlogController::class, 'destroy']);
+      Route::post('/create-blog', [BlogController::class, 'store'])->middleware('superadmin.access:content,marketing,owner');
+       Route::get('/blogs', [BlogController::class, 'index'])->middleware('superadmin.access:content,marketing,owner');
+       Route::get('/edit-blog/{id}', [BlogController::class, 'edit'])->middleware('superadmin.access:content,marketing,owner');
+    Route::post('/update-blog/{id}', [BlogController::class, 'update'])->middleware('superadmin.access:content,marketing,owner');
+    Route::delete('/blogs/{id}', [BlogController::class, 'destroy'])->middleware('superadmin.access:content,owner');
    
 
   //whatsapp settings route
@@ -396,6 +433,49 @@ Route::get('/school/{schoolId}/account-details', [ReceiptController::class, 'get
     // routes/api.php
 Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
+    Route::prefix('cbt')->group(function () {
+        Route::get('/exams', [CbtExamController::class, 'index'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams', [CbtExamController::class, 'store'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::get('/exams/{exam}', [CbtExamController::class, 'show'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::put('/exams/{exam}', [CbtExamController::class, 'update'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::delete('/exams/{exam}', [CbtExamController::class, 'destroy'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/publish', [CbtExamController::class, 'publish'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/close', [CbtExamController::class, 'close'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/sections', [CbtExamController::class, 'storeSection'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/question-groups', [CbtExamController::class, 'storeGroup'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/questions', [CbtExamController::class, 'storeQuestion'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::put('/questions/{question}', [CbtExamController::class, 'updateQuestion'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::delete('/questions/{question}', [CbtExamController::class, 'deleteQuestion'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+
+        Route::get('/student/exams', [CbtStudentExamController::class, 'available'])
+            ->middleware('subscription.feature:cbt_online');
+        Route::post('/student/exams/{exam}/start', [CbtStudentExamController::class, 'start'])
+            ->middleware('subscription.feature:cbt_online');
+        Route::post('/student/attempts/{attempt}/answers', [CbtStudentExamController::class, 'saveAnswer'])
+            ->middleware('subscription.feature:cbt_online');
+        Route::post('/student/attempts/{attempt}/submit', [CbtStudentExamController::class, 'submit'])
+            ->middleware('subscription.feature:cbt_online');
+
+        Route::get('/offline/licenses', [CbtOfflineLicenseController::class, 'index'])
+            ->middleware('subscription.feature:cbt_offline');
+        Route::post('/offline/licenses', [CbtOfflineLicenseController::class, 'generate'])
+            ->middleware('subscription.feature:cbt_offline');
+        Route::post('/offline/licenses/{license}/revoke', [CbtOfflineLicenseController::class, 'revoke'])
+            ->middleware('subscription.feature:cbt_offline');
+    });
+
 
     Route::prefix('teacher')->group(function () {
         Route::get('/dashboard/counts', [TeacherDashboardController::class, 'counts']);
@@ -445,10 +525,10 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/student/dashboard', [StudentDashboardController::class, 'dashboard']);
 // Route::get('/school/{school}/fee-info', [StudentFeeController::class, 'feeInfo']);
 
- Route::get('/subscription-plans', [SubscriptionPlanController::class, 'index']);
-    Route::post('/subscription-plans', [SubscriptionPlanController::class, 'store']);
-    Route::put('/subscription-plans/{id}', [SubscriptionPlanController::class, 'update']);
-    Route::delete('/subscription-plans/{id}', [SubscriptionPlanController::class, 'destroy']);
+ Route::get('/subscription-plans', [SubscriptionPlanController::class, 'index'])->middleware('superadmin.access:billing,owner');
+    Route::post('/subscription-plans', [SubscriptionPlanController::class, 'store'])->middleware('superadmin.access:billing,finance,owner');
+    Route::put('/subscription-plans/{id}', [SubscriptionPlanController::class, 'update'])->middleware('superadmin.access:billing,finance,owner');
+    Route::delete('/subscription-plans/{id}', [SubscriptionPlanController::class, 'destroy'])->middleware('superadmin.access:billing,finance,owner');
 
 
  //endstudent route
@@ -798,7 +878,12 @@ Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'
 
 
 Route::middleware(['auth:sanctum', 'tenant'])->get('/user', function (Request $request) {
-    return $request->user();
+    $user = $request->user();
+
+    return array_merge($user->toArray(), [
+        'super_admin_type_label' => $user->isSuperAdminUser() ? $user->superAdminTypeLabel() : null,
+        'super_admin_permissions' => $user->superAdminPermissions(),
+    ]);
 });
 
 

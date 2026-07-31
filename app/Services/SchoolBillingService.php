@@ -7,6 +7,7 @@ use App\Models\GradequestBillingPolicy;
 use App\Models\GradequestInvoicePayment;
 use App\Models\GradequestTermInvoice;
 use App\Models\Payment;
+use App\Models\SchoolBankAccount;
 use App\Models\SchoolSetting;
 use App\Models\SchoolBillingAuditLog;
 use App\Models\SchoolBillingPeriod;
@@ -220,10 +221,43 @@ class SchoolBillingService
 
             $settings->update($payload);
 
+            if (isset($payload['payment_mode'])) {
+                $this->syncBankAccountsForPaymentMode($schoolId, $payload['payment_mode']);
+            }
+
             $this->audit($schoolId, $actorId, 'billing_settings_updated', $settings, $before, $settings->fresh()->toArray());
 
             return $settings->fresh();
         });
+    }
+
+    protected function syncBankAccountsForPaymentMode(int $schoolId, string $paymentMode): void
+    {
+        if ($paymentMode === 'offline') {
+            SchoolBankAccount::withoutGlobalScopes()
+                ->where('school_id', $schoolId)
+                ->update(['online_payment_enabled' => false]);
+
+            return;
+        }
+
+        $onlineAccount = SchoolBankAccount::withoutGlobalScopes()
+            ->where('school_id', $schoolId)
+            ->where('is_active', true)
+            ->whereNotNull('paystack_subaccount_code')
+            ->orderBy('sort_order')
+            ->latest()
+            ->first();
+
+        if (! $onlineAccount) {
+            abort(422, 'Please add and verify an online bank account before switching to online payment.');
+        }
+
+        SchoolBankAccount::withoutGlobalScopes()
+            ->where('school_id', $schoolId)
+            ->update(['online_payment_enabled' => false]);
+
+        $onlineAccount->forceFill(['online_payment_enabled' => true])->save();
     }
 
     public function generateOfflineInvoice(int $schoolId, int $sessionId, int $termId, ?int $actorId = null): GradequestTermInvoice

@@ -250,6 +250,8 @@ class SubscriptionGate
             'parent_management' => ['parent_management', 'support_parent_management'],
             'bursar_management' => ['bursar_management', 'support_bursar_management'],
             'whatsapp_notifications' => ['whatsapp_notifications', 'support_whatsapp_notifications', 'whatsapp', 'whatsapp_messages'],
+            'cbt_online' => ['cbt_online', 'cbt', 'computer_based_test', 'online_cbt', 'support_cbt_online'],
+            'cbt_offline' => ['cbt_offline', 'offline_cbt', 'lan_cbt', 'support_cbt_offline'],
         ];
 
         return array_values(array_unique(array_map(

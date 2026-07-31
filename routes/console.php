@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 use App\Jobs\ProcessAutoFeeInvoicesJob;
 use App\Models\SchoolSetting;
+use App\Models\SalesPayoutPolicy;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -24,6 +25,21 @@ Schedule::command('results:scan-incomplete')->everyMinute();
 Schedule::command('results:scan-incomplete')->everyMinute();
 Schedule::command('results:scan-anomalies')->everyMinute();
 
+Schedule::command('sales:review-eligible')
+    ->dailyAt('02:00')
+    ->name('daily-sales-commission-review')
+    ->withoutOverlapping();
+
+Schedule::command('sales:payouts-monthly')
+    ->dailyAt('02:00')
+    ->when(function () {
+        $policy = SalesPayoutPolicy::current();
+
+        return now()->day === (int) $policy->monthly_payout_day;
+    })
+    ->name('monthly-sales-payouts')
+    ->withoutOverlapping();
+
 
 Schedule::call(function () {
     SchoolSetting::where('whatsapp_monthly_limit', '>', 0)
@@ -32,8 +48,6 @@ Schedule::call(function () {
             'whatsapp_usage_reset_date' => now(),
         ]);
 })->monthly()->name('reset-whatsapp-usage')->withoutOverlapping();
-
-
 
 
 

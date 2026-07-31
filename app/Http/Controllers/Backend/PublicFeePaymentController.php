@@ -9,6 +9,7 @@ use App\Models\SchoolBankAccount;
 use App\Models\StudentFee;
 use App\Models\User;
 use App\Services\PlatformFeeService;
+use App\Services\SalesCommissionService;
 use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -20,7 +21,8 @@ class PublicFeePaymentController extends Controller
 {
     public function __construct(
         private PlatformFeeService $platformFeeService,
-        private SchoolBillingService $schoolBillingService
+        private SchoolBillingService $schoolBillingService,
+        private SalesCommissionService $salesCommissionService
     ) {
     }
 
@@ -279,6 +281,8 @@ class PublicFeePaymentController extends Controller
                 if ((float) ($allocation['platform_fee'] ?? 0) > 0) {
                     $this->schoolBillingService->markOnlineEntitlementFromPayment($payment->fresh());
                 }
+
+                $this->salesCommissionService->recordFeePaymentCommission($payment->fresh());
 
                 $remaining = round($remaining - $amount, 2);
             }

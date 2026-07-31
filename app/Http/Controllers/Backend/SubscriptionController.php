@@ -18,6 +18,8 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use App\Services\SalesCommissionService;
+use App\Services\WelcomeWalletCreditService;
 
 class SubscriptionController extends Controller
 {
@@ -268,6 +270,7 @@ class SubscriptionController extends Controller
         ]);
 
         $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'paystack');
+        app(SalesCommissionService::class)->recordSubscriptionCommission($payment, $subscription);
 
         return response()->json([
             'message' => 'Subscription upgraded using remaining package credit.',
@@ -419,7 +422,8 @@ class SubscriptionController extends Controller
                 'starts_at' => now(),
             ]);
 
-            $this->activateSubscription($user, $plan, (int) $cycles, (int) $totalDurationDays, 'paystack');
+            $subscription = $this->activateSubscription($user, $plan, (int) $cycles, (int) $totalDurationDays, 'paystack');
+            app(SalesCommissionService::class)->recordSubscriptionCommission($payment->fresh(), $subscription);
         });
 
         return response()->json([
@@ -502,6 +506,8 @@ class SubscriptionController extends Controller
         $subtotal = $quote['subtotal'];
         $totalDurationDays = (int) $plan->duration_in_days * $cycles;
 
+        app(WelcomeWalletCreditService::class)->expireUnusedCredits($user);
+
         $wallet = Wallet::where('user_id', $user->id)->lockForUpdate()->first();
 
         if (!$wallet || $wallet->balance < $totalAmount) {
@@ -515,6 +521,7 @@ class SubscriptionController extends Controller
         // ✅ Deduct funds
         $wallet->balance -= $totalAmount;
         $wallet->save();
+        app(WelcomeWalletCreditService::class)->consumeWelcomeCredit($user, (float) $totalAmount);
 
         // ✅ Generate unique reference
         $reference = 'WALLET-' . strtoupper(Str::random(10));
@@ -543,6 +550,7 @@ class SubscriptionController extends Controller
 
         // ✅ Create or update subscription (imitate verify() flow)
         $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'wallet', (bool) ($request->auto_renew ?? false));
+        app(SalesCommissionService::class)->recordSubscriptionCommission($payment, $subscription);
 
         // ✅ Record in wallet transaction table (for audit)
         WalletTransaction::create([

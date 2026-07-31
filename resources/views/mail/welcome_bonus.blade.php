@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Welcome to GradeQuest - ₦500 Bonus Credited!</title>
+  <title>Welcome to GradeQuest - &#8358;5,000 Wallet Credit Added</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -73,11 +73,11 @@
 
       <p>
         We’re excited to have you join our community. As a token of appreciation,
-        we’ve credited your wallet with a <strong>₦500 welcome bonus</strong> to help you get started.
+        we’ve credited your wallet with a <strong>&#8358;5,000 GradeQuestPlus wallet credit</strong> to help you get started.
       </p>
 
       <p>
-        Use your wallet balance to explore our premium academic tools and resources.
+        You can use this credit to subscribe to GradeQuestPlus. The credit expires 30 days after activation if it is not used.
       </p>
 
       <p>

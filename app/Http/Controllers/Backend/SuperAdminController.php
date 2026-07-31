@@ -99,8 +99,7 @@ public function getUserFeatures(Request $request)
     {
         $user = $request->user();
     
-        // Only Super-Admin can access
-        if (!$user->hasRole('Super-Admin')) {
+        if (!$user || !$user->isSuperAdminUser()) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
     
@@ -133,8 +132,7 @@ public function showAdmin($id)
 {
     $auth = request()->user();
 
-    // Only Super-Admin
-    if (!$auth || !$auth->hasRole('Super-Admin')) {
+    if (!$auth || !$auth->isSuperAdminUser()) {
         return response()->json(['message' => 'Unauthorized'], 403);
     }
 
@@ -303,7 +301,7 @@ public function getLogs(Request $request)
         ]);
 
         $user = $request->user();
-        if (!$user || !$user->hasRole('Super-Admin')) {
+        if (!$user || !$user->isSuperAdminUser()) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
@@ -404,19 +402,45 @@ public function mailAdminUsers()
 
 public function monthlyRevenueStats()
 {
-    $monthlyRevenue = DB::table('sub_payments')
-        ->selectRaw("DATE_FORMAT(created_at, '%M') as month, SUM(amount) as revenue")
-        ->whereYear('created_at', now()->year)
-        ->where('status', 'successful') // only count successful payments
+    $year = now()->year;
+
+    $subscriptionRevenue = DB::table('sub_payments')
+        ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
+        ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
+        ->where('status', 'successful')
+        ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
+        ->get();
+
+    $onlinePlatformRevenue = DB::table('payments')
+        ->selectRaw("MONTH(created_at) as month_number, DATE_FORMAT(created_at, '%M') as month, SUM(platform_fee) as revenue")
+        ->whereYear('created_at', $year)
+        ->where('status', 'success')
+        ->where('platform_fee', '>', 0)
         ->groupByRaw("MONTH(created_at), DATE_FORMAT(created_at, '%M')")
-        ->orderByRaw("MONTH(created_at)")
-        ->get()
-        ->map(function ($row) {
+        ->get();
+
+    $offlineInvoiceRevenue = DB::table('gradequest_invoice_payments')
+        ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
+        ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
+        ->whereIn('status', ['success', 'successful', 'paid'])
+        ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
+        ->get();
+
+    $monthlyRevenue = collect()
+        ->merge($subscriptionRevenue)
+        ->merge($onlinePlatformRevenue)
+        ->merge($offlineInvoiceRevenue)
+        ->groupBy('month_number')
+        ->sortKeys()
+        ->map(function ($rows) {
+            $first = $rows->first();
+
             return [
-                'month' => $row->month,
-                'revenue' => (float) $row->revenue,
+                'month' => $first->month,
+                'revenue' => (float) $rows->sum(fn ($row) => (float) $row->revenue),
             ];
-        });
+        })
+        ->values();
 
     return response()->json([
         'status' => 'success',
@@ -445,7 +469,5 @@ public function deleteMultiple(Request $request)
 
 
 }
-
-
 
 

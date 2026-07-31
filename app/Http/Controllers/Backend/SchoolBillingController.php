@@ -119,8 +119,8 @@ class SchoolBillingController extends Controller
 
     private function isPlatformUser(Request $request): bool
     {
-        $role = strtolower(str_replace(['-', '_', ' '], '', (string) $request->user()->role));
+        $user = $request->user();
 
-        return in_array($role, ['superadmin', 'platformadmin', 'owner'], true);
+        return $user && $user->isSuperAdminUser();
     }
 }
