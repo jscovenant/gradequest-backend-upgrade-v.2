@@ -1,0 +1,16 @@
+Welcome to GradeQuest Offline CBT Server.
+
+This installer sets up a school LAN CBT server on this Windows computer.
+
+Install this only on the main school server computer. Student computers, tablets, or phones should connect to this same WiFi network and open the local CBT address shown after installation.
+
+What this installer prepares:
+
+- GradeQuest offline CBT backend
+- Built GradeQuest CBT frontend
+- Local MariaDB database
+- Local Nginx web server
+- Desktop shortcuts for starting and opening the CBT server
+
+Before exam day, the school admin should download a fresh offline CBT bundle from the main GradeQuest portal and import it on the offline CBT runner page.
+

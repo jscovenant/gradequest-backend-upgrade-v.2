@@ -20,6 +20,11 @@ class PlatformFeeService
     {
         if ($studentFee) {
             $schoolId = (int) $studentFee->school_id;
+
+            if (($this->billing->activeSubscriptionRevenueCoverage($schoolId)['active'] ?? false) === true) {
+                return 0;
+            }
+
             $amount = (int) round($this->billing->pricePerStudentForSchool($schoolId));
 
             if ($amount > 0) {
@@ -55,6 +60,10 @@ class PlatformFeeService
      */
     public function resolveCharge(StudentFee $studentFee, int $installmentNaira, string $reference): int
     {
+        if (($this->billing->activeSubscriptionRevenueCoverage((int) $studentFee->school_id)['active'] ?? false) === true) {
+            return 0;
+        }
+
         return DB::transaction(function () use ($studentFee, $installmentNaira, $reference) {
             $periodIdentity = [
                 'school_id' => (int) $studentFee->school_id,

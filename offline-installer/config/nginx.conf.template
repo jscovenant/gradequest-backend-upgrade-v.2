@@ -1,0 +1,50 @@
+worker_processes  1;
+pid ../../run/nginx.pid;
+error_log ../../logs/nginx-error.log;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       __NGINX_DIR__/conf/mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    keepalive_timeout  65;
+    client_max_body_size 100m;
+    access_log ../../logs/nginx-access.log;
+
+    server {
+        listen       0.0.0.0:8088 default_server;
+        server_name  _ localhost 127.0.0.1;
+
+        location /api {
+            root   __INSTALL_DIR__/app/backend/public;
+            try_files $uri $uri/ /index.php?$query_string;
+        }
+
+        location /uploads {
+            root   __INSTALL_DIR__/app/backend/public;
+            try_files $uri $uri/ =404;
+        }
+
+        location /storage {
+            root   __INSTALL_DIR__/app/backend/public;
+            try_files $uri $uri/ =404;
+        }
+
+        location ~ \.php$ {
+            root           __INSTALL_DIR__/app/backend/public;
+            fastcgi_pass   127.0.0.1:9123;
+            fastcgi_index  index.php;
+            fastcgi_param  SCRIPT_FILENAME $document_root$fastcgi_script_name;
+            include        __NGINX_DIR__/conf/fastcgi_params;
+        }
+
+        location / {
+            root   __INSTALL_DIR__/app/frontend;
+            try_files $uri $uri/ /index.html;
+        }
+    }
+}

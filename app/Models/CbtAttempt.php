@@ -18,6 +18,7 @@ class CbtAttempt extends Model
         'total_marks' => 'decimal:2',
         'started_at' => 'datetime',
         'submitted_at' => 'datetime',
+        'synced_at' => 'datetime',
         'expires_at' => 'datetime',
         'metadata' => 'array',
     ];
@@ -37,8 +38,18 @@ class CbtAttempt extends Model
         return $this->belongsTo(SchoolSetting::class, 'school_id');
     }
 
+    public function offlineLicense(): BelongsTo
+    {
+        return $this->belongsTo(CbtOfflineLicense::class, 'offline_license_id');
+    }
+
     public function answers(): HasMany
     {
         return $this->hasMany(CbtAnswer::class, 'attempt_id');
+    }
+
+    public function events(): HasMany
+    {
+        return $this->hasMany(CbtAttemptEvent::class, 'attempt_id');
     }
 }

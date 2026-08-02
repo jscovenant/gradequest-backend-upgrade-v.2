@@ -27,7 +27,11 @@ class FeeAccessPolicyController extends Controller
             'result_access_enabled' => ['required', 'boolean'],
             'result_min_payment_percent' => ['required', 'numeric', 'min:0', 'max:100'],
             'result_scope' => ['required', 'in:selected_period,all_outstanding'],
+            'cbt_access_enabled' => ['sometimes', 'boolean'],
+            'cbt_min_payment_percent' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'cbt_scope' => ['sometimes', 'in:selected_period,all_outstanding'],
             'message' => ['nullable', 'string', 'max:255'],
+            'cbt_message' => ['nullable', 'string', 'max:255'],
         ]);
 
         return response()->json([

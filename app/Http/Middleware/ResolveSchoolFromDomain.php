@@ -21,7 +21,12 @@ class ResolveSchoolFromDomain
         $host = $request->getHost();
 
         // Skip for local development and your own production app domain
-        if (in_array($host, $this->bypass) || $host === config('app.domain')) {
+        if (
+            $request->is('api/offline-cbt*')
+            || in_array($host, $this->bypass, true)
+            || filter_var($host, FILTER_VALIDATE_IP)
+            || $host === config('app.domain')
+        ) {
             return $next($request);
         }
 

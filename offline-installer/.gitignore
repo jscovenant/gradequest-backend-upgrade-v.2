@@ -1,0 +1,9 @@
+runtime/php/*
+runtime/mariadb/*
+runtime/nginx/*
+runtime/_downloads/*
+dist/*
+!runtime/php/.gitkeep
+!runtime/mariadb/.gitkeep
+!runtime/nginx/.gitkeep
+!dist/.gitkeep

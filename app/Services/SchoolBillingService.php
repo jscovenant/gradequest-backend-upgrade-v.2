@@ -1267,13 +1267,16 @@ $unpaid = StudentBillingEntitlement::query()
     {
         $policy = $this->policy();
         $cutover = $policy->per_student_billing_starts_at;
+        $subscription = $this->activeSubscriptionForSchool($schoolId);
+        $owner = $this->ownerForSchool($schoolId);
+
+        if ($subscription && $owner && $subscription->ends_at && $subscription->ends_at->gt(now()) && $this->isRevenueCoveringSubscription($subscription)) {
+            return $this->subscriptionRevenueCoveragePayload($subscription, 'plus_subscription_active');
+        }
 
         if (! (bool) $policy->legacy_subscription_honor_enabled || ! $cutover) {
             return ['active' => false];
         }
-
-        $subscription = $this->activeSubscriptionForSchool($schoolId);
-        $owner = $this->ownerForSchool($schoolId);
 
         if (! $subscription || ! $owner || ! $subscription->ends_at || $subscription->ends_at->lte(now())) {
             return ['active' => false];
@@ -1307,6 +1310,38 @@ $unpaid = StudentBillingEntitlement::query()
             'ends_at' => $subscription->ends_at?->toDateTimeString(),
             'cutover_at' => $cutover->toDateTimeString(),
             'message' => 'Existing subscription is honored until expiry. New per-student billing starts from the next renewal.',
+        ];
+    }
+
+    public function activeSubscriptionRevenueCoverage(int $schoolId): array
+    {
+        return $this->legacySubscriptionProtection($schoolId);
+    }
+
+    protected function isRevenueCoveringSubscription(Subscription $subscription): bool
+    {
+        if ($subscription->ends_at && $subscription->ends_at->lte(now())) {
+            return false;
+        }
+
+        $planName = strtolower((string) ($subscription->plan?->name ?? ''));
+
+        return str_contains($planName, 'legacy plus')
+            || str_contains($planName, 'gradequestplus')
+            || str_contains($planName, 'gradequest plus');
+    }
+
+    protected function subscriptionRevenueCoveragePayload(Subscription $subscription, string $status): array
+    {
+        return [
+            'active' => true,
+            'status' => $status,
+            'subscription_id' => $subscription->id,
+            'plan_id' => $subscription->subscription_plan_id,
+            'plan_name' => $subscription->plan?->name,
+            'starts_at' => $subscription->starts_at?->toDateTimeString(),
+            'ends_at' => $subscription->ends_at?->toDateTimeString(),
+            'message' => 'Active package subscription covers platform access for this billing period.',
         ];
     }
 
@@ -1370,6 +1405,10 @@ $unpaid = StudentBillingEntitlement::query()
         $subscription = $this->activeSubscriptionForSchool($schoolId);
         $plan = $subscription?->plan;
 
+        if ($subscription && $this->isRevenueCoveringSubscription($subscription)) {
+            return 0;
+        }
+
         return (float) ($plan?->price_per_student ?? $plan?->price ?? $this->platformFeeAmount());
     }
 
@@ -1386,6 +1425,14 @@ $unpaid = StudentBillingEntitlement::query()
         $revenueModel = $settings->payment_mode === 'online'
             ? 'online_transaction_fee'
             : 'offline_term_invoice';
+        $subscriptionCoverage = $subscription && $this->isRevenueCoveringSubscription($subscription)
+            ? $this->subscriptionRevenueCoveragePayload($subscription, 'plus_subscription_active')
+            : null;
+
+        if ($subscriptionCoverage) {
+            $pricePerStudent = 0;
+            $revenueModel = 'subscription_covered';
+        }
 
         return [
             'package' => $plan ? [
@@ -1417,6 +1464,7 @@ $unpaid = StudentBillingEntitlement::query()
             'current_invoice_amount' => $activeStudentCount * $pricePerStudent,
             'revenue_model' => $revenueModel,
             'payment_mode' => $settings->payment_mode,
+            'subscription_revenue_coverage' => $subscriptionCoverage,
         ];
     }
 

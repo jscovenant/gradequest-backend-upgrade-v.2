@@ -38,4 +38,9 @@ class CbtQuestion extends Model
     {
         return $this->hasMany(CbtQuestionOption::class, 'question_id')->orderBy('sort_order');
     }
+
+    public function answers(): HasMany
+    {
+        return $this->hasMany(CbtAnswer::class, 'question_id');
+    }
 }

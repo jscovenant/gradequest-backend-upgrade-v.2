@@ -65,6 +65,8 @@ use App\Http\Controllers\Api\BroadsheetV2Controller;
 use App\Http\Controllers\Api\CbtOnboardingController;
 use App\Http\Controllers\Api\CbtExamController;
 use App\Http\Controllers\Api\CbtOfflineLicenseController;
+use App\Http\Controllers\Api\OfflineCbtServerController;
+use App\Http\Controllers\Api\PublicCbtExamController;
 use App\Http\Controllers\Api\CbtStudentExamController;
 
 use App\Http\Controllers\Api\SchoolDomainController;
@@ -103,6 +105,21 @@ Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 's
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize']);
 Route::get('/public/fee-payment/verify/{reference}', [PublicFeePaymentController::class, 'verify']);
 Route::post('/public/paystack/sales-payout-webhook', [\App\Http\Controllers\Backend\SalesPayoutWebhookController::class, 'handle']);
+Route::get('/public/cbt/access/lookup', [PublicCbtExamController::class, 'lookup']);
+Route::post('/public/cbt/access/start', [PublicCbtExamController::class, 'start']);
+Route::post('/public/cbt/attempts/{token}/answers', [PublicCbtExamController::class, 'saveAnswer']);
+Route::post('/public/cbt/attempts/{token}/events', [PublicCbtExamController::class, 'logEvent']);
+Route::post('/public/cbt/attempts/{token}/submit', [PublicCbtExamController::class, 'submit']);
+Route::prefix('offline-cbt')->group(function () {
+    Route::get('/status', [OfflineCbtServerController::class, 'status']);
+    Route::post('/bundle/import', [OfflineCbtServerController::class, 'importBundle']);
+    Route::post('/students/lookup', [OfflineCbtServerController::class, 'lookupStudent']);
+    Route::post('/exams/{examId}/start', [OfflineCbtServerController::class, 'startExam']);
+    Route::post('/attempts/{uuid}/answers', [OfflineCbtServerController::class, 'saveAnswer']);
+    Route::post('/attempts/{uuid}/events', [OfflineCbtServerController::class, 'logEvent']);
+    Route::post('/attempts/{uuid}/submit', [OfflineCbtServerController::class, 'submitAttempt']);
+    Route::get('/results/export', [OfflineCbtServerController::class, 'exportResults']);
+});
 
 Route::get('/frontend/subscription-plans', [HomeController::class, 'subscriptionPlans']);
 
@@ -448,15 +465,31 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/close', [CbtExamController::class, 'close'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/reopen', [CbtExamController::class, 'reopen'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::get('/exams/{exam}/scores/export', [CbtExamController::class, 'exportScores'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::get('/exams/{exam}/questions/template/{format}', [CbtExamController::class, 'downloadQuestionTemplate'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/questions/images', [CbtExamController::class, 'uploadQuestionImage'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/sections', [CbtExamController::class, 'storeSection'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/question-groups', [CbtExamController::class, 'storeGroup'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/questions', [CbtExamController::class, 'storeQuestion'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/questions/import', [CbtExamController::class, 'importQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/questions/import-word', [CbtExamController::class, 'importWordQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::get('/offline/installer/download', [CbtExamController::class, 'downloadOfflineInstaller'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_offline']);
         Route::put('/questions/{question}', [CbtExamController::class, 'updateQuestion'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::delete('/questions/{question}', [CbtExamController::class, 'deleteQuestion'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/attempts/{attempt}/reset', [CbtExamController::class, 'resetAttempt'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
 
         Route::get('/student/exams', [CbtStudentExamController::class, 'available'])
@@ -464,6 +497,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
         Route::post('/student/exams/{exam}/start', [CbtStudentExamController::class, 'start'])
             ->middleware('subscription.feature:cbt_online');
         Route::post('/student/attempts/{attempt}/answers', [CbtStudentExamController::class, 'saveAnswer'])
+            ->middleware('subscription.feature:cbt_online');
+        Route::post('/student/attempts/{attempt}/events', [CbtStudentExamController::class, 'logEvent'])
             ->middleware('subscription.feature:cbt_online');
         Route::post('/student/attempts/{attempt}/submit', [CbtStudentExamController::class, 'submit'])
             ->middleware('subscription.feature:cbt_online');
@@ -473,6 +508,10 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
         Route::post('/offline/licenses', [CbtOfflineLicenseController::class, 'generate'])
             ->middleware('subscription.feature:cbt_offline');
         Route::post('/offline/licenses/{license}/revoke', [CbtOfflineLicenseController::class, 'revoke'])
+            ->middleware('subscription.feature:cbt_offline');
+        Route::get('/offline/licenses/{license}/bundle', [CbtOfflineLicenseController::class, 'exportBundle'])
+            ->middleware('subscription.feature:cbt_offline');
+        Route::post('/offline/licenses/{license}/sync-results', [CbtOfflineLicenseController::class, 'syncResults'])
             ->middleware('subscription.feature:cbt_offline');
     });
 

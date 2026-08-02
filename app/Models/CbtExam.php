@@ -23,6 +23,8 @@ class CbtExam extends Model
         'shuffle_questions' => 'boolean',
         'shuffle_options' => 'boolean',
         'show_result_after_submit' => 'boolean',
+        'access_code_required' => 'boolean',
+        'calculator_enabled' => 'boolean',
         'total_marks' => 'decimal:2',
         'pass_mark' => 'decimal:2',
     ];
@@ -85,5 +87,10 @@ class CbtExam extends Model
     public function attempts(): HasMany
     {
         return $this->hasMany(CbtAttempt::class, 'exam_id');
+    }
+
+    public function schedules(): HasMany
+    {
+        return $this->hasMany(CbtExamSchedule::class, 'exam_id')->orderBy('exam_date')->orderBy('starts_at');
     }
 }
