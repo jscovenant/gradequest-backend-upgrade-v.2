@@ -11,6 +11,7 @@ use App\Models\SalesRepStatusEvent;
 use App\Models\SalesRepresentative;
 use App\Models\SchoolSetting;
 use App\Models\User;
+use App\Services\SalesRepresentativeActivityService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +23,10 @@ use Illuminate\Validation\Rule;
 
 class SalesRepresentativeController extends Controller
 {
+    public function __construct(private SalesRepresentativeActivityService $activityService)
+    {
+    }
+
     public function workspace(Request $request): JsonResponse
     {
         $rep = $this->currentRepresentative($request)
@@ -329,7 +334,7 @@ class SalesRepresentativeController extends Controller
         $perPage = min(max((int) $request->get('per_page', 15), 1), 100);
 
         $query = SalesRepresentative::query()
-            ->with(['user:id,firstname,surname,email,phone,role,status', 'assignments', 'commissions'])
+            ->with(['user:id,firstname,surname,email,phone,role,status,last_login_at,created_at', 'assignments', 'commissions'])
             ->latest();
 
         if ($search !== '') {
@@ -576,6 +581,23 @@ class SalesRepresentativeController extends Controller
         ]);
     }
 
+    public function reactivate(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
+    {
+        if ($salesRepresentative->status === 'active') {
+            return response()->json([
+                'message' => 'Sales representative is already active.',
+                'data' => $this->representativePayload($salesRepresentative->load(['user', 'assignments', 'commissions'])),
+            ]);
+        }
+
+        $salesRepresentative = $this->activityService->reactivate($salesRepresentative, $request->user());
+
+        return response()->json([
+            'message' => 'Sales representative reactivated successfully.',
+            'data' => $this->representativePayload($salesRepresentative),
+        ]);
+    }
+
     public function assign(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
     {
         $data = $request->validate([
@@ -693,6 +715,7 @@ class SalesRepresentativeController extends Controller
             'next_of_kin_relationship' => $rep->next_of_kin_relationship,
             'final_settlement_status' => $rep->final_settlement_status,
             'final_settlement_notes' => $rep->final_settlement_notes,
+            ...$this->activityService->snapshot($rep),
         ];
 
         if ($includeDetails) {

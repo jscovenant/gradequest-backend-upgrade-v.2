@@ -30,6 +30,11 @@ Schedule::command('sales:review-eligible')
     ->name('daily-sales-commission-review')
     ->withoutOverlapping();
 
+Schedule::command('sales:review-activity')
+    ->dailyAt('01:30')
+    ->name('daily-sales-representative-activity-review')
+    ->withoutOverlapping();
+
 Schedule::command('sales:payouts-monthly')
     ->dailyAt('02:00')
     ->when(function () {
@@ -48,7 +53,6 @@ Schedule::call(function () {
             'whatsapp_usage_reset_date' => now(),
         ]);
 })->monthly()->name('reset-whatsapp-usage')->withoutOverlapping();
-
 
 
 

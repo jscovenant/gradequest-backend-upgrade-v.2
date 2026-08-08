@@ -59,6 +59,7 @@ protected $casts = [
     'whatsapp_verified_at' => 'datetime',
     'whatsapp_verification_expires_at' => 'datetime',
     'super_admin_permissions' => 'array',
+    'last_login_at' => 'datetime',
 ];
 
 public const SUPER_ADMIN_PERMISSION_MAP = [

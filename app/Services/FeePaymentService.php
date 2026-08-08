@@ -13,8 +13,7 @@ class FeePaymentService
 {
     public function __construct(
         private PlatformFeeService $platformFeeService,
-        private SchoolBillingService $schoolBillingService,
-        private SalesCommissionService $salesCommissionService
+        private SchoolBillingService $schoolBillingService
     )
     {
     }
@@ -151,7 +150,6 @@ class FeePaymentService
                 $this->schoolBillingService->markOnlineEntitlementFromPayment($payment->fresh());
             }
 
-            $this->salesCommissionService->recordFeePaymentCommission($payment->fresh());
         } else {
             $payment->update(['status' => 'failed', 'paystack_response' => $rawData]);
 

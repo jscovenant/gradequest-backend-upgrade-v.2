@@ -20,6 +20,8 @@ class SalesRepresentative extends Model
         'joined_at' => 'date',
         'payout_verified_at' => 'datetime',
         'status_changed_at' => 'datetime',
+        'reactivated_at' => 'datetime',
+        'auto_disabled_at' => 'datetime',
         'closure_requested_at' => 'datetime',
         'death_reported_at' => 'datetime',
     ];

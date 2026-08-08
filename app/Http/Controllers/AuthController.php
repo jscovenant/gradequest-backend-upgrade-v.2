@@ -96,6 +96,8 @@ public function login(Request $request)
 
     RateLimiter::clear($throttleKey);
 
+    $user->forceFill(['last_login_at' => now()])->save();
+
     $tokenResult = $user->createToken('access_token', ['basic-auth']);
     $plainToken  = $tokenResult->plainTextToken;
 

@@ -10,6 +10,13 @@ class SalesCommission extends Model
 {
     use HasFactory;
 
+    protected static function booted(): void
+    {
+        static::addGlobalScope('subscription_only', function ($query) {
+            $query->where('source', 'subscription');
+        });
+    }
+
     protected $guarded = [];
 
     protected $casts = [

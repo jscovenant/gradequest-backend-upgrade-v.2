@@ -242,6 +242,7 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::put('/superadmin/sales-representatives/{salesRepresentative}', [SalesRepresentativeController::class, 'update'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/assign', [SalesRepresentativeController::class, 'assign'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/send-login', [SalesRepresentativeController::class, 'sendLoginDetails'])->middleware('superadmin.access:sales,owner');
+    Route::post('/superadmin/sales-representatives/{salesRepresentative}/reactivate', [SalesRepresentativeController::class, 'reactivate'])->middleware('superadmin.access:sales,owner');
     Route::get('/superadmin/sales-leads', [SalesRepresentativeController::class, 'allLeads'])->middleware('superadmin.access:sales,owner');
     Route::patch('/superadmin/sales-leads/{lead}/stage', [SalesRepresentativeController::class, 'updateLeadStage'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-leads/{lead}/convert', [SalesRepresentativeController::class, 'convertLeadToSchool'])->middleware('superadmin.access:sales,owner');
