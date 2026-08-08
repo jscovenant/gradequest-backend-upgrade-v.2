@@ -252,6 +252,7 @@ class SubscriptionGate
             'whatsapp_notifications' => ['whatsapp_notifications', 'support_whatsapp_notifications', 'whatsapp', 'whatsapp_messages'],
             'cbt_online' => ['cbt_online', 'cbt', 'computer_based_test', 'online_cbt', 'support_cbt_online'],
             'cbt_offline' => ['cbt_offline', 'offline_cbt', 'lan_cbt', 'support_cbt_offline'],
+            'report_card_designer' => ['report_card_designer', 'support_report_card_designer', 'custom_report_designer', 'result_template_designer'],
         ];
 
         return array_values(array_unique(array_map(

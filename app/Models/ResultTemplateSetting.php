@@ -23,6 +23,17 @@ class ResultTemplateSetting extends Model
         'show_student_photo' => true,
         'show_watermark' => true,
         'report_column_rules' => [],
+        'custom_report_layout' => [
+            'enabled' => false,
+            'blocks' => [
+                ['id' => 'student_info', 'label' => 'Student Information', 'type' => 'student_info', 'width' => 'full', 'visible' => true],
+                ['id' => 'scores_table', 'label' => 'Subject Scores', 'type' => 'scores_table', 'width' => 'full', 'visible' => true],
+                ['id' => 'performance_chart', 'label' => 'Performance Chart', 'type' => 'performance_chart', 'width' => 'half', 'visible' => true],
+                ['id' => 'domains', 'label' => 'Affective and Psychomotor', 'type' => 'domains', 'width' => 'half', 'visible' => true],
+                ['id' => 'comments', 'label' => 'Comments and Remarks', 'type' => 'comments', 'width' => 'full', 'visible' => true],
+                ['id' => 'signature', 'label' => 'Signature and QR Code', 'type' => 'signature', 'width' => 'full', 'visible' => true],
+            ],
+        ],
     ];
 
     public const DEFAULT_REPORT_COLUMN_OPTIONS = [
@@ -65,6 +76,21 @@ class ResultTemplateSetting extends Model
                     ),
                 ]);
             })
+            ->values()
+            ->all();
+        $data['display_options']['custom_report_layout'] = array_merge(
+            self::DEFAULT_DISPLAY_OPTIONS['custom_report_layout'],
+            is_array($data['display_options']['custom_report_layout'] ?? null) ? $data['display_options']['custom_report_layout'] : []
+        );
+        $data['display_options']['custom_report_layout']['blocks'] = collect($data['display_options']['custom_report_layout']['blocks'] ?? [])
+            ->filter(fn ($block) => is_array($block))
+            ->map(fn (array $block) => array_merge([
+                'id' => uniqid('block_', false),
+                'label' => 'Report Block',
+                'type' => 'custom',
+                'width' => 'full',
+                'visible' => true,
+            ], $block))
             ->values()
             ->all();
 

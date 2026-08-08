@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\ResultTemplateSetting;
+use App\Services\SubscriptionGate;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
@@ -11,6 +12,11 @@ use Illuminate\Validation\Rule;
 class ResultTemplateSettingController extends Controller
 {
     private array $templates = [
+        [
+            'key' => 'custom_builder',
+            'name' => 'Custom Builder',
+            'description' => 'Drag, arrange, and resize report-card blocks for your school layout.',
+        ],
         [
             'key' => 'classic_academic',
             'name' => 'Classic Academic',
@@ -73,7 +79,26 @@ class ResultTemplateSettingController extends Controller
             'display_options.report_column_rules.*.columns.show_second_term' => ['boolean'],
             'display_options.report_column_rules.*.columns.show_cumulative_total' => ['boolean'],
             'display_options.report_column_rules.*.columns.show_cumulative_average' => ['boolean'],
+            'display_options.custom_report_layout' => ['nullable', 'array'],
+            'display_options.custom_report_layout.enabled' => ['boolean'],
+            'display_options.custom_report_layout.blocks' => ['nullable', 'array'],
+            'display_options.custom_report_layout.blocks.*.id' => ['required_with:display_options.custom_report_layout.blocks', 'string', 'max:80'],
+            'display_options.custom_report_layout.blocks.*.label' => ['required_with:display_options.custom_report_layout.blocks', 'string', 'max:120'],
+            'display_options.custom_report_layout.blocks.*.type' => ['required_with:display_options.custom_report_layout.blocks', 'string', 'max:80'],
+            'display_options.custom_report_layout.blocks.*.width' => ['nullable', Rule::in(['full', 'half'])],
+            'display_options.custom_report_layout.blocks.*.visible' => ['boolean'],
         ]);
+
+        if (($validated['template_key'] ?? null) === 'custom_builder') {
+            $access = app(SubscriptionGate::class)->inspect($request->user(), 'report_card_designer');
+
+            if (! ($access['allowed'] ?? false)) {
+                return response()->json([
+                    'message' => $access['message'] ?? 'Upgrade to GradeQuestPlus to use the custom report-card designer.',
+                    'reason' => $access['reason'] ?? 'feature_not_available',
+                ], (int) ($access['status'] ?? 403));
+            }
+        }
 
         $displayOptions = array_merge(
             ResultTemplateSetting::DEFAULT_DISPLAY_OPTIONS,
@@ -93,6 +118,21 @@ class ResultTemplateSettingController extends Controller
                     ),
                 ];
             })
+            ->values()
+            ->all();
+        $displayOptions['custom_report_layout'] = array_merge(
+            ResultTemplateSetting::DEFAULT_DISPLAY_OPTIONS['custom_report_layout'],
+            is_array($displayOptions['custom_report_layout'] ?? null) ? $displayOptions['custom_report_layout'] : []
+        );
+        $displayOptions['custom_report_layout']['blocks'] = collect($displayOptions['custom_report_layout']['blocks'] ?? [])
+            ->filter(fn ($block) => is_array($block))
+            ->map(fn (array $block) => [
+                'id' => (string) ($block['id'] ?? uniqid('block_', true)),
+                'label' => (string) ($block['label'] ?? 'Report Block'),
+                'type' => (string) ($block['type'] ?? 'custom'),
+                'width' => in_array(($block['width'] ?? 'full'), ['full', 'half'], true) ? $block['width'] : 'full',
+                'visible' => (bool) ($block['visible'] ?? true),
+            ])
             ->values()
             ->all();
 
