@@ -347,21 +347,25 @@ public function updateTeacher(Request $request, $id)
         ->withRole('teacher')
         ->firstOrFail();
 
-    $teacher->fill($validated);
+    $updates = collect($validated)
+        ->except(['password', 'photo', 'level_id'])
+        ->toArray();
 
     if ($request->hasFile('photo')) {
         $filename = time().'_'.$request->file('photo')->getClientOriginalName();
         $request->file('photo')->move(public_path('uploads/users'), $filename);
-        $teacher->photo = $filename;
+        $updates['photo'] = $filename;
     }
 
-    // If password is provided, hash it and store encrypted version
     if ($request->filled('password')) {
-        $teacher->password = Hash::make($request->password);
-        $teacher->default_password = encrypt($request->password);;
+        $updates['password'] = Hash::make($request->password);
+        $updates['default_password'] = encrypt($request->password);
     }
 
-    $teacher->save();
+    $updates['updated_at'] = now();
+
+    // Direct update avoids decrypting legacy invalid default_password values during Eloquent dirty checks.
+    User::whereKey($teacher->id)->update($updates);
 
     // Update or create enrollment
     if ($request->filled('level_id')) {
@@ -401,3 +405,4 @@ public function deleteTeacher($id)
 
  
 }
+

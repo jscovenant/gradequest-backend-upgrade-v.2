@@ -88,7 +88,13 @@ public function getUserFeatures(Request $request)
      ->map(fn($key) => trim($key)) // remove extra spaces
      ->values();
 
-    return response()->json(['features' => $features]);
+    $planKey = strtolower(trim((string) $subscription->plan->name));
+    $planKey = trim(preg_replace('/[^a-z0-9]+/', '_', $planKey) ?: '', '_');
+    if (in_array($planKey, ['gradequest_plus', 'gradequestplus', 'legacy_plus'], true)) {
+        $features->push('gradequest_plus');
+    }
+
+    return response()->json(['features' => $features->unique()->values()]);
 }
 
 
@@ -469,5 +475,4 @@ public function deleteMultiple(Request $request)
 
 
 }
-
 

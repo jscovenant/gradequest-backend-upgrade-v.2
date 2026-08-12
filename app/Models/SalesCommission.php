@@ -12,8 +12,8 @@ class SalesCommission extends Model
 
     protected static function booted(): void
     {
-        static::addGlobalScope('subscription_only', function ($query) {
-            $query->where('source', 'subscription');
+        static::addGlobalScope('commissionable_revenue', function ($query) {
+            $query->whereIn('source', ['subscription', 'core_platform_fee']);
         });
     }
 

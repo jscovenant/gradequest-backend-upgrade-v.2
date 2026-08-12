@@ -21,7 +21,7 @@ class SalesPayoutService
 
     public function verifyAndSaveBank(SalesRepresentative $representative, array $data): SalesRepresentative
     {
-        $response = Http::withToken(config('services.paystack.secret'))
+        $response = Http::withToken($this->paystackSecret())
             ->get('https://api.paystack.co/bank/resolve', [
                 'account_number' => $data['account_number'],
                 'bank_code' => $data['bank_code'],
@@ -33,7 +33,7 @@ class SalesPayoutService
 
         $accountName = $response->json('data.account_name');
 
-        $recipient = Http::withToken(config('services.paystack.secret'))
+        $recipient = Http::withToken($this->paystackSecret())
             ->post('https://api.paystack.co/transferrecipient', [
                 'type' => 'nuban',
                 'name' => $accountName,
@@ -83,7 +83,7 @@ class SalesPayoutService
             $batch = SalesPayoutBatch::create([
                 'sales_representative_id' => $representative->id,
                 'initiated_by' => $initiatedBy,
-                'reference' => 'GQ-PAYOUT-' . now()->format('YmdHis') . '-' . Str::upper(Str::random(6)),
+                'reference' => $this->newReference('manual', $representative->id),
                 'total_amount' => (float) $commissions->sum('amount'),
                 'commission_count' => $commissions->count(),
                 'status' => 'pending',
@@ -231,7 +231,7 @@ class SalesPayoutService
             ->whereHas('commissions', function ($query) use ($periodStart, $periodEnd) {
                 $query->where('status', 'approved')
                     ->whereDoesntHave('payoutItem')
-                    ->whereBetween('earned_at', [$periodStart, $periodEnd]);
+                    ->where('earned_at', '<=', $periodEnd);
             })
             ->get();
 
@@ -240,7 +240,7 @@ class SalesPayoutService
                 ->where('sales_representative_id', $representative->id)
                 ->where('status', 'approved')
                 ->whereDoesntHave('payoutItem')
-                ->whereBetween('earned_at', [$periodStart, $periodEnd])
+                ->where('earned_at', '<=', $periodEnd)
                 ->lockForUpdate()
                 ->get();
 
@@ -294,7 +294,7 @@ class SalesPayoutService
                     'initiated_by' => $initiatedBy,
                     'approved_by' => $initiatedBy,
                     'approved_at' => now(),
-                    'reference' => 'GQ-MONTHLY-PAYOUT-' . $payoutMonth . '-' . $representative->id . '-' . Str::upper(Str::random(6)),
+                    'reference' => $this->newReference($payoutMonth, $representative->id),
                     'period_start' => $periodStart->toDateString(),
                     'period_end' => $periodEnd->toDateString(),
                     'payout_month' => $payoutMonth,
@@ -352,8 +352,21 @@ class SalesPayoutService
     {
         $batch->loadMissing('representative');
 
-        if (! in_array($batch->status, ['pending', 'failed'], true)) {
-            throw new RuntimeException('Only pending or failed payout batches can be initiated.');
+        if (! in_array($batch->status, ['pending', 'failed', 'reversed'], true)) {
+            throw new RuntimeException('Only pending, failed, or reversed payout batches can be initiated.');
+        }
+
+        if (in_array($batch->status, ['failed', 'reversed'], true)) {
+            $batch->update([
+                'reference' => $this->newReference('retry', $batch->sales_representative_id),
+                'status' => 'pending',
+                'paystack_transfer_code' => null,
+                'paystack_transfer_id' => null,
+                'failure_reason' => null,
+                'initiated_at' => null,
+                'processed_at' => null,
+            ]);
+            $batch->refresh();
         }
 
         if ((float) $batch->total_amount <= 0) {
@@ -366,7 +379,7 @@ class SalesPayoutService
             throw new RuntimeException('Paystack recipient code is missing for this payout.');
         }
 
-        $response = Http::withToken(config('services.paystack.secret'))
+        $response = Http::withToken($this->paystackSecret())
             ->post('https://api.paystack.co/transfer', [
                 'source' => 'balance',
                 'amount' => (int) round(((float) $batch->total_amount) * 100),
@@ -387,8 +400,17 @@ class SalesPayoutService
             throw new RuntimeException($response->json('message') ?: 'Could not initiate Paystack transfer.');
         }
 
+        $paystackStatus = strtolower((string) ($data['status'] ?? 'pending'));
+        $localStatus = match ($paystackStatus) {
+            'otp' => 'requires_otp',
+            'received' => 'awaiting_approval',
+            'success' => 'processing',
+            'pending' => 'processing',
+            default => 'processing',
+        };
+
         $batch->update([
-            'status' => 'processing',
+            'status' => $localStatus,
             'paystack_transfer_code' => $data['transfer_code'] ?? null,
             'paystack_transfer_id' => isset($data['id']) ? (string) $data['id'] : null,
             'paystack_recipient_code' => $recipientCode,
@@ -398,6 +420,33 @@ class SalesPayoutService
         ]);
 
         return $batch->fresh(['representative.user', 'items.commission.school']);
+    }
+
+    public function reconcilePaystackTransfer(SalesPayoutBatch $batch): SalesPayoutBatch
+    {
+        if (! $batch->reference) {
+            throw new RuntimeException('This payout has no Paystack reference to reconcile.');
+        }
+
+        $response = Http::withToken($this->paystackSecret())
+            ->get('https://api.paystack.co/transfer/verify/' . urlencode($batch->reference));
+
+        if (! $response->successful() || ! $response->json('status')) {
+            throw new RuntimeException($response->json('message') ?: 'Could not verify this transfer with Paystack.');
+        }
+
+        $data = $response->json('data') ?: [];
+        $status = strtolower((string) ($data['status'] ?? ''));
+
+        return match ($status) {
+            'success' => $this->markSuccessful($batch, $data),
+            'failed', 'abandoned', 'blocked', 'rejected' => $this->markFailed($batch, $status, $data),
+            'reversed' => $this->markFailed($batch, 'Transfer reversed by Paystack.', $data, 'reversed'),
+            'otp' => $this->markNonConclusive($batch, 'requires_otp', $data),
+            'received' => $this->markNonConclusive($batch, 'awaiting_approval', $data),
+            'pending' => $this->markNonConclusive($batch, 'processing', $data),
+            default => throw new RuntimeException('Paystack returned an unknown transfer status.'),
+        };
     }
 
     public function markSuccessful(SalesPayoutBatch $batch, array $payload = []): SalesPayoutBatch
@@ -414,6 +463,7 @@ class SalesPayoutService
                 'paystack_response' => $payload ?: $locked->paystack_response,
                 'failure_reason' => null,
                 'paid_at' => now(),
+                'processed_at' => now(),
             ]);
 
             $commissionIds = SalesPayoutItem::where('sales_payout_batch_id', $locked->id)
@@ -429,23 +479,55 @@ class SalesPayoutService
         });
     }
 
-    public function markFailed(SalesPayoutBatch $batch, string $reason, array $payload = []): SalesPayoutBatch
+    public function markFailed(SalesPayoutBatch $batch, string $reason, array $payload = [], string $status = 'failed'): SalesPayoutBatch
+    {
+        return DB::transaction(function () use ($batch, $reason, $payload, $status) {
+            $locked = SalesPayoutBatch::whereKey($batch->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->status === 'paid' && $status !== 'reversed') {
+                return $locked;
+            }
+
+            $locked->update([
+                'status' => $status,
+                'failure_reason' => $reason,
+                'paystack_response' => $payload ?: $locked->paystack_response,
+                'processed_at' => now(),
+            ]);
+
+            $commissionIds = SalesPayoutItem::where('sales_payout_batch_id', $locked->id)->pluck('sales_commission_id');
+            SalesCommission::whereIn('id', $commissionIds)->update([
+                'status' => 'approved',
+                'paid_at' => null,
+                'updated_at' => now(),
+            ]);
+
+            return $locked->fresh(['representative.user', 'items.commission.school']);
+        });
+    }
+
+    private function markNonConclusive(SalesPayoutBatch $batch, string $status, array $payload): SalesPayoutBatch
     {
         $batch->update([
-            'status' => 'failed',
-            'failure_reason' => $reason,
-            'paystack_response' => $payload ?: $batch->paystack_response,
-        ]);
-
-        $commissionIds = SalesPayoutItem::where('sales_payout_batch_id', $batch->id)
-            ->pluck('sales_commission_id');
-
-        SalesCommission::whereIn('id', $commissionIds)->update([
-            'status' => 'approved',
-            'updated_at' => now(),
+            'status' => $status,
+            'paystack_response' => $payload,
+            'failure_reason' => $status === 'requires_otp' ? 'Paystack transfer requires OTP approval.' : null,
         ]);
 
         return $batch->fresh(['representative.user', 'items.commission.school']);
+    }
+
+    private function newReference(string $period, int $representativeId): string
+    {
+        $safePeriod = strtolower(preg_replace('/[^a-z0-9_-]+/i', '-', $period) ?: 'payout');
+        return strtolower("gq-{$safePeriod}-{$representativeId}-" . Str::random(10));
+    }
+
+    private function paystackSecret(): string
+    {
+        $secret = trim((string) config('services.paystack.secret'));
+        if ($secret === '') throw new RuntimeException('Paystack is not configured for payouts.');
+        return $secret;
     }
 
     private function commissionHoldReason(SalesCommission $commission, SalesPayoutPolicy $policy): ?string

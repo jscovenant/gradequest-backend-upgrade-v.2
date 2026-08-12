@@ -16,6 +16,7 @@ use App\Mail\WelcomeBonusMail;
 use App\Services\WelcomeWalletCreditService;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\DB;
+use App\Models\SchoolTermsAcceptance;
 
 class ActivationController extends Controller
 {
@@ -194,6 +195,37 @@ public function resendEmailCode()
 
 
 
+public function acceptTerms(Request $request)
+{
+    $user = $request->user();
+
+    abort_unless($user && $user->role === 'Admin' && $user->school_id, 403, 'Only a school administrator can accept the Terms and Conditions.');
+
+    $validated = $request->validate([
+        'accepted' => ['required', 'accepted'],
+    ]);
+
+    $acceptance = SchoolTermsAcceptance::firstOrCreate(
+        [
+            'school_id' => $user->school_id,
+            'terms_version' => SchoolTermsAcceptance::CURRENT_VERSION,
+        ],
+        [
+            'accepted_by' => $user->id,
+            'accepted_at' => now(),
+            'ip_address' => $request->ip(),
+            'user_agent' => mb_substr((string) $request->userAgent(), 0, 1000),
+        ]
+    );
+
+    return response()->json([
+        'message' => 'Terms and Conditions accepted successfully.',
+        'terms_accepted' => true,
+        'terms_version' => $acceptance->terms_version,
+        'accepted_at' => $acceptance->accepted_at,
+    ]);
+}
+
 public function activateBonus()
 {
     $user = User::find(Auth::id());
@@ -207,8 +239,11 @@ public function activateBonus()
         ->where('status', 'Active')
         ->first();
     $terms = Term::where('school_id', $user->school_id)->whereNull('archived_at')->count();
+    $termsAccepted = SchoolTermsAcceptance::where('school_id', $user->school_id)
+        ->where('terms_version', SchoolTermsAcceptance::CURRENT_VERSION)
+        ->exists();
 
-    if (!$user->email_verified_at || !$session || $terms < 3) {
+    if (!$user->email_verified_at || !$session || $terms < 3 || !$termsAccepted) {
         return response()->json(['message' => 'Complete activation steps first'], 422);
     }
 
@@ -248,11 +283,17 @@ public function onboardingStatus()
 
     // Count terms for the school
     $termCount = Term::where('school_id', $user->school_id)->whereNull('archived_at')->count();
+    $termsAcceptance = SchoolTermsAcceptance::where('school_id', $user->school_id)
+        ->where('terms_version', SchoolTermsAcceptance::CURRENT_VERSION)
+        ->first();
 
     return response()->json([
         'email_verified' => !is_null($user->email_verified_at),
         'current_session' => (bool) $session,
         'all_terms_exist' => $termCount >= 3,
+        'terms_accepted' => (bool) $termsAcceptance,
+        'terms_version' => SchoolTermsAcceptance::CURRENT_VERSION,
+        'terms_accepted_at' => $termsAcceptance?->accepted_at,
         'bonus_given' => (bool) $user->bonus_given,
     ]);
 }

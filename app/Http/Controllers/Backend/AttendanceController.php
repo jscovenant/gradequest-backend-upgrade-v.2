@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Backend;
 
+use App\Events\AttendanceMarked;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\User;
@@ -9,9 +10,14 @@ use App\Models\Attendance;
 use App\Models\StudentClass;
 use App\Models\TeacherEnrollment;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
+use App\Services\AcademicWeekService;
 
 class AttendanceController extends Controller
 {
+    public function __construct(private AcademicWeekService $academicWeeks)
+    {
+    }
     /**
      * Return classes the logged-in user can take attendance for.
      * - admin: all classes in school
@@ -30,6 +36,7 @@ class AttendanceController extends Controller
                 'role' => 'Admin',
                 'default_class_id' => null,
                 'classes' => $classes,
+                'academic_calendar' => $this->academicWeeks->contextForSchool((int) $schoolId),
             ]);
         }
 
@@ -48,6 +55,7 @@ class AttendanceController extends Controller
                 'role' => 'Teacher',
                 'default_class_id' => $defaultClassId,
                 'classes' => $classes,
+                'academic_calendar' => $this->academicWeeks->contextForSchool((int) $schoolId),
             ]);
         }
 
@@ -73,10 +81,12 @@ class AttendanceController extends Controller
         $request->validate([
             'class_id' => 'required|exists:student_classes,id',
             'date'     => 'nullable|date',
+            'week_number' => 'required|integer|min:1',
         ]);
 
         $classId = (int) $request->query('class_id');
         $date    = $request->query('date') ?? now()->toDateString();
+        $this->validateAcademicWeek($schoolId, $date, (int) $request->query('week_number'));
 
         // authorization: teacher restricted to assigned class
         if ($role === 'teacher') {
@@ -99,7 +109,6 @@ class AttendanceController extends Controller
         }
 
         $students = User::with([
-                'level',
                 'attendances' => function ($q) use ($date) {
                     $q->whereDate('date', $date);
                 }
@@ -107,9 +116,20 @@ class AttendanceController extends Controller
             ->where('role', 'Student')
             ->where('school_id', $schoolId)
             ->where('level_id', $classId)
+            ->select(['id', 'firstname', 'surname', 'reg_no', 'photo', 'level_id', 'school_id'])
             ->get();
 
-        return response()->json($students);
+        return response()->json($students->map(fn (User $student) => [
+            'id' => $student->id,
+            'firstname' => $student->firstname,
+            'surname' => $student->surname,
+            'reg_no' => $student->reg_no,
+            'photo' => $student->photo,
+            'attendances' => $student->attendances->map(fn (Attendance $attendance) => [
+                'status' => $attendance->status,
+                'remarks' => $attendance->remarks,
+            ])->values(),
+        ])->values());
     }
 
     /**
@@ -126,6 +146,7 @@ class AttendanceController extends Controller
         $validated = $request->validate([
             'class_id' => 'required|exists:student_classes,id',
             'date' => 'required|date',
+            'week_number' => 'required|integer|min:1',
             'students' => 'required|array',
             'students.*.student_id' => 'required|exists:users,id',
             'students.*.status' => 'required|in:present,absent,late,excused',
@@ -133,6 +154,7 @@ class AttendanceController extends Controller
         ]);
 
         $classId = (int) $validated['class_id'];
+        $this->validateAcademicWeek($schoolId, $validated['date'], (int) $validated['week_number']);
 
         // admin should be restricted to same school classes
         $classExistsInSchool = StudentClass::where('school_id', $schoolId)
@@ -164,16 +186,18 @@ class AttendanceController extends Controller
 
         $validSet = array_flip($validStudentIds);
 
-        foreach ($validated['students'] as $stu) {
-            $sid = (int) $stu['student_id'];
-            if (!isset($validSet[$sid])) {
-                // skip or block. I recommend block to prevent tampering.
+        foreach ($validated['students'] as $student) {
+            if (! isset($validSet[(int) $student['student_id']])) {
                 return response()->json([
                     'message' => 'Invalid student for this class.',
-                    'student_id' => $sid
+                    'student_id' => (int) $student['student_id'],
                 ], 422);
             }
+        }
 
+        DB::transaction(function () use ($validated, $classId, $schoolId): void {
+        foreach ($validated['students'] as $stu) {
+            $sid = (int) $stu['student_id'];
             Attendance::updateOrCreate(
                 [
                     'student_id' => $sid,
@@ -188,9 +212,26 @@ class AttendanceController extends Controller
             );
         }
 
+        DB::afterCommit(fn () => AttendanceMarked::dispatch(
+            (int) $schoolId,
+            $classId,
+            $validated['date'],
+            collect($validated['students'])->mapWithKeys(
+                fn (array $student) => [(int) $student['student_id'] => $student['status']]
+            )->all(),
+        ));
+        });
+
         return response()->json([
             'message' => 'Attendance saved successfully',
         ], 200);
+    }
+
+    private function validateAcademicWeek(int $schoolId, string $date, int $weekNumber): void
+    {
+        $context = $this->academicWeeks->contextForSchool($schoolId, $date);
+        abort_unless($context['configured'], 422, 'Set the academic session start and end dates before marking attendance.');
+        abort_unless(($context['current_week']['number'] ?? null) === $weekNumber, 422, 'The selected date does not belong to the specified academic week.');
     }
 
     public function report(Request $request)

@@ -21,6 +21,7 @@ class SubscriptionGate
         'fee_management',
         'online_payment',
         'attendance_management',
+        'staff_attendance',
         'parent_management',
         'bursar_management',
         'settings_management',
@@ -74,6 +75,15 @@ class SubscriptionGate
 
         if (! $plan) {
             return $this->deny('plan_missing', 'Subscription plan was not found.', 402);
+        }
+
+        if ($this->requiresGradeQuestPlus($featureKey) && ! $this->isGradeQuestPlusPlan((string) $plan->name)) {
+            return $this->deny(
+                'gradequest_plus_required',
+                'This feature is available only on the GradeQuest Plus package. Please upgrade to continue.',
+                403,
+                ['feature_key' => $featureKey, 'required_plan' => 'GradeQuest Plus']
+            );
         }
 
         $feature = $this->featureConfig($subscription, $featureKey);
@@ -249,9 +259,15 @@ class SubscriptionGate
             'online_payment' => ['online_payment', 'support_online_payment', 'fee_management', 'support_fee_management'],
             'parent_management' => ['parent_management', 'support_parent_management'],
             'bursar_management' => ['bursar_management', 'support_bursar_management'],
+            'hostel_management' => ['hostel_management', 'support_hostel_management'],
+            'transport_management' => ['transport_management', 'support_transport_management'],
             'whatsapp_notifications' => ['whatsapp_notifications', 'support_whatsapp_notifications', 'whatsapp', 'whatsapp_messages'],
             'cbt_online' => ['cbt_online', 'cbt', 'computer_based_test', 'online_cbt', 'support_cbt_online'],
             'cbt_offline' => ['cbt_offline', 'offline_cbt', 'lan_cbt', 'support_cbt_offline'],
+            'ai_cbt_question_generator' => ['ai_cbt_question_generator', 'support_ai_cbt_question_generator', 'ai_question_generator', 'cbt_ai'],
+            'ai_result_comment_generator' => ['ai_result_comment_generator', 'support_ai_result_comment_generator', 'ai_result_comments', 'result_comment_ai'],
+            'ai_lesson_plan_generator' => ['ai_lesson_plan_generator', 'support_ai_lesson_plan_generator', 'lesson_plan_ai', 'ai_lesson_planner'],
+            'ai_fee_collection_assistant' => ['ai_fee_collection_assistant', 'support_ai_fee_collection_assistant', 'ai_fee_assistant', 'fee_collection_ai'],
             'report_card_designer' => ['report_card_designer', 'support_report_card_designer', 'custom_report_designer', 'result_template_designer'],
         ];
 
@@ -267,6 +283,22 @@ class SubscriptionGate
         $key = preg_replace('/[^a-z0-9]+/', '_', $key) ?: '';
 
         return trim($key, '_');
+    }
+
+    private function requiresGradeQuestPlus(string $featureKey): bool
+    {
+        return in_array($this->normalizeFeatureKey($featureKey), [
+            'whatsapp_notifications',
+        ], true);
+    }
+
+    private function isGradeQuestPlusPlan(string $planName): bool
+    {
+        return in_array($this->normalizeFeatureKey($planName), [
+            'gradequest_plus',
+            'gradequestplus',
+            'legacy_plus',
+        ], true);
     }
 
     private function isCoreFeature(string $featureKey): bool
@@ -476,3 +508,5 @@ class SubscriptionGate
         ], $extra);
     }
 }
+
+

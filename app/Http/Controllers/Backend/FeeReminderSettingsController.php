@@ -39,7 +39,28 @@ class FeeReminderSettingsController extends Controller
             'quiet_hours_end' => ['nullable', 'date_format:H:i'],
         ]);
 
+        if ($data['fee_reminders_enabled'] && ! $data['send_email'] && ! $data['send_whatsapp']) {
+            return response()->json([
+                'message' => 'Select at least one reminder delivery channel.',
+                'errors' => ['channels' => ['Enable email or WhatsApp reminders.']],
+            ], 422);
+        }
+
+        if (($data['quiet_hours_start'] === null) !== ($data['quiet_hours_end'] === null)) {
+            return response()->json([
+                'message' => 'Set both quiet-hours times or leave both empty.',
+                'errors' => ['quiet_hours' => ['Both start and end times are required.']],
+            ], 422);
+        }
+
         $s = SchoolSetting::firstOrCreate(['id' => $schoolId], []);
+
+        if ($data['fee_reminders_enabled'] && $data['send_whatsapp'] && ! (bool) $s->whatsapp_enabled) {
+            return response()->json([
+                'message' => 'Enable WhatsApp from WhatsApp Settings before using it for fee reminders.',
+                'errors' => ['send_whatsapp' => ['WhatsApp is disabled for this school.']],
+            ], 422);
+        }
 
         $s->fee_reminders_enabled = (bool)$data['fee_reminders_enabled'];
         $s->fee_reminder_interval_days = (int)$data['interval_days'];

@@ -1477,6 +1477,7 @@ $unpaid = StudentBillingEntitlement::query()
             ['feature_key' => 'fee_management', 'feature_name' => 'Fee Management', 'is_enabled' => true],
             ['feature_key' => 'online_payment', 'feature_name' => 'Online Fee Payment', 'is_enabled' => true],
             ['feature_key' => 'attendance_management', 'feature_name' => 'Attendance', 'is_enabled' => true],
+            ['feature_key' => 'staff_attendance', 'feature_name' => 'Staff Attendance', 'is_enabled' => true],
             ['feature_key' => 'parent_management', 'feature_name' => 'Parent Portal', 'is_enabled' => true],
             ['feature_key' => 'bursar_management', 'feature_name' => 'Bursar Portal', 'is_enabled' => true],
             ['feature_key' => 'settings_management', 'feature_name' => 'School Settings', 'is_enabled' => true],

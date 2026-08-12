@@ -20,7 +20,7 @@ class SalesPayoutWebhookController extends Controller
         $signature = (string) $request->header('x-paystack-signature');
         $payload = $request->getContent();
 
-        if ($secret && ! hash_equals(hash_hmac('sha512', $payload, $secret), $signature)) {
+        if ($secret === '' || $signature === '' || ! hash_equals(hash_hmac('sha512', $payload, $secret), $signature)) {
             return response()->json(['message' => 'Invalid signature.'], 401);
         }
 
@@ -35,11 +35,16 @@ class SalesPayoutWebhookController extends Controller
         $transferCode = $data['transfer_code'] ?? null;
         $transferId = isset($data['id']) ? (string) $data['id'] : null;
 
-        $batch = SalesPayoutBatch::query()
-            ->when($reference, fn ($query) => $query->orWhere('reference', $reference))
-            ->when($transferCode, fn ($query) => $query->orWhere('paystack_transfer_code', $transferCode))
-            ->when($transferId, fn ($query) => $query->orWhere('paystack_transfer_id', $transferId))
-            ->first();
+        if (! $reference && ! $transferCode && ! $transferId) {
+            Log::warning('Sales payout webhook rejected without a transfer identifier', ['event' => $event]);
+            return response()->json(['message' => 'Transfer identifier is required.'], 422);
+        }
+
+        $batch = $reference
+            ? SalesPayoutBatch::where('reference', $reference)->first()
+            : ($transferCode
+                ? SalesPayoutBatch::where('paystack_transfer_code', $transferCode)->first()
+                : SalesPayoutBatch::where('paystack_transfer_id', $transferId)->first());
 
         if (! $batch) {
             Log::warning('Sales payout webhook received for unknown transfer', [
@@ -52,8 +57,19 @@ class SalesPayoutWebhookController extends Controller
             return response()->json(['status' => 'unknown_transfer']);
         }
 
+        if (isset($data['amount']) && (int) $data['amount'] !== (int) round(((float) $batch->total_amount) * 100)) {
+            Log::critical('Sales payout webhook amount mismatch', [
+                'batch_id' => $batch->id,
+                'expected_amount' => (int) round(((float) $batch->total_amount) * 100),
+                'received_amount' => (int) $data['amount'],
+            ]);
+            return response()->json(['message' => 'Transfer amount does not match payout batch.'], 422);
+        }
+
         if ($event === 'transfer.success') {
             $this->payoutService->markSuccessful($batch, $data);
+        } elseif ($event === 'transfer.reversed') {
+            $this->payoutService->markFailed($batch, 'Transfer reversed by Paystack.', $data, 'reversed');
         } else {
             $this->payoutService->markFailed(
                 $batch,

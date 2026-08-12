@@ -47,6 +47,13 @@ class GradequestBillingPolicyController extends Controller
             'offline_grace_days' => 'required|integer|min:0|max:90',
             'offline_school_block_enabled' => 'required|boolean',
             'platform_fee_per_student' => 'required|numeric|min:0|max:10000000',
+            'whatsapp_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
+            'legacy_plus_ai_credits' => 'required|integer|min:0|max:10000000',
+            'ai_result_comment_credit_cost' => 'required|integer|min:1|max:1000000',
+            'ai_cbt_question_credit_cost' => 'required|integer|min:1|max:1000000',
+            'ai_lesson_plan_credit_cost' => 'required|integer|min:1|max:1000000',
+            'ai_fee_collection_credit_cost' => 'required|integer|min:1|max:1000000',
+            'ai_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
             'legacy_subscription_honor_enabled' => 'required|boolean',
             'per_student_billing_starts_at' => 'nullable|date',
             'temporary_access_min_days' => 'required|integer|min:1|max:30',
@@ -263,6 +270,13 @@ class GradequestBillingPolicyController extends Controller
             'offline_grace_days' => 7,
             'offline_school_block_enabled' => true,
             'platform_fee_per_student' => 1000,
+            'whatsapp_credit_unit_price' => 10,
+            'legacy_plus_ai_credits' => 100,
+            'ai_result_comment_credit_cost' => 1,
+            'ai_cbt_question_credit_cost' => 5,
+            'ai_lesson_plan_credit_cost' => 3,
+            'ai_fee_collection_credit_cost' => 2,
+            'ai_credit_unit_price' => 25,
             'legacy_subscription_honor_enabled' => true,
             'per_student_billing_starts_at' => now(),
             'temporary_access_min_days' => 3,
@@ -291,3 +305,5 @@ class GradequestBillingPolicyController extends Controller
         abort_unless($user && $user->isSuperAdminUser(), 403);
     }
 }
+
+

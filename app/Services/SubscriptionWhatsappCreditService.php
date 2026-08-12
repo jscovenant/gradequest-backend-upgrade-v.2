@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Subscription;
 use App\Models\SubscriptionWhatsappUsage;
 use App\Models\User;
+use App\Models\WhatsappCreditTransaction;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -94,9 +95,13 @@ class SubscriptionWhatsappCreditService
         return $usage;
     }
 
-    public function consumeCredits(int $schoolId, int $cost = 1): SubscriptionWhatsappUsage
+    public function consumeCredits(int $schoolId, int $cost = 1, ?string $reference = null, ?int $messageId = null): SubscriptionWhatsappUsage
     {
-        return DB::transaction(function () use ($schoolId, $cost) {
+        return DB::transaction(function () use ($schoolId, $cost, $reference, $messageId) {
+            if ($reference && WhatsappCreditTransaction::query()->where('reference', $reference)->exists()) {
+                return $this->getOrCreateCurrentCycleUsage($schoolId);
+            }
+
             $usage = $this->getOrCreateCurrentCycleUsage($schoolId);
 
             $usage = SubscriptionWhatsappUsage::query()
@@ -115,6 +120,15 @@ class SubscriptionWhatsappCreditService
                 'used_credits' => $usage->used_credits + $cost,
             ]);
 
+            WhatsappCreditTransaction::query()->create([
+                'school_id' => $schoolId,
+                'subscription_whatsapp_usage_id' => $usage->id,
+                'whatsapp_message_id' => $messageId,
+                'type' => 'consumption',
+                'credits' => -$cost,
+                'reference' => $reference ?: 'consume:' . bin2hex(random_bytes(16)),
+            ]);
+
             return $usage->fresh();
         });
     }
@@ -131,6 +145,53 @@ class SubscriptionWhatsappCreditService
             'cycle_end' => optional($usage->cycle_end)->toDateString(),
             'subscription_id' => (int) $usage->subscription_id,
         ];
+    }
+
+    public function addPurchasedCredits(int $schoolId, int $quantity, ?string $reference = null): SubscriptionWhatsappUsage
+    {
+        return DB::transaction(function () use ($schoolId, $quantity, $reference) {
+            if ($reference && WhatsappCreditTransaction::query()->where('reference', $reference)->exists()) {
+                return $this->getOrCreateCurrentCycleUsage($schoolId);
+            }
+
+            $usage = $this->getOrCreateCurrentCycleUsage($schoolId);
+            $usage = SubscriptionWhatsappUsage::query()->lockForUpdate()->findOrFail($usage->id);
+            $usage->increment('allocated_credits', $quantity);
+
+            WhatsappCreditTransaction::query()->create([
+                'school_id' => $schoolId,
+                'subscription_whatsapp_usage_id' => $usage->id,
+                'type' => 'purchase',
+                'credits' => $quantity,
+                'reference' => $reference ?: 'purchase:' . bin2hex(random_bytes(16)),
+            ]);
+
+            return $usage->fresh();
+        });
+    }
+
+    public function refundCredits(int $schoolId, int $cost, string $reference, ?int $messageId = null): SubscriptionWhatsappUsage
+    {
+        return DB::transaction(function () use ($schoolId, $cost, $reference, $messageId) {
+            if (WhatsappCreditTransaction::query()->where('reference', $reference)->exists()) {
+                return $this->getOrCreateCurrentCycleUsage($schoolId);
+            }
+
+            $usage = $this->getOrCreateCurrentCycleUsage($schoolId);
+            $usage = SubscriptionWhatsappUsage::query()->lockForUpdate()->findOrFail($usage->id);
+            $usage->update(['used_credits' => max(0, (int) $usage->used_credits - $cost)]);
+
+            WhatsappCreditTransaction::query()->create([
+                'school_id' => $schoolId,
+                'subscription_whatsapp_usage_id' => $usage->id,
+                'whatsapp_message_id' => $messageId,
+                'type' => 'refund',
+                'credits' => $cost,
+                'reference' => $reference,
+            ]);
+
+            return $usage->fresh();
+        });
     }
 
     private function resolveCycleDates(Subscription $subscription): array

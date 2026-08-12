@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class WhatsappMessage extends Model
 {
+    use BelongsToSchool;
     use HasFactory;
 
 
@@ -40,5 +42,4 @@ class WhatsappMessage extends Model
         'credit_cost' => 'integer',
     ];
 }
-
 

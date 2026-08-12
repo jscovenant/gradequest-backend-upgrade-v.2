@@ -12,6 +12,10 @@ class WhatsAppService
 {
     protected ?Client $client = null;
 
+    public function __construct(private readonly SubscriptionWhatsappCreditService $credits)
+    {
+    }
+
     public function isConfigured(): bool
     {
         return filled(config('services.twilio.sid'))
@@ -153,16 +157,23 @@ class WhatsAppService
 
     public function quotaSummary(?SchoolSetting $school): array
     {
-        $limit = (int) ($school?->whatsapp_monthly_limit ?? 0);
-        $used = (int) ($school?->whatsapp_messages_sent ?? 0);
+        if (! $school) {
+            return ['limit' => 0, 'used' => 0, 'remaining' => 0, 'unlimited' => false, 'has_access' => false];
+        }
 
-        return [
-            'limit' => $limit,
-            'used' => $used,
-            'remaining' => $limit === -1 ? null : max(0, $limit - $used),
-            'unlimited' => $limit === -1,
-            'has_access' => $limit === -1 || $limit > 0,
-        ];
+        try {
+            $summary = $this->credits->getCreditSummary((int) $school->id);
+
+            return [
+                'limit' => (int) $summary['allocated_credits'],
+                'used' => (int) $summary['used_credits'],
+                'remaining' => (int) $summary['remaining_credits'],
+                'unlimited' => false,
+                'has_access' => true,
+            ];
+        } catch (\Throwable) {
+            return ['limit' => 0, 'used' => 0, 'remaining' => 0, 'unlimited' => false, 'has_access' => false];
+        }
     }
 
     private function hasQuota(SchoolSetting $school): bool
@@ -178,7 +189,7 @@ class WhatsAppService
 
     private function incrementUsage(SchoolSetting $school): void
     {
-        $school->increment('whatsapp_messages_sent');
+        $this->credits->consumeCredits((int) $school->id);
     }
 
     private function makePublicAndGetUrl(string $filePath, string $filename): ?string

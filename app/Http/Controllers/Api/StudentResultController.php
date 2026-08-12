@@ -9,6 +9,7 @@ use App\Http\Requests\Result\GetReportCardRequest;
 use App\Models\AcademicSession;
 use App\Models\SchoolSetting;
 use App\Models\ResultTemplateSetting;
+use App\Models\ResultBatch;
 use App\Models\StudentClass;
 use App\Models\Subject;
 use App\Models\Term;
@@ -18,11 +19,15 @@ use App\Services\SchoolBillingService;
 use App\Services\SchoolFeeAccessPolicyService;
 use App\Services\Results\SubjectService;
 use App\Services\Results\ResultComputeService;
+use App\Services\Results\AiResultCommentGeneratorService;
 use App\Services\ResultService;
+use App\Services\SubscriptionGate;
+use App\Services\SubscriptionAiCreditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Http\Request;
 use App\Models\TeacherEnrollment;
 use App\Jobs\UpdateResultSubmissionMonitorJob;
@@ -77,7 +82,7 @@ public function findByAdmissionNo($admissionNo)
         ->where('school_id', $auth->school_id)
         ->with(['level', 'department']);
 
-    // ✅ Restrict teachers to only their assigned class students
+    // Ã¢Å“â€¦ Restrict teachers to only their assigned class students
     if ($auth->role === 'Teacher') {
         $studentQuery->whereIn('level_id', $allowedLevelIds);
     }
@@ -131,9 +136,7 @@ public function findByAdmissionNo($admissionNo)
         'term'     => $activeTermName,
         'session'  => $currentSessionName,
         'subjects' => $subjects,
-        'warnings' => !$student->department_id
-            ? ['Student has no department assigned, so no subjects were returned.']
-            : [],
+        'warnings' => [],
     ]);
 }
 
@@ -151,7 +154,7 @@ public function carryOverPreview(Request $request, User $student)
 
     $request->validate([
         'session' => 'required|string',
-        // optional; if not passed, we’ll use active term
+        // optional; if not passed, weÃ¢â‚¬â„¢ll use active term
         'term' => 'nullable|string',
     ]);
 
@@ -506,6 +509,157 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
 
 
+
+  public function generateAiComments(Request $request, int $batch, int $student, AiResultCommentGeneratorService $service): JsonResponse
+  {
+      $authUser = $request->user();
+      if (! $authUser) {
+          return response()->json(['message' => 'Unauthenticated.'], 401);
+      }
+
+      $batchModel = ResultBatch::query()->where('id', $batch)->first();
+      if (! $batchModel) {
+          return response()->json(['message' => 'Batch not found'], 404);
+      }
+
+      if ((int) $authUser->school_id !== (int) $batchModel->school_id) {
+          return response()->json(['message' => 'You are not allowed to access this result batch.'], 403);
+      }
+
+      $studentModel = User::query()
+          ->where('id', $student)
+          ->where('school_id', (int) $batchModel->school_id)
+          ->whereRaw('LOWER(role) = ?', ['student'])
+          ->with(['level', 'department'])
+          ->first();
+
+      if (! $studentModel || (int) $studentModel->level_id !== (int) $batchModel->class_id) {
+          return response()->json(['message' => 'This student does not belong to the selected result batch class.'], 403);
+      }
+
+      $role = strtolower((string) $authUser->role);
+      if ($role === 'teacher') {
+          $assigned = TeacherEnrollment::query()
+              ->where('school_id', (int) $batchModel->school_id)
+              ->where('user_id', (int) $authUser->id)
+              ->where('enroll', '1')
+              ->where('level_id', (int) $batchModel->class_id)
+              ->exists();
+
+          if (! $assigned) {
+              return response()->json(['message' => 'You can only generate comments for students in your assigned class.'], 403);
+          }
+      } elseif (! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+          return response()->json(['message' => 'Only authorized school staff can generate result comments.'], 403);
+      }
+
+      $featureAccess = app(SubscriptionGate::class)->inspect($authUser, 'ai_result_comment_generator');
+      if (! ($featureAccess['allowed'] ?? false)) {
+          return response()->json([
+              'message' => $featureAccess['message'] ?? 'AI result comments are not included in your current package.',
+              'feature' => $featureAccess,
+          ], (int) ($featureAccess['status'] ?? 403));
+      }
+
+      $aiCredits = app(SubscriptionAiCreditService::class);
+      $creditCost = $aiCredits->costForFeature('ai_result_comment_generator');
+      $creditUsage = $aiCredits->assertCreditsAvailable((int) $authUser->school_id, 'ai_result_comment_generator', $creditCost);
+
+      $payload = $request->validate([
+          'summary' => ['nullable', 'array'],
+          'summary.total_average' => ['nullable', 'numeric'],
+          'summary.total_grade' => ['nullable', 'string', 'max:20'],
+          'summary.position' => ['nullable', 'string', 'max:50'],
+          'summary.class_size' => ['nullable', 'string', 'max:50'],
+          'subjects' => ['required', 'array', 'min:1'],
+          'subjects.*.subject_name' => ['nullable', 'string', 'max:120'],
+          'subjects.*.subject_id' => ['nullable', 'integer'],
+          'subjects.*.ca' => ['nullable', 'array'],
+          'subjects.*.exam' => ['nullable', 'numeric'],
+          'subjects.*.total' => ['nullable', 'numeric'],
+          'subjects.*.grade' => ['nullable', 'string', 'max:20'],
+          'subjects.*.remark' => ['nullable', 'string', 'max:255'],
+          'attendance' => ['nullable', 'array'],
+          'behavior_notes' => ['nullable', 'string', 'max:1000'],
+          'performance_trend' => ['nullable', 'string', 'max:1000'],
+      ]);
+
+      try {
+          $result = $service->generate($batchModel, $studentModel, $payload);
+
+          $creditUsage = $aiCredits->consumeCredits((int) $authUser->school_id, 'ai_result_comment_generator', $creditCost, 'ai-result-comment:' . $batch . ':' . $student . ':' . now()->format('YmdHis'), [
+              'batch_id' => $batch,
+              'student_id' => $student,
+          ]);
+
+          $this->logAiResultCommentUsage($request, 'completed', $result['usage'] ?? [], [
+              'batch_id' => $batch,
+              'student_id' => $student,
+              'term' => $batchModel->term,
+              'session' => $batchModel->session,
+          ], (int) $creditUsage->id, $creditCost);
+
+          return response()->json([
+              'message' => 'AI comments generated. Please review before saving.',
+              'comments' => $result['comments'],
+              'usage' => $result['usage'] ?? null,
+              'ai_credits' => [
+                  'charged' => $creditCost,
+                  'remaining' => $creditUsage->remainingCredits(),
+              ],
+          ]);
+      } catch (\Throwable $e) {
+          Log::warning('AI result comment generation failed', [
+              'school_id' => $authUser->school_id,
+              'user_id' => $authUser->id,
+              'batch_id' => $batch,
+              'student_id' => $student,
+              'error' => $e->getMessage(),
+          ]);
+
+          $this->logAiResultCommentUsage($request, 'failed', [], [
+              'batch_id' => $batch,
+              'student_id' => $student,
+              'error' => $e->getMessage(),
+          ]);
+
+          return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
+      }
+  }
+
+  private function logAiResultCommentUsage(Request $request, string $status, array $usage = [], array $metadata = [], ?int $creditUsageId = null, int $creditsCharged = 0): void
+  {
+      if (! Schema::hasTable('ai_usage_logs')) {
+          return;
+      }
+
+      $row = [
+          'school_id' => $request->user()?->school_id,
+          'user_id' => $request->user()?->id,
+          'feature_key' => 'ai_result_comment_generator',
+          'provider' => 'openai',
+          'model' => $usage['model'] ?? config('openai.model'),
+          'input_tokens' => (int) ($usage['input_tokens'] ?? 0),
+          'output_tokens' => (int) ($usage['output_tokens'] ?? 0),
+          'total_tokens' => (int) ($usage['total_tokens'] ?? 0),
+          'items_generated' => $status === 'completed' ? 3 : 0,
+          'status' => $status,
+          'metadata' => json_encode($metadata),
+          'created_at' => now(),
+          'updated_at' => now(),
+      ];
+
+      if (Schema::hasColumn('ai_usage_logs', 'subscription_ai_usage_id')) {
+          $row['subscription_ai_usage_id'] = $creditUsageId;
+      }
+
+      if (Schema::hasColumn('ai_usage_logs', 'credits_charged')) {
+          $row['credits_charged'] = $creditsCharged;
+      }
+
+      DB::table('ai_usage_logs')->insert($row);
+  }
+
   /**
    * Fetch a student result within a batch (v2 only), including its subject rows.
    */
@@ -654,7 +808,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                         'logo' => $this->getBase64Image($school->logo),
                         'principal_signature' => $this->getBase64Image($school->principal_signature),
 
-                        // ✅ Theme colors
+                        // Ã¢Å“â€¦ Theme colors
                         'primary_color' => $school->primary_color ?? '#0d47a1',
                         'secondary_color' => $school->secondary_color ?? '#ffc107',
                         'background_color' => $school->background_color ?? '#ffffff',
@@ -682,17 +836,17 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
 
         $legacy['source'] = 'legacy';
 
-        // ✅ Ensure school_info exists
+        // Ã¢Å“â€¦ Ensure school_info exists
         if (!isset($legacy['school_info']) || !is_array($legacy['school_info'])) {
             $legacy['school_info'] = [];
         }
 
-        // ✅ Inject theme colors into legacy payload too
+        // Ã¢Å“â€¦ Inject theme colors into legacy payload too
         $legacy['school_info']['primary_color'] = $school->primary_color ?? '#0d47a1';
         $legacy['school_info']['secondary_color'] = $school->secondary_color ?? '#ffc107';
         $legacy['school_info']['background_color'] = $school->background_color ?? '#ffffff';
 
-        // ✅ Optional: make sure legacy also uses base64 images consistently
+        // Ã¢Å“â€¦ Optional: make sure legacy also uses base64 images consistently
         // If your legacy builder already returns base64, you can remove these 2 lines.
         if (empty($legacy['school_info']['logo'])) {
             $legacy['school_info']['logo'] = $this->getBase64Image($school->logo);
@@ -701,7 +855,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
             $legacy['school_info']['principal_signature'] = $this->getBase64Image($school->principal_signature);
         }
 
-        // ✅ Also ensure basic school metadata exists
+        // Ã¢Å“â€¦ Also ensure basic school metadata exists
         $legacy['school_info']['name'] = $legacy['school_info']['name'] ?? $school->school_name;
         $legacy['school_info']['address'] = $legacy['school_info']['address'] ?? $school->address;
         $legacy['school_info']['phone'] = $legacy['school_info']['phone'] ?? $school->phone;
@@ -835,3 +989,9 @@ private function getBase64Image($path)
            . base64_encode(file_get_contents(public_path($path)));
 }
   }
+
+
+
+
+
+

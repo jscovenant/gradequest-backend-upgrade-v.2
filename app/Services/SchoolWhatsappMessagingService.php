@@ -36,6 +36,16 @@ class SchoolWhatsappMessagingService
             ]);
         }
 
+        if ($studentUserId && ! User::query()
+            ->whereKey($studentUserId)
+            ->where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->exists()) {
+            throw ValidationException::withMessages([
+                'student' => 'Student not found.',
+            ]);
+        }
+
         if (!$parent->whatsapp_no || !$parent->whatsapp_verified_at) {
             throw ValidationException::withMessages([
                 'parent' => 'Parent WhatsApp number is not verified.',
@@ -85,7 +95,7 @@ class SchoolWhatsappMessagingService
             );
 
             DB::transaction(function () use ($schoolId, $creditCost, $message, $response) {
-                $this->credits->consumeCredits($schoolId, $creditCost);
+                $this->credits->consumeCredits($schoolId, $creditCost, 'whatsapp-message:' . $message->id, $message->id);
 
                 $message->update([
                     'status' => 'sent',

@@ -9,11 +9,14 @@ use App\Models\CbtExamSection;
 use App\Models\CbtQuestion;
 use App\Models\CbtQuestionGroup;
 use App\Services\Cbt\CbtQuestionImportService;
+use App\Services\Cbt\AiCbtQuestionGeneratorService;
 use App\Services\CbtAccessService;
+use App\Services\SubscriptionAiCreditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use App\Exports\ResultTemplateExport;
@@ -294,6 +297,83 @@ class CbtExamController extends Controller
     public function importWordQuestions(Request $request, CbtExam $exam, CbtQuestionImportService $service): JsonResponse
     {
         return $this->importQuestions($request, $exam, $service);
+    }
+
+    public function generateAiQuestions(Request $request, CbtExam $exam, AiCbtQuestionGeneratorService $service): JsonResponse
+    {
+        $this->ensureSameSchool($request, $exam);
+        $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
+        $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
+        abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
+        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before generating questions.');
+
+        $aiCredits = app(SubscriptionAiCreditService::class);
+        $creditCost = $aiCredits->costForFeature('ai_cbt_question_generator');
+        $aiCredits->assertCreditsAvailable((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost);
+
+        $data = $request->validate([
+            'source_file' => ['nullable', 'file', 'mimes:docx,txt', 'max:5120'],
+            'source_text' => ['nullable', 'string'],
+            'topics' => ['nullable', 'string', 'max:1000'],
+            'question_count' => ['required', 'integer', 'min:1', 'max:80'],
+            'difficulty' => ['nullable', Rule::in(['easy', 'normal', 'hard', 'mixed'])],
+            'marks_per_question' => ['nullable', 'numeric', 'min:0.5', 'max:100'],
+            'formats' => ['required', 'array', 'min:1'],
+            'formats.*' => ['required', Rule::in(['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'theory', 'comprehension'])],
+        ]);
+
+        try {
+            $result = $service->generate($exam->load(['subject', 'class', 'section', 'department']), $data);
+        } catch (\Throwable $exception) {
+            $this->logAiUsage($request, 'ai_cbt_question_generator', 'failed', [], ['error' => $exception->getMessage(), 'exam_id' => $exam->id]);
+
+            return response()->json([
+                'message' => 'Something went wrong while processing this AI request. Please try again later.',
+            ], 422);
+        }
+
+        $questionCount = (int) data_get($result, 'draft.summary.questions_detected', 0);
+        $creditUsage = $aiCredits->consumeCredits((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, 'ai-cbt-question:' . $exam->id . ':' . now()->format('YmdHis'), [
+            'exam_id' => $exam->id,
+            'question_count' => $questionCount,
+        ]);
+
+        $this->logAiUsage($request, 'ai_cbt_question_generator', 'success', $result['usage'] ?? [], [
+            'exam_id' => $exam->id,
+            'question_count' => $questionCount,
+            'topics' => $data['topics'] ?? null,
+            'formats' => $data['formats'] ?? [],
+        ], (int) $creditUsage->id, $creditCost);
+
+        return response()->json([
+            'message' => 'AI questions generated. Review before importing.',
+            'draft' => $result['draft'],
+            'ai_credits' => [
+                'charged' => $creditCost,
+                'remaining' => $creditUsage->remainingCredits(),
+            ],
+        ]);
+    }
+    public function importAiQuestions(Request $request, CbtExam $exam): JsonResponse
+    {
+        $this->ensureSameSchool($request, $exam);
+        $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
+        $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
+        abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
+        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before importing AI questions.');
+
+        $data = $request->validate([
+            'draft' => ['required', 'array'],
+            'draft.sections' => ['required', 'array', 'min:1'],
+        ]);
+
+        $imported = $this->importAiDraft($exam, $data['draft']);
+
+        return response()->json([
+            'message' => "{$imported} AI question(s) imported into this exam.",
+            'imported_count' => $imported,
+            'exam' => $exam->fresh(['sections.questionGroups.questions.options', 'sections.questions.options', 'questionGroups.questions.options', 'questions.options']),
+        ], 201);
     }
 
     public function downloadQuestionTemplate(Request $request, CbtExam $exam, string $format)
@@ -671,6 +751,125 @@ Fruits | 4 | 200',
         ]);
     }
 
+    private function importAiDraft(CbtExam $exam, array $draft): int
+    {
+        return DB::transaction(function () use ($exam, $draft) {
+            $questionCount = (int) $exam->questions()->count();
+            $sectionCount = (int) $exam->sections()->count();
+            $groupCount = (int) $exam->questionGroups()->count();
+            $imported = 0;
+
+            foreach (($draft['sections'] ?? []) as $sectionData) {
+                if (! is_array($sectionData)) {
+                    continue;
+                }
+
+                $sectionTitle = trim((string) ($sectionData['title'] ?? 'AI Generated Questions')) ?: 'AI Generated Questions';
+                $section = CbtExamSection::firstOrCreate(['exam_id' => $exam->id, 'title' => $sectionTitle], ['instructions' => $sectionData['instructions'] ?? null, 'sort_order' => ++$sectionCount, 'default_marks' => 1]);
+
+                foreach (($sectionData['questions'] ?? []) as $questionData) {
+                    if ($this->createAiQuestion($exam, $questionData, $section->id, null, ++$questionCount)) {
+                        $imported++;
+                    }
+                }
+
+                foreach (($sectionData['groups'] ?? []) as $groupData) {
+                    if (! is_array($groupData)) {
+                        continue;
+                    }
+
+                    $group = CbtQuestionGroup::create([
+                        'exam_id' => $exam->id,
+                        'section_id' => $section->id,
+                        'group_type' => in_array(($groupData['group_type'] ?? 'comprehension'), ['instruction', 'comprehension', 'case_study'], true) ? $groupData['group_type'] : 'comprehension',
+                        'title' => $groupData['title'] ?? 'AI Generated Passage',
+                        'instructions' => $groupData['instructions'] ?? null,
+                        'passage' => $groupData['passage'] ?? null,
+                        'sort_order' => ++$groupCount,
+                    ]);
+
+                    foreach (($groupData['questions'] ?? []) as $questionData) {
+                        if ($this->createAiQuestion($exam, $questionData, $section->id, $group->id, ++$questionCount)) {
+                            $imported++;
+                        }
+                    }
+                }
+            }
+
+            $exam->update(['total_marks' => (float) $exam->questions()->sum('marks')]);
+
+            return $imported;
+        });
+    }
+
+    private function createAiQuestion(CbtExam $exam, mixed $questionData, ?int $sectionId, ?int $groupId, int $sortOrder): bool
+    {
+        if (! is_array($questionData) || trim((string) ($questionData['question_text'] ?? '')) === '') {
+            return false;
+        }
+
+        $type = $questionData['question_type'] ?? 'single_choice';
+        $type = in_array($type, ['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'theory'], true) ? $type : 'single_choice';
+        $answers = is_array($questionData['correct_answer'] ?? null) ? array_values($questionData['correct_answer']) : [];
+
+        $question = $exam->questions()->create([
+            'section_id' => $sectionId,
+            'question_group_id' => $groupId,
+            'question_type' => $type,
+            'question_text' => $this->sanitizeCbtHtml((string) $questionData['question_text']),
+            'instructions' => ! empty($questionData['instructions']) ? $this->sanitizeCbtHtml((string) $questionData['instructions']) : null,
+            'explanation' => ! empty($questionData['explanation']) ? $this->sanitizeCbtHtml((string) $questionData['explanation']) : null,
+            'marks' => max(0.5, (float) ($questionData['marks'] ?? 1)),
+            'sort_order' => $sortOrder,
+            'difficulty' => $questionData['difficulty'] ?? 'normal',
+            'correct_answer' => $answers,
+            'metadata' => ['generated_by' => 'openai', 'source' => 'ai_cbt_question_generator'],
+        ]);
+
+        foreach (($questionData['options'] ?? []) as $index => $option) {
+            if (! is_array($option) || trim((string) ($option['option_text'] ?? '')) === '') {
+                continue;
+            }
+
+            $label = strtoupper((string) ($option['label'] ?? chr(65 + $index)));
+            $question->options()->create(['label' => $label, 'option_text' => $this->sanitizeCbtHtml((string) $option['option_text']), 'is_correct' => in_array($label, $answers, true), 'sort_order' => $index + 1]);
+        }
+
+        return true;
+    }
+
+    private function logAiUsage(Request $request, string $featureKey, string $status, array $usage = [], array $metadata = [], ?int $creditUsageId = null, int $creditsCharged = 0): void
+    {
+        if (! Schema::hasTable('ai_usage_logs')) {
+            return;
+        }
+
+        $row = [
+            'school_id' => $request->user()?->school_id,
+            'user_id' => $request->user()?->id,
+            'feature_key' => $featureKey,
+            'provider' => 'openai',
+            'model' => $usage['model'] ?? config('openai.model'),
+            'input_tokens' => (int) ($usage['input_tokens'] ?? 0),
+            'output_tokens' => (int) ($usage['output_tokens'] ?? 0),
+            'total_tokens' => (int) ($usage['total_tokens'] ?? 0),
+            'items_generated' => (int) ($metadata['question_count'] ?? 0),
+            'status' => $status,
+            'metadata' => json_encode($metadata),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ];
+
+        if (Schema::hasColumn('ai_usage_logs', 'subscription_ai_usage_id')) {
+            $row['subscription_ai_usage_id'] = $creditUsageId;
+        }
+
+        if (Schema::hasColumn('ai_usage_logs', 'credits_charged')) {
+            $row['credits_charged'] = $creditsCharged;
+        }
+
+        DB::table('ai_usage_logs')->insert($row);
+    }
     private function validateQuestion(Request $request): array
     {
         $data = $request->validate([
@@ -929,3 +1128,5 @@ Fruits | 4 | 200',
         }
     }
 }
+
+

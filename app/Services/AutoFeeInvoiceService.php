@@ -2,258 +2,250 @@
 
 namespace App\Services;
 
+use App\Models\SchoolBankAccount;
 use App\Models\SchoolSetting;
+use App\Models\StudentFee;
 use App\Models\User;
 use App\Notifications\FeeInvoiceReminderNotification;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class AutoFeeInvoiceService
 {
-  
+    public function __construct(
+        private readonly WhatsAppService $whatsapp,
+        private readonly FeeReminderSchedulePolicy $schedulePolicy
+    ) {}
 
-    public function run(int $cooldownHours = 24): array
-    {
-        return $this->runCombinedParentReminders($cooldownHours);
-    }
-
-    public function runCombinedParentReminders(int $cooldownHours = 24): array
+    public function run(?int $onlySchoolId = null): array
     {
         $notified = 0;
         $skipped = 0;
 
-
-        
-
-
         $parentGroups = DB::table('parent_students')
             ->select('school_id', 'parent_id', 'student_id')
+            ->when($onlySchoolId, fn ($query) => $query->where('school_id', $onlySchoolId))
             ->whereNotNull('school_id')
             ->whereNotNull('parent_id')
             ->whereNotNull('student_id')
             ->get()
-            ->groupBy(function ($row) {
-                return $row->school_id . ':' . $row->parent_id;
-            });
+            ->groupBy(fn ($row) => $row->school_id . ':' . $row->parent_id);
 
         foreach ($parentGroups as $group) {
             $schoolId = (int) $group->first()->school_id;
             $parentId = (int) $group->first()->parent_id;
-            $studentIds = $group->pluck('student_id')->unique()->map(fn ($id) => (int) $id)->values();
-
-            if ($studentIds->isEmpty()) {
-                $skipped++;
-                continue;
-            }
-
+            $studentIds = $group->pluck('student_id')->map(fn ($id) => (int) $id)->unique()->values();
+            $settings = SchoolSetting::find($schoolId);
             $parent = User::find($parentId);
-            if (!$parent) {
-                Log::warning('Combined fee reminder skipped: parent not found', [
-                    'school_id' => $schoolId,
-                    'parent_id' => $parentId,
-                ]);
+
+            if (! $settings || ! $parent || $studentIds->isEmpty() || ! (bool) $settings->fee_reminders_enabled) {
                 $skipped++;
                 continue;
             }
 
-            // IMPORTANT:
-            // If your school_settings is linked differently, adjust this lookup.
-            $settings = SchoolSetting::where('id', $schoolId)->first();
-
-            if (!$settings) {
-                Log::warning('Combined fee reminder skipped: school settings not found', [
-                    'school_id' => $schoolId,
-                    'parent_id' => $parentId,
-                ]);
+            if ($this->schedulePolicy->isWithinQuietHours(
+                $settings->fee_reminder_quiet_hours_start,
+                $settings->fee_reminder_quiet_hours_end,
+                now()
+            )) {
                 $skipped++;
                 continue;
             }
 
-            if (!(bool) ($settings->fee_reminders_enabled ?? true)) {
-                $skipped++;
-                continue;
-            }
-
-            if (!$this->canSendCombinedReminder($schoolId, $parentId, $cooldownHours)) {
-                $skipped++;
-                continue;
-            }
-
-            $students = DB::table('users')
-                ->whereIn('id', $studentIds)
-                ->select('id', 'firstname', 'surname', 'role')
-                ->get()
-                ->mapWithKeys(function ($student) {
-                    $name = trim(($student->firstname ?? '') . ' ' . ($student->surname ?? ''));
-                    if ($name === '') {
-                        $name = $student->role ?? 'Student';
-                    }
-
-                    return [(int) $student->id => $name];
-                });
-
-            $feeRows = DB::table('student_fees as sf')
-                ->leftJoin('fee_types as ft', 'ft.id', '=', 'sf.fee_type_id')
-                ->where('sf.school_id', $schoolId)
-                ->whereIn('sf.student_id', $studentIds->all())
-                ->where('sf.balance', '>', 0)
-                ->select([
-                    'sf.id',
-                    'sf.student_id',
-                    'sf.school_id',
-                    'sf.fee_type_id',
-                    'sf.term_id',
-                    'sf.session_id',
-                    'sf.total_amount',
-                    'sf.amount_paid',
-                    'sf.balance',
-                    DB::raw('COALESCE(ft.name, "School Fee") as fee_title'),
-                ])
-                ->orderBy('sf.student_id')
-                ->orderBy('sf.id')
+            $fees = StudentFee::query()
+                ->with(['student', 'feeType', 'term', 'session'])
+                ->where('school_id', $schoolId)
+                ->whereIn('student_id', $studentIds)
+                ->where('balance', '>', 0)
+                ->orderBy('student_id')
+                ->orderBy('id')
                 ->get();
 
-            if ($feeRows->isEmpty()) {
+            if ($fees->isEmpty()) {
                 $skipped++;
                 continue;
             }
 
-            $childrenMap = [];
-            $totalAmount = 0.0;
-            $totalPaid = 0.0;
-            $totalBalance = 0.0;
+            $scopeKey = $this->scopeKey($fees);
+            $scopeLogs = $this->logsForScope($schoolId, $parentId, $scopeKey);
+            $maxCount = max(0, (int) ($settings->fee_reminder_max_count ?? 6));
 
-            foreach ($feeRows as $row) {
-                $studentId = (int) $row->student_id;
-                $studentName = $students[$studentId] ?? 'Student';
+            $lastSentAt = $scopeLogs->first()?->sent_at
+                ? \Illuminate\Support\Carbon::parse($scopeLogs->first()->sent_at)
+                : null;
 
-                if (!isset($childrenMap[$studentId])) {
-                    $childrenMap[$studentId] = [
-                        'student_id' => $studentId,
-                        'student_name' => $studentName,
-                        'items' => [],
-                    ];
-                }
-
-                $amount = (float) ($row->total_amount ?? 0);
-                $paid = (float) ($row->amount_paid ?? 0);
-                $balance = (float) ($row->balance ?? 0);
-
-                $childrenMap[$studentId]['items'][] = [
-                    'fee_title' => $row->fee_title ?? 'School Fee',
-                    'amount' => $amount,
-                    'paid' => $paid,
-                    'balance' => $balance,
-                    'term_id' => $row->term_id,
-                    'session_id' => $row->session_id,
-                ];
-
-                $totalAmount += $amount;
-                $totalPaid += $paid;
-                $totalBalance += $balance;
+            if ($this->schedulePolicy->maxReached($scopeLogs->count(), $maxCount)
+                || ! $this->schedulePolicy->intervalHasElapsed(
+                    $lastSentAt,
+                    (int) ($settings->fee_reminder_interval_days ?? 5),
+                    now()
+                )) {
+                $skipped++;
+                continue;
             }
 
-            $children = array_values($childrenMap);
+            $sendEmail = (bool) ($settings->fee_reminder_send_email ?? true) && filled($parent->email);
+            $sendWhatsApp = (bool) ($settings->fee_reminder_send_whatsapp ?? false)
+                && (bool) ($settings->whatsapp_enabled ?? false);
 
-            $sendEmail = (bool) ($settings->fee_reminder_send_email ?? true);
-            $sendWhatsApp =
-                (bool) ($settings->fee_reminder_send_whatsapp ?? false)
-                && (bool) ($settings->whatsapp_enabled ?? false)
-                && (bool) ($settings->whatsapp_fee_reminders ?? false);
-
-            $paymentUrl = url('/');
-
-            if (!empty($settings->custom_domain)) {
-                $paymentUrl = str_starts_with($settings->custom_domain, 'http://') || str_starts_with($settings->custom_domain, 'https://')
-                    ? $settings->custom_domain
-                    : 'https://' . $settings->custom_domain;
-            } elseif (!empty($settings->school_subdomain)) {
-                $paymentUrl = str_starts_with($settings->school_subdomain, 'http://') || str_starts_with($settings->school_subdomain, 'https://')
-                    ? $settings->school_subdomain
-                    : 'https://' . $settings->school_subdomain;
+            if (! $sendEmail && ! $sendWhatsApp) {
+                $skipped++;
+                continue;
             }
 
-            $payload = [
-                'summary_type' => 'combined_parent_fees',
-                'school_id' => $schoolId,
-                'parent_id' => $parentId,
-                'parent_name' => trim(($parent->firstname ?? '') . ' ' . ($parent->surname ?? '')) ?: 'Parent/Guardian',
-                'children' => $children,
-                'total_amount' => $totalAmount,
-                'total_paid' => $totalPaid,
-                'total_balance' => $totalBalance,
-                'due_date' => now()->addDays(7)->toDateString(),
-                'payment_url' => $paymentUrl,
-                'whatsapp_charge' => (float) config('services.whatsapp.fee_reminder_cost', 10),
-            ];
+            $payload = $this->payload($settings, $parent, $fees, $scopeKey);
+            $notificationId = $this->createReminderLog($schoolId, $parentId, $payload);
+            $payload['notification_id'] = $notificationId;
+            $payload['payment_url'] = rtrim((string) config('app.frontend_url'), '/')
+                . '/payment-instructions/' . $notificationId;
+
+            $emailQueued = false;
+            $whatsAppSent = false;
 
             try {
-            
-                $notificationId = $this->markCombinedReminderSent($schoolId, $parentId, $payload);
-
-                    $payload['notification_id'] = $notificationId;
-                    $payload['payment_url'] = rtrim(config('app.frontend_url'), '/') . '/payment-instructions/' . $notificationId;
-
+                if ($sendEmail) {
                     $parent->notify(new FeeInvoiceReminderNotification(
                         data: $payload,
-                        forceEmail: $sendEmail,
-                        forceWhatsApp: $sendWhatsApp
+                        forceEmail: true,
+                        forceWhatsApp: false
                     ));
+                    $emailQueued = true;
+                }
 
-                $this->markCombinedReminderSent($schoolId, $parentId, $payload);
+                if ($sendWhatsApp) {
+                    $phone = $this->whatsapp->parentPhone($parent);
 
-                $notified++;
+                    if ($phone) {
+                        $message = WhatsAppMessageBuilder::feeReminder(
+                            $fees,
+                            $parent,
+                            [],
+                            $this->bankAccounts($schoolId)
+                        );
 
-                Log::info('Combined fee reminder sent', [
-                    'school_id' => $schoolId,
-                    'parent_id' => $parentId,
-                    'student_count' => count($children),
-                    'total_balance' => $totalBalance,
-                    'email' => $sendEmail,
-                    'whatsapp' => $sendWhatsApp,
-                ]);
+                        $whatsAppSent = $this->whatsapp->sendToParent($schoolId, $phone, $message);
+                    }
+                }
+
+                $payload['delivery'] = [
+                    'email_queued' => $emailQueued,
+                    'whatsapp_sent' => $whatsAppSent,
+                ];
+                $this->finalizeReminderLog($notificationId, $payload, $emailQueued || $whatsAppSent);
+
+                if ($emailQueued || $whatsAppSent) {
+                    $notified++;
+                } else {
+                    $skipped++;
+                }
             } catch (\Throwable $e) {
-                Log::error('Combined fee reminder send failed', [
+                $payload['delivery'] = [
+                    'email_queued' => $emailQueued,
+                    'whatsapp_sent' => $whatsAppSent,
+                    'error' => $e->getMessage(),
+                ];
+                $this->finalizeReminderLog($notificationId, $payload, false);
+
+                Log::error('Combined fee reminder delivery failed', [
                     'school_id' => $schoolId,
                     'parent_id' => $parentId,
                     'error' => $e->getMessage(),
                 ]);
+                $skipped++;
             }
         }
 
+        return ['notified' => $notified, 'skipped' => $skipped];
+    }
+
+    private function payload(SchoolSetting $settings, User $parent, Collection $fees, string $scopeKey): array
+    {
+        $children = $fees->groupBy('student_id')->map(function (Collection $studentFees) {
+            $student = $studentFees->first()?->student;
+
+            return [
+                'student_id' => (int) $studentFees->first()->student_id,
+                'student_name' => trim(($student?->firstname ?? '') . ' ' . ($student?->surname ?? '')) ?: 'Student',
+                'items' => $studentFees->map(fn ($fee) => [
+                    'fee_title' => $fee->feeType?->name ?? 'School Fee',
+                    'amount' => (float) ($fee->total_amount ?? 0),
+                    'paid' => (float) ($fee->amount_paid ?? 0),
+                    'balance' => (float) $fee->balance,
+                    'term_id' => $fee->term_id,
+                    'session_id' => $fee->session_id,
+                ])->values()->all(),
+            ];
+        })->values()->all();
+
         return [
-            'notified' => $notified,
-            'skipped' => $skipped,
+            'summary_type' => 'combined_parent_fees',
+            'scope_key' => $scopeKey,
+            'school_id' => (int) $settings->id,
+            'parent_id' => (int) $parent->id,
+            'parent_name' => trim(($parent->firstname ?? '') . ' ' . ($parent->surname ?? '')) ?: 'Parent/Guardian',
+            'children' => $children,
+            'total_amount' => (float) $fees->sum('total_amount'),
+            'total_paid' => (float) $fees->sum('amount_paid'),
+            'total_balance' => (float) $fees->sum('balance'),
+            'due_date' => now()->addDays(7)->toDateString(),
         ];
     }
 
-   private function canSendCombinedReminder(int $schoolId, int $parentId, int $cooldownHours): bool
-{
-    $last = DB::table('combined_fee_reminder_logs')
-        ->where('school_id', $schoolId)
-        ->where('parent_id', $parentId)
-        ->latest('sent_at')
-        ->first();
-
-    if (!$last || empty($last->sent_at)) {
-        return true;
+    private function scopeKey(Collection $fees): string
+    {
+        return hash('sha256', $fees->pluck('id')->map(fn ($id) => (int) $id)->sort()->implode(','));
     }
 
-    return now()->diffInHours($last->sent_at) >= $cooldownHours;
-}
+    private function logsForScope(int $schoolId, int $parentId, string $scopeKey): Collection
+    {
+        return DB::table('combined_fee_reminder_logs')
+            ->where('school_id', $schoolId)
+            ->where('parent_id', $parentId)
+            ->whereNotNull('sent_at')
+            ->orderByDesc('sent_at')
+            ->get()
+            ->filter(function ($log) use ($scopeKey) {
+                $payload = json_decode((string) ($log->payload ?? ''), true);
 
-private function markCombinedReminderSent(int $schoolId, int $parentId, array $payload): void
-{
-    DB::table('combined_fee_reminder_logs')->insert([
-        'school_id' => $schoolId,
-        'parent_id' => $parentId,
-        'total_balance' => (float) ($payload['total_balance'] ?? 0),
-        'payload' => json_encode($payload),
-        'sent_at' => now(),
-        'created_at' => now(),
-        'updated_at' => now(),
-    ]);
-}
+                return is_array($payload) && ($payload['scope_key'] ?? null) === $scopeKey;
+            })
+            ->values();
+    }
 
-   
+    private function bankAccounts(int $schoolId): Collection
+    {
+        return SchoolBankAccount::query()
+            ->where('school_id', $schoolId)
+            ->where('is_active', true)
+            ->orderBy('sort_order')
+            ->get(['bank_name', 'account_name', 'account_number', 'currency']);
+    }
+
+    private function createReminderLog(int $schoolId, int $parentId, array $payload): int
+    {
+        return (int) DB::table('combined_fee_reminder_logs')->insertGetId([
+            'school_id' => $schoolId,
+            'parent_id' => $parentId,
+            'total_balance' => (float) $payload['total_balance'],
+            'payload' => json_encode($payload),
+            'sent_at' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function finalizeReminderLog(int $id, array $payload, bool $delivered): void
+    {
+        if (! $delivered) {
+            DB::table('combined_fee_reminder_logs')->where('id', $id)->delete();
+            return;
+        }
+
+        DB::table('combined_fee_reminder_logs')->where('id', $id)->update([
+            'payload' => json_encode($payload),
+            'sent_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
 }

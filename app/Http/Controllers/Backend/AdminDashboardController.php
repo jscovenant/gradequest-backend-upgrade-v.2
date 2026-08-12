@@ -301,11 +301,15 @@ public function getCurrentSessionAndTerm()
         ->select('name')
         ->first();
 
+    $calendar = app(\App\Services\AcademicWeekService::class)->contextForSchool((int) $schoolId);
+
     return response()->json([
         'session' => $session?->name ?? 'Not Set',
         'start_date' => $session?->start_date ?? 'Not Set',
         'end_date' => $session?->end_date ?? 'Not Set',
         'term' => $term?->name ?? 'Not Set',
+        'academic_calendar' => $calendar,
+        'server_time' => now()->toIso8601String(),
     ]);
 }
 

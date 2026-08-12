@@ -17,6 +17,8 @@ use App\Http\Controllers\Backend\SuperAdminController;
 use App\Http\Controllers\Backend\PlatformStaffController;
 use App\Http\Controllers\Backend\SalesRepresentativeController;
 use App\Http\Controllers\Backend\SalesPayoutController;
+use App\Http\Controllers\Backend\SalesMarketingMaterialController;
+use App\Http\Controllers\Backend\PublicSalesPageController;
 use App\Http\Controllers\Backend\SuperAdminTwilioController;
 use App\Http\Controllers\Backend\TeacherController;
 use App\Http\Controllers\Backend\AttendanceController;
@@ -68,6 +70,12 @@ use App\Http\Controllers\Api\CbtOfflineLicenseController;
 use App\Http\Controllers\Api\OfflineCbtServerController;
 use App\Http\Controllers\Api\PublicCbtExamController;
 use App\Http\Controllers\Api\CbtStudentExamController;
+use App\Http\Controllers\Api\WhatsappCreditPurchaseController;
+use App\Http\Controllers\Api\AdminAiCreditController;
+use App\Http\Controllers\Api\AiCreditPurchaseController;
+use App\Http\Controllers\Api\AiLessonPlanController;
+use App\Http\Controllers\Api\AiFeeCollectionController;
+use App\Http\Controllers\Api\IntelligenceController;
 
 use App\Http\Controllers\Api\SchoolDomainController;
 
@@ -86,6 +94,10 @@ use App\Http\Controllers\Backend\PublicDemoBookingController;
 use App\Http\Controllers\Backend\PublicFeePaymentController;
 use App\Http\Controllers\Backend\GradequestInvoicePaymentController;
 use App\Http\Controllers\Backend\GradequestBillingPolicyController;
+use App\Http\Controllers\Backend\SupportTicketController;
+use App\Http\Controllers\Backend\HostelController;
+use App\Http\Controllers\Backend\TransportController;
+use App\Http\Controllers\Backend\StudentAcademicRecordController;
 use App\Http\Controllers\Frontend\HomeController;
 
     Route::post('/login', [AuthController::class, 'login']);
@@ -100,11 +112,14 @@ Route::get('/testimonials', [TestimonialController::class, 'index']);
 Route::get('/testimonials/{id}', [TestimonialController::class, 'edit']);     
 Route::put('/testimonials/{id}', [TestimonialController::class, 'update']);
 Route::post('/demo-bookings', [PublicDemoBookingController::class, 'store']);
+Route::get('/public/sales-pages/{code}', [PublicSalesPageController::class, 'show'])->middleware('throttle:120,1');
+Route::post('/public/sales-pages/{code}/leads', [PublicSalesPageController::class, 'captureLead'])->middleware('throttle:10,1');
+Route::post('/public/sales-pages/{code}/events', [PublicSalesPageController::class, 'track'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/school', [PublicFeePaymentController::class, 'school']);
 Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 'student']);
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize']);
 Route::get('/public/fee-payment/verify/{reference}', [PublicFeePaymentController::class, 'verify']);
-Route::post('/public/paystack/sales-payout-webhook', [\App\Http\Controllers\Backend\SalesPayoutWebhookController::class, 'handle']);
+Route::post('/paystack/webhook', [\App\Http\Controllers\Backend\PaystackWebhookController::class, 'handle'])->name('paystack.webhook');
 Route::get('/public/cbt/access/lookup', [PublicCbtExamController::class, 'lookup']);
 Route::post('/public/cbt/access/start', [PublicCbtExamController::class, 'start']);
 Route::post('/public/cbt/attempts/{token}/answers', [PublicCbtExamController::class, 'saveAnswer']);
@@ -122,6 +137,8 @@ Route::prefix('offline-cbt')->group(function () {
 });
 
 Route::get('/frontend/subscription-plans', [HomeController::class, 'subscriptionPlans']);
+Route::get('/internal/domains/tls-allowed', [SchoolDomainController::class, 'tlsAllowed'])
+    ->middleware('throttle:60,1');
 
      Route::post('/verify-result', [ResultController::class, 'verifyResult']);
   Route::get('/frontend-blogs', [BlogController::class, 'index']);
@@ -131,21 +148,61 @@ Route::get('/frontend/subscription-plans', [HomeController::class, 'subscription
 
 
 
- Route::get('/result/{studentId}', [ResultController::class, 'showStudentResult']);
+ Route::get('/result/{studentId}', [ResultController::class, 'showStudentResult'])
+    ->middleware(['auth:sanctum', 'tenant']);
  
 Route::get('/public/check-result', [PublicResultController::class, 'checkWithPin']);
  
-Route::get('/result/{studentId}', [ResultController::class, 'showStudentResult']);
-
- 
-
- 
 Route::middleware(['auth:sanctum', 'tenant'])->post('/auth/change-initial-password', [AuthController::class, 'changeInitialPassword']);
 
+// These must remain reachable even when billing clearance blocks normal school operations.
+Route::middleware(['auth:sanctum', 'tenant'])->group(function () {
+    Route::get('/user/onboarding-status', [ActivationController::class, 'onboardingStatus']);
+    Route::post('/accept-terms', [ActivationController::class, 'acceptTerms']);
+});
+
+// Support remains available even when a school has a billing-clearance issue.
+Route::middleware(['auth:sanctum', 'tenant'])->prefix('support')->group(function () {
+    Route::get('/tickets', [SupportTicketController::class, 'index']);
+    Route::post('/tickets', [SupportTicketController::class, 'store']);
+    Route::get('/tickets/{ticket}', [SupportTicketController::class, 'show']);
+    Route::post('/tickets/{ticket}/replies', [SupportTicketController::class, 'reply']);
+    Route::patch('/tickets/{ticket}', [SupportTicketController::class, 'update']);
+    Route::patch('/tickets/{ticket}/assign', [SupportTicketController::class, 'assign']);
+    Route::get('/assignees', [SupportTicketController::class, 'assignees']);
+});
+
 Route::middleware(['auth:sanctum', 'tenant', 'school.billing.clearance'])->group(function () {
+Route::prefix('admin')->group(function () {
+    Route::get('/withdrawn-students/results', [StudentAcademicRecordController::class, 'withdrawnStudents']);
+    Route::get('/transcripts', [StudentAcademicRecordController::class, 'transcripts']);
+    Route::get('/transcripts/{student}', [StudentAcademicRecordController::class, 'showTranscript']);
+    Route::get('/transcripts/{student}/pdf', [StudentAcademicRecordController::class, 'downloadTranscript']);
+});
+Route::get('/intelligence/revenue', [IntelligenceController::class, 'revenue']);
+Route::get('/intelligence/academic/students/{student}', [IntelligenceController::class, 'student']);
+Route::prefix('hostels')->middleware('subscription.feature:hostel_management')->group(function () {
+    Route::get('/', [HostelController::class, 'index']);
+    Route::post('/', [HostelController::class, 'storeHostel']);
+    Route::patch('/{hostel}', [HostelController::class, 'updateHostel']);
+    Route::post('/{hostel}/rooms', [HostelController::class, 'storeRoom']);
+    Route::patch('/rooms/{room}', [HostelController::class, 'updateRoom']);
+    Route::post('/allocations', [HostelController::class, 'allocate']);
+    Route::post('/allocations/{allocation}/transfer', [HostelController::class, 'transfer']);
+    Route::post('/allocations/{allocation}/checkout', [HostelController::class, 'checkout']);
+});
+Route::prefix('transport')->middleware('subscription.feature:transport_management')->group(function () {
+    Route::get('/', [TransportController::class, 'index']);
+    Route::post('/routes', [TransportController::class, 'storeRoute']);
+    Route::patch('/routes/{transportRoute}', [TransportController::class, 'updateRoute']);
+    Route::post('/routes/{transportRoute}/stops', [TransportController::class, 'storeStop']);
+    Route::post('/vehicles', [TransportController::class, 'storeVehicle']);
+    Route::patch('/vehicles/{vehicle}', [TransportController::class, 'updateVehicle']);
+    Route::post('/assignments', [TransportController::class, 'allocate']);
+    Route::post('/assignments/{assignment}/end', [TransportController::class, 'end']);
+});
     
     //Route for activating account
-Route::get('/user/onboarding-status', [ActivationController::class, 'onboardingStatus']);
 Route::get('/user/onboarding-complete', [ActivationController::class, 'checkOnboardingComplete']);
 
 Route::post('/verify-email-code', [ActivationController::class, 'verifyEmailCode']);
@@ -243,6 +300,10 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/assign', [SalesRepresentativeController::class, 'assign'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/send-login', [SalesRepresentativeController::class, 'sendLoginDetails'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/reactivate', [SalesRepresentativeController::class, 'reactivate'])->middleware('superadmin.access:sales,owner');
+    Route::get('/superadmin/sales-marketing-materials', [SalesMarketingMaterialController::class, 'index'])->middleware('superadmin.access:sales,marketing,owner');
+    Route::post('/superadmin/sales-marketing-materials', [SalesMarketingMaterialController::class, 'store'])->middleware('superadmin.access:marketing,owner');
+    Route::post('/superadmin/sales-marketing-materials/{material}', [SalesMarketingMaterialController::class, 'update'])->middleware('superadmin.access:marketing,owner');
+    Route::delete('/superadmin/sales-marketing-materials/{material}', [SalesMarketingMaterialController::class, 'destroy'])->middleware('superadmin.access:marketing,owner');
     Route::get('/superadmin/sales-leads', [SalesRepresentativeController::class, 'allLeads'])->middleware('superadmin.access:sales,owner');
     Route::patch('/superadmin/sales-leads/{lead}/stage', [SalesRepresentativeController::class, 'updateLeadStage'])->middleware('superadmin.access:sales,owner');
     Route::post('/superadmin/sales-leads/{lead}/convert', [SalesRepresentativeController::class, 'convertLeadToSchool'])->middleware('superadmin.access:sales,owner');
@@ -254,13 +315,13 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::post('/superadmin/sales-payouts/approve-eligible', [SalesPayoutController::class, 'approveEligible'])->middleware('superadmin.access:finance,owner');
     Route::post('/superadmin/sales-payouts/monthly', [SalesPayoutController::class, 'createMonthly'])->middleware('superadmin.access:finance,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/bank', [SalesPayoutController::class, 'saveBank'])->middleware('superadmin.access:finance,owner');
-    Route::post('/superadmin/sales-representatives/{salesRepresentative}/commissions/approve', [SalesPayoutController::class, 'approvePending'])->middleware('superadmin.access:finance,owner');
     Route::post('/superadmin/sales-representatives/{salesRepresentative}/payouts', [SalesPayoutController::class, 'createBatch'])->middleware('superadmin.access:finance,owner');
-    Route::post('/superadmin/sales-payouts/{batch}/initiate', [SalesPayoutController::class, 'initiate'])->middleware('superadmin.access:finance,owner');
-    Route::post('/superadmin/sales-payouts/{batch}/mark-paid', [SalesPayoutController::class, 'markPaid'])->middleware('superadmin.access:finance,owner');
+    Route::post('/superadmin/sales-payouts/{batch}/initiate', [SalesPayoutController::class, 'initiate'])->middleware('superadmin.access:owner');
+    Route::post('/superadmin/sales-payouts/{batch}/reconcile', [SalesPayoutController::class, 'reconcile'])->middleware('superadmin.access:owner');
     Route::get('/sales/workspace', [SalesRepresentativeController::class, 'workspace']);
     Route::get('/sales/leads', [SalesRepresentativeController::class, 'myLeads']);
     Route::post('/sales/leads', [SalesRepresentativeController::class, 'storeMyLead']);
+    Route::get('/sales/marketing-materials', [SalesMarketingMaterialController::class, 'active']);
     Route::get('/sales/commissions', [SalesRepresentativeController::class, 'myCommissions']);
     Route::get('/sales/payout-profile', [SalesPayoutController::class, 'myProfile']);
     Route::post('/sales/payout-profile/bank', [SalesPayoutController::class, 'saveMyBank']);
@@ -284,12 +345,36 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
 
   //whatsapp settings route
 
-    Route::get('/settings/whatsapp',             [WhatsAppSettingsController::class, 'show']);
+    Route::get('/settings/whatsapp',             [WhatsAppSettingsController::class, 'show'])
+        ->middleware('subscription.feature:whatsapp_notifications');
     Route::post('/settings/whatsapp/toggle',     [WhatsAppSettingsController::class, 'toggle'])
         ->middleware('subscription.feature:whatsapp_notifications');
     Route::post('/settings/whatsapp/test',       [WhatsAppSettingsController::class, 'test'])
         ->middleware('subscription.feature:whatsapp_notifications');
-    Route::get('/settings/whatsapp/queue-stats', [WhatsAppSettingsController::class, 'queueStats']);
+    Route::get('/settings/whatsapp/queue-stats', [WhatsAppSettingsController::class, 'queueStats'])
+        ->middleware('subscription.feature:whatsapp_notifications');
+    Route::get('/admin/ai/credits', [AdminAiCreditController::class, 'summary'])
+        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::get('/admin/ai/credits/quote', [AiCreditPurchaseController::class, 'quote'])
+        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::post('/admin/ai/credits/buy-wallet', [AiCreditPurchaseController::class, 'buyWithWallet'])
+        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::post('/admin/ai/credits/initialize-online', [AiCreditPurchaseController::class, 'initializeOnline'])
+        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::get('/admin/ai/credits/verify/{reference}', [AiCreditPurchaseController::class, 'verifyOnline'])
+        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::post('/admin/ai/lesson-plans/generate', [AiLessonPlanController::class, 'generate'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::post('/admin/ai/fee-collection/analyze', [AiFeeCollectionController::class, 'analyze'])
+        ->middleware('subscription.feature:ai_fee_collection_assistant');
+    Route::get('/whatsapp/credits/quote', [WhatsappCreditPurchaseController::class, 'quote'])
+        ->middleware('subscription.feature:whatsapp_notifications');
+    Route::post('/whatsapp/credits/buy-wallet', [WhatsappCreditPurchaseController::class, 'buyWithWallet'])
+        ->middleware('subscription.feature:whatsapp_notifications');
+    Route::post('/whatsapp/credits/initialize-online', [WhatsappCreditPurchaseController::class, 'initializeOnline'])
+        ->middleware('subscription.feature:whatsapp_notifications');
+    Route::get('/whatsapp/credits/verify/{reference}', [WhatsappCreditPurchaseController::class, 'verifyOnline'])
+        ->middleware('subscription.feature:whatsapp_notifications');
 
     Route::post('/whatsapp/broadcast/results',       [WhatsAppBroadcastController::class, 'broadcastResults'])
         ->middleware('subscription.feature:whatsapp_notifications,usage');
@@ -306,6 +391,7 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
      Route::get   ('/settings/domain',         [SchoolDomainController::class, 'show']);
     Route::post  ('/settings/domain',         [SchoolDomainController::class, 'register']);
     Route::post  ('/settings/domain/verify',  [SchoolDomainController::class, 'verify']);
+    Route::post  ('/settings/domain/activate', [SchoolDomainController::class, 'activate']);
     Route::delete('/settings/domain/{id}',    [SchoolDomainController::class, 'remove']);
 
      // School admin endpoints (uses authenticated user's school_id)
@@ -484,6 +570,10 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/questions/import-word', [CbtExamController::class, 'importWordQuestions'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/questions/ai-generate', [CbtExamController::class, 'generateAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/questions/ai-import', [CbtExamController::class, 'importAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
         Route::get('/offline/installer/download', [CbtExamController::class, 'downloadOfflineInstaller'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_offline']);
         Route::put('/questions/{question}', [CbtExamController::class, 'updateQuestion'])
@@ -543,11 +633,12 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
         ->middleware('subscription.feature:student_management,students');
     Route::get('/students/show/{id}', [StudentController::class, 'ViewStudent']);
     Route::patch('/students/{id}/lifecycle-status', [StudentController::class, 'updateStudentLifecycleStatus']);
-    Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
+      Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
+      Route::post('/students/{id}/withdraw', [StudentController::class, 'DeleteStudent']);
+      Route::delete('/students/{id}', [StudentController::class, 'destroyStudent']);
 
     Route::Post('/students/store', [StudentController::class, 'StoreAllStudent'])
         ->middleware('subscription.feature:student_management,students');
-    Route::delete('/students/{id}', [StudentController::class, 'DeleteStudent']);
     Route::get('/students/edit/{id}', [StudentController::class, 'EditStudents']);
     Route::put('/students/update/{id}', [StudentController::class, 'UpdateStudent']);
     Route::get('/students/{id}/performance', [StudentController::class, 'getStudentPerformance']);
@@ -634,6 +725,7 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
 
   // Student results in a batch
   Route::post('/result-batches/{batch}/students/{student}/upsert', [StudentResultController::class, 'upsert'])->middleware('teacher.active');
+  Route::post('/result-batches/{batch}/students/{student}/ai-comments', [StudentResultController::class, 'generateAiComments'])->middleware(['teacher.active', 'subscription.feature:ai_result_comment_generator']);
   Route::get('/result-batches/{batch}/students/{student}', [StudentResultController::class, 'showInBatch']);
      Route::get('/result-batches/{batch}/students/{student}/result-form', [ResultBatchController::class, 'resultForm'])->middleware('teacher.active');
   // Report card (v2-first, legacy fallback)
@@ -821,7 +913,6 @@ Route::post('/fees/online/initialize', [FeePaymentController::class, 'initialize
     ->middleware('subscription.feature:online_payment');
 Route::get('/fees/online/verify/{reference}', [FeePaymentController::class, 'verifyOnlinePayment']);
 
-Route::post('/paystack/webhook', [FeePaymentController::class, 'paystackWebhook']); // outside auth:sanctum
 
 //Route for app settings
 Route::post('/save-settings', [SettingController::class, 'saveSettings'])
@@ -883,19 +974,21 @@ Route::get('/user/subscription/details', [SubscriptionController::class, 'getUse
       
       Route::post('/payment/wallet-charge', [SubscriptionController::class, 'walletCharge']);
 
-Route::post('/paystack/webhook', [SubscriptionController::class, 'handleWebhook'])->name('paystack.webhook');
 
 Route::prefix('staff-attendance')->group(function () {
     Route::get('/session', [StaffAttendanceController::class, 'currentSession'])
-        ->middleware('subscription.feature:attendance_management');
+        ->middleware('subscription.feature:staff_attendance');
     Route::post('/session', [StaffAttendanceController::class, 'generateSession'])
-        ->middleware('subscription.feature:attendance_management');
+        ->middleware('subscription.feature:staff_attendance');
     Route::post('/mark', [StaffAttendanceController::class, 'mark'])
-        ->middleware(['teacher.active', 'subscription.feature:attendance_management']);
-     Route::get('/logs', [StaffAttendanceController::class, 'logs']);
+        ->middleware(['teacher.active', 'subscription.feature:staff_attendance']);
+     Route::get('/logs', [StaffAttendanceController::class, 'logs'])
+        ->middleware('subscription.feature:staff_attendance');
 });
-Route::get('/attendance-settings', [AttendanceSettingController::class, 'show']);
-Route::put('/attendance-settings', [AttendanceSettingController::class, 'update']);
+Route::get('/attendance-settings', [AttendanceSettingController::class, 'show'])
+    ->middleware('subscription.feature:staff_attendance');
+Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'])
+    ->middleware('subscription.feature:staff_attendance');
 
 
 
@@ -930,3 +1023,9 @@ Route::middleware(['auth:sanctum', 'tenant'])->get('/user', function (Request $r
 
 Route::middleware(['auth:sanctum', 'tenant'])->post('/terms/bulk-create', [TermController::class, 'bulkCreate']);
 // Route::post('/paystack/webhook', [OnlineFeePaymentController::class, 'webhook']);
+
+
+
+
+
+

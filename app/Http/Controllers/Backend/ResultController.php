@@ -194,7 +194,7 @@ public function findByAdmissionNo(string $admissionNo)
 
 
 
-    // ✅ Now we continue normally
+    // âœ… Now we continue normally
     $student = User::where('reg_no', $admissionNo)
         ->where('role', 'student')
         ->where('school_id', $auth->school_id)
@@ -208,14 +208,10 @@ public function findByAdmissionNo(string $admissionNo)
     $term = Term::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
     $session = AcademicSession::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
 
-    $subjects = [];
-    if ($student->department_id) {
-        $subjects = Subject::where('department_id', $student->department_id)
-            ->whereNull('archived_at')
-            ->select('id', 'name')
-            ->orderBy('name')
-            ->get();
-    }
+    $subjects = app(\App\Services\Results\SubjectService::class)->subjectsForDepartment(
+        (int) $auth->school_id,
+        $student->department_id ? (int) $student->department_id : null
+    );
 
     return response()->json([
         'student' => $student,
@@ -330,10 +326,10 @@ try {
 
   
    
-   // ✅ Extract summary FIRST
+   // âœ… Extract summary FIRST
 $summary = $request->summary;
 
-// ✅ Save Average
+// âœ… Save Average
 $average = Average::create([
     'user_id' => $userId,
     'rollno' => $request->rollno,
@@ -360,7 +356,7 @@ $average = Average::create([
 ]);
 
 
-    // ✅ Then save each subject result with average_id
+    // âœ… Then save each subject result with average_id
     foreach ($request->results as $res) {
         $record = new $termModel();
         $record->user_id = $userId;
@@ -387,7 +383,7 @@ $average = Average::create([
             $record->average = $res['average'] ?? '';
         }
 
-        // ✅ Assign the Average ID
+        // âœ… Assign the Average ID
         $record->average_id = $average->id;
 
         $record->save();
@@ -481,7 +477,7 @@ public function getResultDataByStudent($studentId, $session, $classId, $term)
         return response()->json(['message' => 'Invalid term specified'], 400);
     }
 
-    /** ✅ Step 1: Get the EXACT average record */
+    /** âœ… Step 1: Get the EXACT average record */
     $average = \App\Models\Average::where([
         'user_id'    => $studentId,
         'school_id'  => $auth->school_id,
@@ -496,30 +492,20 @@ public function getResultDataByStudent($studentId, $session, $classId, $term)
         ], 404);
     }
 
-    /** 🔥 Step 2: Fetch term results ONLY by average_id */
+    /** ðŸ”¥ Step 2: Fetch term results ONLY by average_id */
     $results = $termModel::with('subject')
-        ->where('average_id', $average->id) // ✅ THIS IS THE FIX
+        ->where('average_id', $average->id) // âœ… THIS IS THE FIX
         ->get();
 
     /** Step 3: Student */
     $student = \App\Models\User::with(['level', 'department'])
         ->findOrFail($studentId);
 
-    if (!$student->department) {
-        return response()->json([
-            'message' => 'Student has no department assigned.'
-        ], 400);
-    }
-
-    /** Step 4: All department subjects (frontend filters) */
-    $subjects = \App\Models\Subject::where([
-        'department_id' => $student->department_id,
-        'school_id'     => $auth->school_id,
-    ])
-        ->whereNull('archived_at')
-        ->select('id', 'name')
-        ->orderBy('name')
-        ->get();
+    /** Step 4: All department and general subjects (frontend filters) */
+    $subjects = app(\App\Services\Results\SubjectService::class)->subjectsForDepartment(
+        (int) $auth->school_id,
+        $student->department_id ? (int) $student->department_id : null
+    );
 
     /** Step 5: Detect score type */
     $score_type = null;
@@ -589,7 +575,7 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
     DB::beginTransaction();
 
     try {
-        // ✅ Create or update Average first
+        // âœ… Create or update Average first
         $average = Average::updateOrCreate(
             [
                 'user_id' => $studentId,
@@ -634,7 +620,7 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
                 $record->average = $res['average'] ?? '';
             }
 
-            // ✅ Assign average_id
+            // âœ… Assign average_id
             $record->average_id = $average->id;
 
             $record->save();
@@ -662,8 +648,13 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
 
         public function showStudentResult(Request $request, $id)
         {
-            // PUBLIC ACCESS — get student directly
-            $user = User::with('level', 'section')->findOrFail($id);
+            // PUBLIC ACCESS â€” get student directly
+            $auth = $request->user();
+            $user = User::with('level', 'section')
+                ->whereKey($id)
+                ->where('school_id', $auth->school_id)
+                ->whereRaw('LOWER(role) = ?', ['student'])
+                ->firstOrFail();
 
             // Restrict access if student has unpaid fees
         try {
@@ -1171,3 +1162,4 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
 
 
 }
+

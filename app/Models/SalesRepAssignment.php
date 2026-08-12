@@ -17,6 +17,8 @@ class SalesRepAssignment extends Model
         'expected_students' => 'integer',
         'expected_close_date' => 'date',
         'converted_at' => 'datetime',
+        'registration_token_expires_at' => 'datetime',
+        'attribution_locked_at' => 'datetime',
     ];
 
     public function representative(): BelongsTo
@@ -27,6 +29,11 @@ class SalesRepAssignment extends Model
     public function demoBooking(): BelongsTo
     {
         return $this->belongsTo(DemoBooking::class);
+    }
+
+    public function marketingMaterial(): BelongsTo
+    {
+        return $this->belongsTo(SalesMarketingMaterial::class, 'marketing_material_id');
     }
 
     public function school(): BelongsTo

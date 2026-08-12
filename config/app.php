@@ -26,9 +26,6 @@ return [
     |
     */
     
-    'frontend_url' => env('FRONTEND_URL', env('APP_FRONTEND_URL', 'http://localhost:5173')),
-
-
     'env' => env('APP_ENV', 'production'),
 
     /*
@@ -56,7 +53,7 @@ return [
     */
 
     'url' => env('APP_URL', 'http://localhost:8000'),
-    'frontend_url' => env('FRONT_URL', 'http://localhost:5173'),
+    'frontend_url' => env('FRONTEND_URL', env('FRONT_URL', 'http://localhost:5173')),
 
     /*
     |--------------------------------------------------------------------------

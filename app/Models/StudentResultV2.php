@@ -21,6 +21,11 @@ class StudentResultV2 extends Model
     return $this->hasMany(SubjectResultV2::class, 'student_result_id');
   }
 
+  public function batch()
+  {
+    return $this->belongsTo(ResultBatch::class, 'batch_id');
+  }
+
   public function student()
   {
     return $this->belongsTo(User::class, 'user_id');

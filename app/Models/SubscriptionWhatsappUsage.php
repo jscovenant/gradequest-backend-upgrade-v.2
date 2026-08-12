@@ -2,11 +2,13 @@
 
 namespace App\Models;
 
+use App\Models\Concerns\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class SubscriptionWhatsappUsage extends Model
 {
+    use BelongsToSchool;
     use HasFactory;
 
        protected $fillable = [
@@ -36,5 +38,4 @@ class SubscriptionWhatsappUsage extends Model
         return max(0, (int) $this->allocated_credits - (int) $this->used_credits);
     }
 }
-
 

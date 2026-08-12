@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Events\ResultPublished;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Result\ResolveBatchRequest;
 use App\Http\Requests\Result\UpsertStudentResultRequest;
@@ -37,9 +38,9 @@ class ResultBatchController extends Controller
   /**
    * Inject core services:
    *
-   * ResultRepository      → Handles DB read/write abstraction for results
-   * ResultComputeService  → Contains batch computation logic (positions, ranking, etc.)
-   * SubjectService        → Returns subjects based on department (your business rule)
+   * ResultRepository      Ã¢â€ â€™ Handles DB read/write abstraction for results
+   * ResultComputeService  Ã¢â€ â€™ Contains batch computation logic (positions, ranking, etc.)
+   * SubjectService        Ã¢â€ â€™ Returns subjects based on department (your business rule)
    */
   public function __construct(
     private ResultRepository $repo,
@@ -73,7 +74,7 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
         return response()->json(['message' => 'School not found for this user. Please contact admin.'], 422);
     }
 
-    // ✅ Teacher can only resolve batch for assigned class(es)
+    // Ã¢Å“â€¦ Teacher can only resolve batch for assigned class(es)
     if ($user->role === 'Teacher') {
         $allowed = TeacherEnrollment::where('school_id', $schoolId)
             ->where('user_id', $user->id)
@@ -271,6 +272,8 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
       'review_note' => $request->input('note', $batch->review_note),
       'updated_at' => now(),
     ])->save();
+
+    DB::afterCommit(fn () => ResultPublished::dispatch((int) $batch->id, (int) $batch->school_id));
 
     return response()->json([
       'message' => 'Results published. Parents and students can now view them.',
@@ -618,9 +621,7 @@ public function resultForm(int $batchId, int $studentId)
         'carry_over_preview' => $carryOverPreview,
         'report_column_policy' => $this->resultColumnPolicy($schoolId, (int) $batch->class_id, (string) $batch->term),
         'billing' => $billingStatus,
-        'warnings' => !$student->department_id
-            ? ['Student has no department assigned, so no subjects were returned.']
-            : [],
+        'warnings' => [],
     ]);
 }
 
@@ -682,3 +683,5 @@ private function resultColumnPolicy(int $schoolId, int $classId, string $term): 
 
 
 }
+
+

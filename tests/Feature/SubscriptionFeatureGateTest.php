@@ -10,6 +10,7 @@ use App\Models\AcademicSession;
 use App\Models\Term;
 use App\Models\User;
 use App\Services\SchoolBillingService;
+use App\Services\SubscriptionGate;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
@@ -21,6 +22,25 @@ use Tests\TestCase;
 class SubscriptionFeatureGateTest extends TestCase
 {
     use DatabaseTransactions;
+
+    public function test_staff_attendance_is_in_core_while_whatsapp_requires_gradequest_plus(): void
+    {
+        [, $admin] = $this->createSchoolWithAdmin('Core Restricted Features School');
+        $plan = $this->createSubscription($admin, features: [
+            ['feature_key' => 'support_staff_attendance', 'is_enabled' => true],
+            ['feature_key' => 'whatsapp_notifications', 'is_enabled' => true],
+        ]);
+        $plan->forceFill(['name' => 'GradeQuest Core', 'whatsapp_enabled' => true])->save();
+
+        $gate = app(SubscriptionGate::class);
+
+        $this->assertTrue($gate->inspect($admin, 'staff_attendance')['allowed']);
+        $this->assertSame('gradequest_plus_required', $gate->inspect($admin, 'whatsapp_notifications')['reason']);
+
+        $plan->forceFill(['name' => 'GradeQuest Plus'])->save();
+
+        $this->assertTrue($gate->inspect($admin, 'whatsapp_notifications')['allowed']);
+    }
 
     public function test_student_creation_requires_active_subscription(): void
     {
@@ -114,6 +134,11 @@ class SubscriptionFeatureGateTest extends TestCase
 
         Sanctum::actingAs($admin);
 
+        $currentPlanOption = collect($this->getJson('/api/subscription/plans')->assertOk()->json())
+            ->firstWhere('id', $plan->id);
+        $this->assertFalse($currentPlanOption['can_select']);
+        $this->assertStringContainsString('still active', $currentPlanOption['disabled_reason']);
+
         $this->postJson('/api/payment/wallet-charge', [
             'subscription_plan_id' => $plan->id,
         ])->assertStatus(422)
@@ -164,12 +189,24 @@ class SubscriptionFeatureGateTest extends TestCase
 
         Sanctum::actingAs($admin);
 
+        $upgradeOption = collect($this->getJson('/api/subscription/plans')->assertOk()->json())
+            ->firstWhere('id', $premium->id);
+        $this->assertTrue($upgradeOption['can_select']);
+        $this->assertSame('upgrade', $upgradeOption['subscription_action']);
+        $this->assertSame(666.67, $upgradeOption['upgrade_credit_amount']);
+        $this->assertSame(20, $upgradeOption['carried_days']);
+
         $this->postJson('/api/payment/wallet-charge', [
             'subscription_plan_id' => $premium->id,
         ])->assertOk()
             ->assertJsonPath('quote.action', 'upgrade')
             ->assertJsonPath('quote.upgrade_credit_amount', 666.67)
-            ->assertJsonPath('quote.payable_amount', 1333.33);
+            ->assertJsonPath('quote.payable_amount', 1333.33)
+            ->assertJsonPath('quote.remaining_days', 20)
+            ->assertJsonPath('quote.new_package_days', 30);
+
+        $upgraded = Subscription::where('user_id', $admin->id)->firstOrFail();
+        $this->assertSame(50, (int) now()->startOfDay()->diffInDays($upgraded->ends_at->copy()->startOfDay()));
     }
 
     public function test_new_school_without_subscription_has_no_gradequest_invoice_amount_but_can_view_plans(): void

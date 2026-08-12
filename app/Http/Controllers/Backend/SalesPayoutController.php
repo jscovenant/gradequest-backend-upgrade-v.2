@@ -34,11 +34,15 @@ class SalesPayoutController extends Controller
         }
 
         return response()->json([
+            'authorization' => [
+                'can_manage_policy' => (bool) $request->user()?->hasSuperAdminPermission('owner'),
+                'can_authorize_transfers' => (bool) $request->user()?->hasSuperAdminPermission('owner'),
+            ],
             'summary' => [
                 'pending_commissions' => (float) SalesCommission::where('status', 'pending')->sum('amount'),
                 'approved_commissions' => (float) SalesCommission::where('status', 'approved')->sum('amount'),
                 'paid_commissions' => (float) SalesCommission::where('status', 'paid')->sum('amount'),
-                'processing_payouts' => (float) SalesPayoutBatch::where('status', 'processing')->sum('total_amount'),
+                'processing_payouts' => (float) SalesPayoutBatch::whereIn('status', ['processing', 'requires_otp', 'awaiting_approval'])->sum('total_amount'),
                 'paid_payouts' => (float) SalesPayoutBatch::where('status', 'paid')->sum('total_amount'),
                 'held_commissions' => (float) SalesCommission::where('status', 'held')->sum('amount'),
                 'queued_commissions' => (float) SalesCommission::where('status', 'queued')->sum('amount'),
@@ -93,11 +97,13 @@ class SalesPayoutController extends Controller
                     'name' => trim(($rep->user?->firstname ?? '') . ' ' . ($rep->user?->surname ?? '')) ?: $rep->user?->email,
                     'email' => $rep->user?->email,
                     'commission_rate' => (float) $rep->commission_rate,
+                    'core_commission_rate' => (float) ($rep->core_commission_rate ?? $rep->commission_rate),
+                    'premium_commission_rate' => (float) ($rep->premium_commission_rate ?? $rep->commission_rate),
                     'bank_name' => $rep->bank_name,
                     'bank_code' => $rep->bank_code,
-                    'account_number' => $rep->account_number,
+                    'account_number' => $this->maskAccountNumber($rep->account_number),
                     'account_name' => $rep->account_name,
-                    'paystack_recipient_code' => $rep->paystack_recipient_code,
+                    'paystack_recipient_code' => $rep->paystack_recipient_code ? 'configured' : null,
                     'payout_verified_at' => optional($rep->payout_verified_at)?->toDateTimeString(),
                     'pending_commission' => (float) $rep->commissions->where('status', 'pending')->sum('amount'),
                     'approved_commission' => (float) $rep->commissions->where('status', 'approved')->sum('amount'),
@@ -120,11 +126,13 @@ class SalesPayoutController extends Controller
                 'name' => trim(($rep->user?->firstname ?? '') . ' ' . ($rep->user?->surname ?? '')) ?: $rep->user?->email,
                 'email' => $rep->user?->email,
                 'commission_rate' => (float) $rep->commission_rate,
+                'core_commission_rate' => (float) ($rep->core_commission_rate ?? $rep->commission_rate),
+                'premium_commission_rate' => (float) ($rep->premium_commission_rate ?? $rep->commission_rate),
                 'bank_name' => $rep->bank_name,
                 'bank_code' => $rep->bank_code,
-                'account_number' => $rep->account_number,
+                'account_number' => $this->maskAccountNumber($rep->account_number),
                 'account_name' => $rep->account_name,
-                'paystack_recipient_code' => $rep->paystack_recipient_code,
+                'paystack_recipient_code' => $rep->paystack_recipient_code ? 'configured' : null,
                 'payout_verified_at' => optional($rep->payout_verified_at)?->toDateTimeString(),
                 'pending_commission' => (float) $rep->commissions->where('status', 'pending')->sum('amount'),
                 'approved_commission' => (float) $rep->commissions->where('status', 'approved')->sum('amount'),
@@ -153,7 +161,7 @@ class SalesPayoutController extends Controller
 
         return response()->json([
             'message' => 'Your payout bank account has been verified successfully.',
-            'data' => $rep,
+            'data' => $this->bankProfile($rep),
         ]);
     }
 
@@ -173,7 +181,7 @@ class SalesPayoutController extends Controller
 
         return response()->json([
             'message' => 'Sales representative bank account verified and payout recipient created.',
-            'data' => $rep,
+            'data' => $this->bankProfile($rep),
         ]);
     }
 
@@ -192,31 +200,6 @@ class SalesPayoutController extends Controller
             'message' => 'Payout batch created successfully.',
             'data' => $batch,
         ], 201);
-    }
-
-    public function approvePending(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
-    {
-        $updated = SalesCommission::query()
-            ->where('sales_representative_id', $salesRepresentative->id)
-            ->where('status', 'pending')
-            ->whereDoesntHave('payoutItem')
-            ->update([
-                'status' => 'approved',
-                'approved_by' => $request->user()?->id,
-                'approved_at' => now(),
-                'updated_at' => now(),
-            ]);
-
-        if ($updated === 0) {
-            return response()->json([
-                'message' => 'No pending unpaid commissions found for this representative.',
-            ], 422);
-        }
-
-        return response()->json([
-            'message' => "{$updated} commission record(s) approved for payout.",
-            'approved_count' => $updated,
-        ]);
     }
 
     public function approveEligible(Request $request): JsonResponse
@@ -261,22 +244,45 @@ class SalesPayoutController extends Controller
         }
 
         return response()->json([
-            'message' => 'Paystack transfer initiated successfully.',
+            'message' => match ($batch->status) {
+                'requires_otp' => 'Paystack requires OTP approval. Complete it in Paystack before this payout can proceed.',
+                'awaiting_approval' => 'Paystack is waiting for server approval.',
+                default => 'Paystack transfer initiated successfully.',
+            },
             'data' => $batch,
         ]);
     }
 
-    public function markPaid(SalesPayoutBatch $batch): JsonResponse
+    public function reconcile(SalesPayoutBatch $batch): JsonResponse
     {
-        $batch = $this->payoutService->markSuccessful($batch, [
-            'manual_confirmation' => true,
-            'confirmed_at' => now()->toDateTimeString(),
-        ]);
+        try {
+            $batch = $this->payoutService->reconcilePaystackTransfer($batch);
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
 
         return response()->json([
-            'message' => 'Payout marked as paid successfully.',
+            'message' => 'Payout status reconciled with Paystack.',
             'data' => $batch,
         ]);
+    }
+
+    private function maskAccountNumber(?string $accountNumber): ?string
+    {
+        if (! $accountNumber) return null;
+        return str_repeat('*', max(strlen($accountNumber) - 4, 0)) . substr($accountNumber, -4);
+    }
+
+    private function bankProfile(SalesRepresentative $rep): array
+    {
+        return [
+            'id' => $rep->id,
+            'bank_name' => $rep->bank_name,
+            'account_name' => $rep->account_name,
+            'account_number' => $this->maskAccountNumber($rep->account_number),
+            'payout_verified_at' => optional($rep->payout_verified_at)?->toDateTimeString(),
+            'recipient_configured' => (bool) $rep->paystack_recipient_code,
+        ];
     }
 
     private function currentRepresentative(Request $request): SalesRepresentative

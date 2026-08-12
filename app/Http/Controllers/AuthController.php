@@ -206,7 +206,6 @@ public function register(Request $request)
    
 ]);
 
-
     $role = 'Admin';
     $reg_no = 'R' . random_int(100000, 999999);
 

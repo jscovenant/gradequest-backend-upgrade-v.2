@@ -85,7 +85,7 @@ class FinanceDashboardController extends Controller
 
 public function generateIncomeReport(Request $request)
 {
-    $schoolId = auth::id();
+    $schoolId = (int) $request->user()->school_id;
 
     $query = FinancialRecord::where('school_id', $schoolId)
         ->where('type', 'income');

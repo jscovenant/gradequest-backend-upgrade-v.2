@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
@@ -12,6 +11,7 @@ use App\Models\SalesRepresentative;
 use App\Models\SchoolSetting;
 use App\Models\User;
 use App\Services\SalesRepresentativeActivityService;
+use App\Services\SalesReferralService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -23,7 +23,10 @@ use Illuminate\Validation\Rule;
 
 class SalesRepresentativeController extends Controller
 {
-    public function __construct(private SalesRepresentativeActivityService $activityService)
+    public function __construct(
+        private SalesRepresentativeActivityService $activityService,
+        private SalesReferralService $referrals,
+    )
     {
     }
 
@@ -54,6 +57,8 @@ class SalesRepresentativeController extends Controller
                 'paid_commission' => (float) $commissions->where('status', 'paid')->sum('amount'),
                 'monthly_target_amount' => (float) $rep->monthly_target_amount,
                 'monthly_target_schools' => (int) $rep->monthly_target_schools,
+                'sales_page_views' => $rep->pageEvents()->where('event_type', 'page_view')->count(),
+                'sales_page_leads' => $rep->pageEvents()->where('event_type', 'lead_submitted')->count(),
             ],
             'recent_leads' => $recentLeads,
             'commissions' => $commissions->sortByDesc('created_at')->take(6)->values(),
@@ -80,7 +85,7 @@ class SalesRepresentativeController extends Controller
                 $q->where('notes', 'like', "%{$search}%")
                     ->orWhere('source', 'like', "%{$search}%")
                     ->orWhereHas('demoBooking', fn ($booking) => $booking->where('school_name', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"))
-                    ->orWhereHas('school', fn ($school) => $school->where('name', 'like', "%{$search}%"))
+                    ->orWhereHas('school', fn ($school) => $school->where('school_name', 'like', "%{$search}%"))
                     ->orWhereHas('adminUser', fn ($admin) => $admin->where('firstname', 'like', "%{$search}%")->orWhere('surname', 'like', "%{$search}%")->orWhere('email', 'like', "%{$search}%"));
             });
         }
@@ -334,7 +339,10 @@ class SalesRepresentativeController extends Controller
         $perPage = min(max((int) $request->get('per_page', 15), 1), 100);
 
         $query = SalesRepresentative::query()
-            ->with(['user:id,firstname,surname,email,phone,role,status,last_login_at,created_at', 'assignments', 'commissions'])
+            // Do not explicitly select last_login_at here. Older databases may
+            // not have run the activity-tracking migration yet, and selecting a
+            // missing column makes the entire representatives page fail.
+            ->with(['user', 'assignments', 'commissions'])
             ->latest();
 
         if ($search !== '') {
@@ -373,6 +381,8 @@ class SalesRepresentativeController extends Controller
             'phone' => ['nullable', 'string', 'max:40'],
             'region' => ['nullable', 'string', 'max:120'],
             'commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'core_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'premium_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'monthly_target_amount' => ['nullable', 'numeric', 'min:0'],
             'monthly_target_schools' => ['nullable', 'integer', 'min:0'],
             'next_of_kin_name' => ['nullable', 'string', 'max:180'],
@@ -409,7 +419,9 @@ class SalesRepresentativeController extends Controller
                 'code' => $code,
                 'region' => $data['region'] ?? null,
                 'status' => 'active',
-                'commission_rate' => $data['commission_rate'] ?? 5,
+                'commission_rate' => $data['premium_commission_rate'] ?? $data['commission_rate'] ?? 5,
+                'core_commission_rate' => $data['core_commission_rate'] ?? $data['commission_rate'] ?? 5,
+                'premium_commission_rate' => $data['premium_commission_rate'] ?? $data['commission_rate'] ?? 5,
                 'monthly_target_amount' => $data['monthly_target_amount'] ?? 0,
                 'monthly_target_schools' => $data['monthly_target_schools'] ?? 0,
                 'next_of_kin_name' => $data['next_of_kin_name'] ?? null,
@@ -509,11 +521,17 @@ class SalesRepresentativeController extends Controller
             'final_settlement_status' => ['nullable', Rule::in(['pending_review', 'approved', 'paid', 'forfeited', 'not_applicable'])],
             'final_settlement_notes' => ['nullable', 'string'],
             'commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'core_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'premium_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'monthly_target_amount' => ['nullable', 'numeric', 'min:0'],
             'monthly_target_schools' => ['nullable', 'integer', 'min:0'],
             'joined_at' => ['nullable', 'date'],
             'notes' => ['nullable', 'string'],
         ]);
+
+        if (array_key_exists('premium_commission_rate', $data)) {
+            $data['commission_rate'] = $data['premium_commission_rate'];
+        }
 
         DB::transaction(function () use ($data, $salesRepresentative, $request) {
             $userData = array_intersect_key($data, array_flip(['firstname', 'surname', 'email', 'phone']));
@@ -535,6 +553,8 @@ class SalesRepresentativeController extends Controller
                 'final_settlement_status',
                 'final_settlement_notes',
                 'commission_rate',
+                'core_commission_rate',
+                'premium_commission_rate',
                 'monthly_target_amount',
                 'monthly_target_schools',
                 'joined_at',
@@ -695,7 +715,10 @@ class SalesRepresentativeController extends Controller
             'phone' => $rep->user?->phone,
             'region' => $rep->region,
             'status' => $rep->status,
+            'sales_page_url' => $this->referrals->salesPageUrl($rep->code),
             'commission_rate' => (float) $rep->commission_rate,
+            'core_commission_rate' => (float) ($rep->core_commission_rate ?? $rep->commission_rate),
+            'premium_commission_rate' => (float) ($rep->premium_commission_rate ?? $rep->commission_rate),
             'monthly_target_amount' => (float) $rep->monthly_target_amount,
             'monthly_target_schools' => (int) $rep->monthly_target_schools,
             'joined_at' => optional($rep->joined_at)?->toDateString(),

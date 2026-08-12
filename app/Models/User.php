@@ -35,7 +35,9 @@ protected $guarded = [];
      */
     protected $hidden = [
         'password',
+        'default_password',
         'remember_token',
+        'twilio_auth_token',
     ];
 
     /**
@@ -202,7 +204,7 @@ public function class()
         return $this->hasMany(SecondTermResult::class);
     }
 
-    public function thirdtermresults()
+public function thirdtermresults()
     {
         return $this->hasMany(ThirdTermResult::class);
     }
@@ -240,6 +242,11 @@ public function class()
 public function parentAccount()
 {
     return $this->belongsToMany(User::class, 'parent_students', 'student_id', 'parent_id')->first();
+}
+
+public function studentResultsV2()
+{
+    return $this->hasMany(StudentResultV2::class, 'user_id');
 }
 
 

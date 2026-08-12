@@ -401,7 +401,7 @@ public function studentFeeDetails(Request $request)
      */
     public function verifyOnlinePayment(string $reference)
     {
-        $payment = $this->feePaymentService->verify($reference);
+        $payment = $this->feePaymentService->verify($reference, (int) Auth::user()->school_id);
 
         return response()->json([
             'status' => $payment->status,

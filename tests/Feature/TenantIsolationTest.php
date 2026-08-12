@@ -17,6 +17,12 @@ class TenantIsolationTest extends TestCase
 {
     use DatabaseTransactions;
 
+    public function test_legacy_result_endpoint_is_not_publicly_accessible(): void
+    {
+        $this->getJson('/api/result/1?class_id=1&term=First%20Term&session=2025%2F2026')
+            ->assertUnauthorized();
+    }
+
     public function test_school_owned_models_are_automatically_scoped_to_the_current_user_school(): void
     {
         [$schoolA, $adminA] = $this->createSchoolWithAdmin('School A');
@@ -71,13 +77,61 @@ class TenantIsolationTest extends TestCase
             'school_id' => $schoolA->id,
             'domain' => 'school-a.test',
             'type' => 'custom',
-            'status' => 'verified',
+            'status' => 'active',
             'verified_at' => now(),
+            'ownership_verified_at' => now(),
+            'routing_verified_at' => now(),
+            'activated_at' => now(),
         ]);
 
         Sanctum::actingAs($adminB);
 
         $this->getJson('http://school-a.test/api/user')
+            ->assertForbidden();
+    }
+
+    public function test_custom_domain_login_cannot_authenticate_a_user_from_another_school(): void
+    {
+        [$schoolA] = $this->createSchoolWithAdmin('School A');
+        [, $adminB] = $this->createSchoolWithAdmin('School B');
+
+        SchoolDomain::create([
+            'school_id' => $schoolA->id,
+            'domain' => 'login.school-a.test',
+            'type' => 'custom',
+            'status' => 'active',
+            'verified_at' => now(),
+            'ownership_verified_at' => now(),
+            'routing_verified_at' => now(),
+            'activated_at' => now(),
+        ]);
+
+        $this->postJson('http://login.school-a.test/api/login', [
+            'identifier' => $adminB->email,
+            'password' => 'password',
+        ])->assertUnprocessable();
+    }
+
+    public function test_tls_ask_endpoint_allows_only_active_registered_domains(): void
+    {
+        config(['domains.tls_ask_secret' => 'test-domain-secret']);
+        [$school] = $this->createSchoolWithAdmin('TLS School');
+
+        SchoolDomain::create([
+            'school_id' => $school->id,
+            'domain' => 'portal.tls-school.test',
+            'type' => 'custom',
+            'status' => 'active',
+            'verified_at' => now(),
+            'ownership_verified_at' => now(),
+            'routing_verified_at' => now(),
+            'activated_at' => now(),
+        ]);
+
+        $this->get('http://127.0.0.1/api/internal/domains/tls-allowed?token=test-domain-secret&domain=portal.tls-school.test')
+            ->assertNoContent();
+
+        $this->get('http://127.0.0.1/api/internal/domains/tls-allowed?token=wrong&domain=portal.tls-school.test')
             ->assertForbidden();
     }
 

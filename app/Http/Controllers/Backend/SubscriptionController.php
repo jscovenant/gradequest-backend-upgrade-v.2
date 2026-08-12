@@ -20,10 +20,51 @@ use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
 use App\Services\SalesCommissionService;
 use App\Services\WelcomeWalletCreditService;
+use App\Services\SubscriptionAiCreditService;
 
 class SubscriptionController extends Controller
 {
   protected $paystackSecretKey;
+
+    public function handleVerifiedWebhook(array $event): void
+    {
+        if (! in_array($event['event'] ?? null, ['charge.success', 'charge.failed'], true)) return;
+
+        $data = is_array($event['data'] ?? null) ? $event['data'] : [];
+        $reference = (string) ($data['reference'] ?? '');
+        $payment = SubPayment::where('reference', $reference)->first();
+        if (! $payment || in_array($payment->status, ['successful', 'success', 'paid'], true)) return;
+
+        if (($event['event'] ?? null) !== 'charge.success' || ($data['status'] ?? null) !== 'success') {
+            $payment->update(['status' => 'failed']);
+            return;
+        }
+
+        abort_unless((int) ($data['amount'] ?? 0) === (int) round(((float) $payment->amount) * 100), 422, 'Subscription payment amount mismatch.');
+
+        DB::transaction(function () use ($payment, $data): void {
+            $locked = SubPayment::whereKey($payment->id)->lockForUpdate()->firstOrFail();
+            if (in_array($locked->status, ['successful', 'success', 'paid'], true)) return;
+
+            $plan = SubscriptionPlan::findOrFail($locked->subscription_plan_id);
+            $user = User::findOrFail($locked->user_id);
+            $cycles = max(1, (int) ($locked->billing_cycle_count ?? 1));
+            $duration = (int) ($locked->duration_in_days ?? ((int) $plan->duration_in_days * $cycles));
+
+            $locked->update([
+                'status' => 'successful',
+                'paystack_id' => $data['id'] ?? null,
+                'channel' => $data['channel'] ?? null,
+                'card_type' => $data['authorization']['card_type'] ?? null,
+                'last4' => $data['authorization']['last4'] ?? null,
+                'paid_at' => now(),
+                'starts_at' => now(),
+            ]);
+
+            $subscription = $this->activateSubscription($user, $plan, $cycles, $duration, 'paystack', false, $locked->reference);
+            app(SalesCommissionService::class)->recordSubscriptionCommission($locked->fresh(), $subscription);
+        });
+    }
 
     public function __construct()
     {
@@ -39,17 +80,37 @@ class SubscriptionController extends Controller
     {
         $user = Auth::user();
         $activeStudents = $user ? $this->activeStudentCountFor($user) : 0;
+        $current = $user ? Subscription::with('plan')
+            ->where('user_id', $user->id)
+            ->where('status', 'active')
+            ->latest('created_at')
+            ->first() : null;
+        $hasActiveUnexpired = (bool) ($current?->ends_at && Carbon::parse($current->ends_at)->isFuture());
+        $remainingDays = $hasActiveUnexpired
+            ? max(0, (int) ceil(now()->diffInDays(Carbon::parse($current->ends_at), false)))
+            : 0;
+        $upgradeCredit = $hasActiveUnexpired && $user
+            ? $this->unusedCreditForSubscription($current, $user)
+            : 0.0;
+        $currentPackageValue = $hasActiveUnexpired && $user
+            ? $this->paidValueForSubscription($current, $user)
+            : 0.0;
 
         $plans = SubscriptionPlan::where('is_active', 1)
             ->orderBy('price_per_student')
-            ->get(['id', 'name', 'price', 'price_per_student', 'currency', 'max_students', 'duration_in_days', 'billing_interval', 'description'])
-            ->map(function (SubscriptionPlan $plan) use ($activeStudents) {
+            ->get(['id', 'name', 'price', 'price_per_student', 'currency', 'max_students', 'duration_in_days', 'billing_interval', 'description', 'is_active'])
+            ->map(function (SubscriptionPlan $plan) use ($activeStudents, $current, $hasActiveUnexpired, $remainingDays, $upgradeCredit, $currentPackageValue) {
                 $pricePerStudent = (float) ($plan->price_per_student ?? $plan->price ?? 0);
                 $studentLimit = (int) ($plan->max_students ?? 0);
+                $samePlan = $hasActiveUnexpired && (int) $current->subscription_plan_id === (int) $plan->id;
+                $higherPlan = ! $hasActiveUnexpired || $this->isHigherPlan($plan, $current?->plan);
+                $canSelect = ! $hasActiveUnexpired || (! $samePlan && $higherPlan);
+                $baseAmount = $activeStudents * $pricePerStudent;
 
                 return [
                     'id' => $plan->id,
                     'name' => $plan->name,
+                    'is_active' => (bool) $plan->is_active,
                     'price' => $pricePerStudent,
                     'price_per_student' => $pricePerStudent,
                     'currency' => $plan->currency,
@@ -59,8 +120,23 @@ class SubscriptionController extends Controller
                     'description' => $plan->description,
                     'active_students' => $activeStudents,
                     'billable_students' => $activeStudents,
-                    'current_amount' => $activeStudents * $pricePerStudent,
+                    'current_amount' => $baseAmount,
                     'limit_exceeded' => $studentLimit > 0 && $activeStudents > $studentLimit,
+                    'can_select' => $canSelect,
+                    'subscription_action' => $hasActiveUnexpired ? 'upgrade' : ($current ? 'renewal' : 'purchase'),
+                    'disabled_reason' => ! $canSelect
+                        ? ($samePlan
+                            ? 'Your current package is still active. You can renew it after expiry.'
+                            : 'You can only move to a higher package while your current subscription is active.')
+                        : null,
+                    'upgrade_credit_amount' => $canSelect && $hasActiveUnexpired ? $upgradeCredit : 0,
+                    'current_package_value' => $canSelect && $hasActiveUnexpired ? $currentPackageValue : 0,
+                    'used_value_amount' => $canSelect && $hasActiveUnexpired ? max(0, round($currentPackageValue - $upgradeCredit, 2)) : 0,
+                    'payable_amount' => $canSelect ? max(0, round($baseAmount - ($hasActiveUnexpired ? $upgradeCredit : 0), 2)) : null,
+                    'carried_days' => $canSelect && $hasActiveUnexpired ? $remainingDays : 0,
+                    'projected_expiry' => $canSelect
+                        ? now()->addDays(((int) $plan->duration_in_days) + ($hasActiveUnexpired ? $remainingDays : 0))->toIso8601String()
+                        : null,
                 ];
             });
 
@@ -146,7 +222,12 @@ class SubscriptionController extends Controller
             'total_before_credit' => $totalBeforeCredit,
             'payable_amount' => $payable,
             'current_subscription' => $current,
-            'remaining_days' => $hasActiveUnexpired ? max(0, now()->diffInDays(Carbon::parse($current->ends_at), false)) : 0,
+            // Carbon can return a fractional day when timestamps differ by a
+            // few milliseconds. A paid day that is still in progress remains
+            // valid, so round it up instead of silently losing it.
+            'remaining_days' => $hasActiveUnexpired
+                ? max(0, (int) ceil(now()->diffInDays(Carbon::parse($current->ends_at), false)))
+                : 0,
         ];
     }
 
@@ -179,32 +260,43 @@ class SubscriptionController extends Controller
 
         $start = Carbon::parse($subscription->starts_at);
         $end = Carbon::parse($subscription->ends_at);
-        $totalDays = max(1, $start->diffInDays($end));
-        $remainingDays = max(0, now()->diffInDays($end, false));
+        $totalDays = max(1, (int) ceil($start->diffInDays($end)));
+        $remainingDays = max(0, (int) ceil(now()->diffInDays($end, false)));
 
         if ($remainingDays <= 0) {
             return 0.0;
         }
 
+        $paidAmount = $this->paidValueForSubscription($subscription, $user);
+
+        return round(($paidAmount / $totalDays) * $remainingDays, 2);
+    }
+
+    protected function paidValueForSubscription(Subscription $subscription, User $user): float
+    {
         $latestPayment = SubPayment::where('user_id', $user->id)
             ->where('subscription_plan_id', $subscription->subscription_plan_id)
             ->whereIn('status', ['successful', 'success', 'paid'])
             ->latest('created_at')
             ->first();
 
-        $paidAmount = (float) ($latestPayment?->amount ?? 0);
+        // The package's value includes both cash paid and any credit carried
+        // from an earlier package. Otherwise a second upgrade would discard
+        // value that the school had already paid for.
+        $paidAmount = (float) ($latestPayment?->amount ?? 0)
+            + (float) ($latestPayment?->upgrade_credit_amount ?? 0);
 
         if ($paidAmount <= 0) {
             $cycles = max(1, (int) ($subscription->billing_cycle_count ?? 1));
             [$paidAmount] = $this->computeTotal($this->planBaseAmount($subscription->plan, $user, false), $cycles);
         }
 
-        return round(($paidAmount / $totalDays) * $remainingDays, 2);
+        return round($paidAmount, 2);
     }
 
-    protected function activateSubscription(User $user, SubscriptionPlan $plan, int $cycles, int $durationDays, string $source, bool $autoRenew = false): Subscription
+    protected function activateSubscription(User $user, SubscriptionPlan $plan, int $cycles, int $durationDays, string $source, bool $autoRenew = false, ?string $paymentReference = null): Subscription
     {
-        return Subscription::updateOrCreate(
+        $subscription = Subscription::updateOrCreate(
             ['user_id' => $user->id],
             [
                 'subscription_plan_id' => $plan->id,
@@ -217,12 +309,45 @@ class SubscriptionController extends Controller
                 'subscription_code' => null,
                 'email_token' => null,
                 'starts_at' => now(),
+                // Upgrades include the unused days snapshotted when checkout was
+                // created. This keeps the expiry deterministic even if Paystack
+                // verification happens later.
                 'ends_at' => now()->addDays($durationDays),
                 'notified_about_expiry' => 0,
                 'reminder_stage' => 0,
                 'last_reminded_at' => null,
             ]
         );
+
+        if ($this->planIncludesAi($plan)) {
+            app(SubscriptionAiCreditService::class)->allocateForSubscription(
+                $subscription->fresh('user', 'plan'),
+                'subscription-ai-allocation:' . ($paymentReference ?: $subscription->id . ':' . now()->format('YmdHis'))
+            );
+        }
+
+        return $subscription;
+    }
+
+    protected function planIncludesAi(SubscriptionPlan $plan): bool
+    {
+        $features = is_array($plan->features ?? null)
+            ? $plan->features
+            : json_decode((string) ($plan->features ?? '[]'), true);
+
+        $keys = collect(is_array($features) ? $features : [])
+            ->pluck('feature_key')
+            ->filter()
+            ->map(fn ($key) => strtolower((string) $key))
+            ->all();
+
+        return str_contains(strtolower((string) $plan->name), 'plus')
+            || in_array('ai_cbt_question_generator', $keys, true)
+            || in_array('ai_result_comment_generator', $keys, true)
+            || in_array('ai_lesson_plan_generator', $keys, true)
+            || in_array('support_ai_cbt_question_generator', $keys, true)
+            || in_array('support_ai_result_comment_generator', $keys, true)
+            || in_array('support_ai_lesson_plan_generator', $keys, true);
     }
 
     /**
@@ -244,7 +369,8 @@ class SubscriptionController extends Controller
     $totalAmount = $quote['payable_amount'];
     $discountAmount = $quote['discount_amount'];
     $subtotal = $quote['subtotal'];
-    $totalDurationDays = (int) $plan->duration_in_days * $cycles;
+    $newPackageDays = (int) $plan->duration_in_days * $cycles;
+    $totalDurationDays = $newPackageDays + (int) $quote['remaining_days'];
 
     $reference = 'trx_' . uniqid();
 
@@ -269,7 +395,7 @@ class SubscriptionController extends Controller
             'previous_subscription_ends_at' => $quote['current_subscription']?->ends_at,
         ]);
 
-        $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'paystack');
+        $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'paystack', false, $payment->reference);
         app(SalesCommissionService::class)->recordSubscriptionCommission($payment, $subscription);
 
         return response()->json([
@@ -284,6 +410,8 @@ class SubscriptionController extends Controller
                 'upgrade_credit_amount' => $quote['upgrade_credit_amount'],
                 'payable_amount' => $totalAmount,
                 'remaining_days' => $quote['remaining_days'],
+                'new_package_days' => $newPackageDays,
+                'expires_at' => now()->addDays($totalDurationDays)->toIso8601String(),
             ],
         ]);
     }
@@ -303,6 +431,9 @@ class SubscriptionController extends Controller
             'price_per_student' => (float) ($plan->price_per_student ?? $plan->price ?? 0),
             'subtotal_amount' => $subtotal,
             'upgrade_credit_amount' => $quote['upgrade_credit_amount'],
+            'remaining_days' => $quote['remaining_days'],
+            'new_package_days' => $newPackageDays,
+            'total_duration_days' => $totalDurationDays,
             'subscription_action' => $quote['action'],
             'previous_subscription_plan_id' => $quote['current_subscription']?->subscription_plan_id,
             'payment_source' => 'paystack',
@@ -353,6 +484,8 @@ class SubscriptionController extends Controller
             'upgrade_credit_amount' => $quote['upgrade_credit_amount'],
             'payable_amount' => $totalAmount,
             'remaining_days' => $quote['remaining_days'],
+            'new_package_days' => $newPackageDays,
+            'expires_at' => now()->addDays($totalDurationDays)->toIso8601String(),
         ],
     ]));
 }
@@ -422,7 +555,7 @@ class SubscriptionController extends Controller
                 'starts_at' => now(),
             ]);
 
-            $subscription = $this->activateSubscription($user, $plan, (int) $cycles, (int) $totalDurationDays, 'paystack');
+            $subscription = $this->activateSubscription($user, $plan, (int) $cycles, (int) $totalDurationDays, 'paystack', false, $payment->reference);
             app(SalesCommissionService::class)->recordSubscriptionCommission($payment->fresh(), $subscription);
         });
 
@@ -504,7 +637,8 @@ class SubscriptionController extends Controller
         $totalAmount = $quote['payable_amount'];
         $discountAmount = $quote['discount_amount'];
         $subtotal = $quote['subtotal'];
-        $totalDurationDays = (int) $plan->duration_in_days * $cycles;
+        $newPackageDays = (int) $plan->duration_in_days * $cycles;
+        $totalDurationDays = $newPackageDays + (int) $quote['remaining_days'];
 
         app(WelcomeWalletCreditService::class)->expireUnusedCredits($user);
 
@@ -549,7 +683,7 @@ class SubscriptionController extends Controller
         ]);
 
         // ✅ Create or update subscription (imitate verify() flow)
-        $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'wallet', (bool) ($request->auto_renew ?? false));
+        $subscription = $this->activateSubscription($user, $plan, $cycles, $totalDurationDays, 'wallet', (bool) ($request->auto_renew ?? false), $reference);
         app(SalesCommissionService::class)->recordSubscriptionCommission($payment, $subscription);
 
         // ✅ Record in wallet transaction table (for audit)
@@ -586,6 +720,8 @@ class SubscriptionController extends Controller
                 'upgrade_credit_amount' => $quote['upgrade_credit_amount'],
                 'payable_amount' => $totalAmount,
                 'remaining_days' => $quote['remaining_days'],
+                'new_package_days' => $newPackageDays,
+                'expires_at' => $subscription->ends_at?->toIso8601String(),
             ],
         ]);
 
@@ -664,6 +800,7 @@ class SubscriptionController extends Controller
         $cycles = $subscription->billing_cycle_count ?? 1;
 
         return response()->json([
+            'subscription_plan_id' => $subscription->subscription_plan_id,
             'subscription_type' => $subscription->plan->name ?? 'Unknown Plan',
             'amount' => $this->planBaseAmount($subscription->plan, $request->user(), false) * $cycles,
             'price_per_student' => (float) ($subscription->plan->price_per_student ?? $subscription->plan->price ?? 0),
@@ -674,6 +811,23 @@ class SubscriptionController extends Controller
             'start_date' => $subscription->starts_at,
             'end_date' => $subscription->ends_at,
             'duration' => $subscription->plan->duration_in_days ?? null,
+            'is_unexpired' => (bool) ($subscription->ends_at && Carbon::parse($subscription->ends_at)->isFuture()),
+            'days_used' => $subscription->starts_at
+                ? max(0, (int) floor(Carbon::parse($subscription->starts_at)->diffInDays(now())))
+                : 0,
+            'days_remaining' => $subscription->ends_at
+                ? max(0, (int) ceil(now()->diffInDays(Carbon::parse($subscription->ends_at), false)))
+                : 0,
+            'unused_value' => ($subscription->status === 'active' && $subscription->ends_at && Carbon::parse($subscription->ends_at)->isFuture())
+                ? $this->unusedCreditForSubscription($subscription, $request->user())
+                : 0,
+            'used_value' => ($subscription->status === 'active' && $subscription->ends_at && Carbon::parse($subscription->ends_at)->isFuture())
+                ? max(0, round(
+                    $this->paidValueForSubscription($subscription, $request->user())
+                    - $this->unusedCreditForSubscription($subscription, $request->user()),
+                    2
+                ))
+                : 0,
          'auto_renew_source' => $subscription->auto_renew_source ?? 'wallet',
         ]);
     }
@@ -800,3 +954,7 @@ public function billingHistory(Request $request)
 }
 
 }
+
+
+
+

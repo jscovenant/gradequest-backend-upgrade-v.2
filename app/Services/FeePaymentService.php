@@ -2,10 +2,12 @@
 
 namespace App\Services;
 
+use App\Events\PaymentReceived;
 use App\Models\Payment;
 use App\Models\SchoolBankAccount;
 use App\Models\StudentFee;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -13,7 +15,8 @@ class FeePaymentService
 {
     public function __construct(
         private PlatformFeeService $platformFeeService,
-        private SchoolBillingService $schoolBillingService
+        private SchoolBillingService $schoolBillingService,
+        private SalesCommissionService $salesCommissionService
     )
     {
     }
@@ -95,9 +98,12 @@ class FeePaymentService
      * Verify a transaction directly with Paystack — used by the frontend
      * callback page as a fallback/confirmation alongside the webhook.
      */
-    public function verify(string $reference): Payment
+    public function verify(string $reference, int $schoolId): Payment
     {
-        $payment = Payment::where('reference', $reference)->firstOrFail();
+        $payment = Payment::query()
+            ->where('school_id', $schoolId)
+            ->where('reference', $reference)
+            ->firstOrFail();
 
         $response = Http::withToken(config('services.paystack.secret'))
             ->get("https://api.paystack.co/transaction/verify/{$reference}");
@@ -137,18 +143,36 @@ class FeePaymentService
 
     private function applyStatus(Payment $payment, string $paystackStatus, array $rawData): void
     {
+        DB::transaction(function () use ($payment, $paystackStatus, $rawData): void {
+            $lockedPayment = Payment::query()->lockForUpdate()->findOrFail($payment->id);
+            $this->applyStatusLocked($lockedPayment, $paystackStatus, $rawData);
+        });
+    }
+
+    private function applyStatusLocked(Payment $payment, string $paystackStatus, array $rawData): void
+    {
         if ($payment->status !== 'pending') {
             return; // already finalized — avoid double-processing from both webhook and verify
         }
 
         if ($paystackStatus === 'success') {
+            $expectedKobo = (int) round(((float) $payment->amount) * 100);
+            $providerKobo = (int) ($rawData['amount'] ?? 0);
+
+            if ($providerKobo !== $expectedKobo) {
+                throw new RuntimeException('Paystack payment amount does not match the expected transaction amount.');
+            }
+
             $payment->update(['status' => 'success', 'paystack_response' => $rawData]);
             $this->applySuccessfulPaymentToStudentFee($payment->fresh());
 
             if ($payment->platform_fee > 0) {
                 $this->platformFeeService->confirmCharge($payment->reference);
                 $this->schoolBillingService->markOnlineEntitlementFromPayment($payment->fresh());
+                $this->salesCommissionService->recordCoreCommission($payment->fresh('studentFee'));
             }
+
+            DB::afterCommit(fn () => PaymentReceived::dispatch((int) $payment->id, (int) $payment->school_id));
 
         } else {
             $payment->update(['status' => 'failed', 'paystack_response' => $rawData]);
@@ -161,7 +185,7 @@ class FeePaymentService
 
     private function applySuccessfulPaymentToStudentFee(Payment $payment): void
     {
-        $studentFee = StudentFee::find($payment->student_fee_id);
+        $studentFee = StudentFee::query()->lockForUpdate()->find($payment->student_fee_id);
 
         if (! $studentFee) {
             return;

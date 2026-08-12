@@ -27,12 +27,14 @@ use App\Models\StudentClass;
 use App\Models\StudentResultV2;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 use App\Models\UserHasAffectiveDomain;
 use App\Models\UserHasPsychomotorDomain;
 use App\Services\SchoolBillingService;
 use App\Services\Students\StudentExcelImportService;
+use App\Services\Results\SubjectService;
 
 
 use Illuminate\Http\JsonResponse;
@@ -70,35 +72,33 @@ class StudentController extends Controller
 
 
 
-// ✅ Fetch subjects offered by student's department
+// Fetch subjects offered by student's department, including general subjects.
     public function mySubjects()
     {
         $student = Auth::user();
 
-        // Ensure the user is a student and has a department
-        if (!$student || !$student->department_id) {
+        if (! $student) {
             return response()->json([
-                'message' => 'Student department not found.'
+                'message' => 'Student not found.',
+                'subjects' => [],
             ], 404);
         }
 
-        // ✅ Get subjects linked to this department
-        $subjects = Subject::where('department_id', $student->department_id)
-            ->where('school_id', $student->school_id)
-            ->whereNull('archived_at')
-            ->select('id', 'name', 'subject_id')
-            ->get();
+        $subjects = app(SubjectService::class)->subjectsForDepartment(
+            (int) $student->school_id,
+            $student->department_id ? (int) $student->department_id : null
+        );
 
         if ($subjects->isEmpty()) {
             return response()->json([
-                'message' => 'No subjects found for your department.',
+                'message' => 'No subjects found for your department yet.',
                 'subjects' => [],
             ]);
         }
 
         return response()->json([
             'message' => 'Subjects retrieved successfully.',
-            'department' => $student->department->name ?? null,
+            'department' => $student->department->name ?? 'General',
             'subjects' => $subjects,
         ]);
     }
@@ -125,7 +125,9 @@ class StudentController extends Controller
         ->withRole('student')
         ->where('school_id', $user->school_id);
 
-    if ($studentStatus !== 'all') {
+    if ($studentStatus === 'inactive') {
+        $studentsQuery->where('status', 0);
+    } elseif ($studentStatus !== 'all') {
         $studentsQuery->where('student_status', $studentStatus);
     }
 
@@ -198,6 +200,10 @@ class StudentController extends Controller
             'alumni' => (int) ($statusCounts['alumni'] ?? 0),
             'graduate' => (int) ($statusCounts['graduate'] ?? 0),
             'withdrawn' => (int) ($statusCounts['withdrawn'] ?? 0),
+            'inactive' => User::withRole('student')
+                ->where('school_id', $user->school_id)
+                ->where('status', 0)
+                ->count(),
         ],
         'user_role' => $user->role
     ]);
@@ -237,7 +243,7 @@ class StudentController extends Controller
 
     $sessions = AcademicSession::where('school_id', $auth->school_id)->get();
 
-    // 🔹 Add available levels and departments
+    // ðŸ”¹ Add available levels and departments
     $levels = StudentClass::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
     $departments = Department::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
     $sections = Section::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
@@ -336,7 +342,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         ],
     ]);
 
-    // ✅ Step 3: Generate or accept admission number
+    // âœ… Step 3: Generate or accept admission number
     if ($schoolSetting->auto_admission == 1) {
         do {
             $regNo = random_int(100000, 999999);
@@ -352,7 +358,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         }
     }
 
-    // ✅ Step 4: Prevent duplicate student names in same school
+    // âœ… Step 4: Prevent duplicate student names in same school
     $existingUser = User::where([
             'firstname'  => $request->firstname,
             'surname'    => $request->surname,
@@ -366,7 +372,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         ], 409);
     }
 
-    // ✅ Step 5: Create student
+    // âœ… Step 5: Create student
     $randomPassword = Str::random(8);
 
     $user = new User();
@@ -392,7 +398,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
     $user->status            = 1;
     $user->student_status    = 'active';
 
-    // ✅ Step 6: Upload photo (if provided)
+    // âœ… Step 6: Upload photo (if provided)
     if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
         $file     = $request->file('photo');
         $fileName = now()->format('ymdHi') . '_' . $file->getClientOriginalName();
@@ -486,7 +492,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         $student->status = "1";
         $student->student_status = $request->student_status ?? $student->student_status ?? 'active';
     
-        // ✅ Only update admission number if it was filled
+        // âœ… Only update admission number if it was filled
         if ($request->filled('admission_no')) {
             $student->reg_no = $request->admission_no;
         }
@@ -584,35 +590,27 @@ if (strtolower((string) $request->input('role')) === 'student') {
         }
 
         // Only students can be withdrawn through this endpoint
-        if ($user->role !== 'Student') {
+        if (strtolower(trim((string) $user->role)) !== 'student') {
             return response()->json([
                 'message' => 'Only student accounts can be withdrawn.',
                 'status'  => 'error',
             ], 403);
         }
 
-        // Manually delete all related records to guarantee cleanup,
-        // regardless of whether DB foreign keys have cascade set.
-        DB::transaction(function () use ($user) {
+        DB::transaction(function () use ($user, $admin) {
+            $locked = User::whereKey($user->id)->lockForUpdate()->firstOrFail();
+            $locked->update([
+                'status' => 0,
+                'student_status' => 'withdrawn',
+                'student_status_changed_at' => now(),
+                'student_status_changed_by' => $admin->id,
+            ]);
 
-            // Academic records
-            StudentResultV2::where('user_id', $user->id)->delete();
-            Average::where('user_id', $user->id)->delete();
-
-            // Ratings
-            UserHasAffectiveDomain::where('user_id', $user->id)->delete();
-            UserHasPsychomotorDomain::where('user_id', $user->id)->delete();
-
-            // Session enrollment / pivot
-            // If it's a pivot table: DB::table('session_user')->where('user_id', $user->id)->delete();
-            // $user->sessions()->detach(); // if using belongsToMany
-
-            // Finally remove the user
-            $user->delete();
+            $locked->tokens()->delete();
         });
 
         return response()->json([
-            'message' => 'Student withdrawn and all academic records removed successfully.',
+            'message' => 'Student withdrawn successfully. Their account is inactive and historical records were preserved.',
             'status'  => 'success',
         ], 200);
 
@@ -622,6 +620,52 @@ if (strtolower((string) $request->input('role')) === 'student') {
             'status'  => 'error',
         ], 500);
     }
+}
+
+public function destroyStudent(Request $request, $id)
+{
+    $validated = $request->validate([
+        'confirmation' => ['required', Rule::in(['DELETE'])],
+    ]);
+
+    $admin = Auth::user();
+    $student = User::forSchool($admin->school_id)->withRole('student')->findOrFail($id);
+
+    $dependencies = [
+        'student_results_v2' => 'user_id',
+        'averages' => 'user_id',
+        'attendances' => 'student_id',
+        'student_fees' => 'student_id',
+        'parent_students' => 'student_id',
+        'cbt_attempts' => 'student_id',
+        'user_has_affective_domains' => 'user_id',
+        'user_has_psychomotor_domains' => 'user_id',
+    ];
+
+    $history = collect($dependencies)
+        ->filter(fn (string $column, string $table) => Schema::hasTable($table)
+            && Schema::hasColumn($table, $column)
+            && DB::table($table)->where($column, $student->id)->exists())
+        ->keys()
+        ->values();
+
+    if ($history->isNotEmpty()) {
+        return response()->json([
+            'message' => 'This student has historical records and cannot be deleted. Withdraw the student instead.',
+            'blocking_records' => $history,
+        ], 409);
+    }
+
+    DB::transaction(function () use ($student): void {
+        $locked = User::whereKey($student->id)->lockForUpdate()->firstOrFail();
+        $locked->tokens()->delete();
+        $locked->delete();
+    });
+
+    return response()->json([
+        'message' => 'Erroneous student account deleted permanently.',
+        'status' => 'success',
+    ]);
 }
 
 public function studentImportTemplate(Request $request, StudentExcelImportService $service)
@@ -992,3 +1036,4 @@ public function promoteStudents(Request $request)
 
 
 }
+

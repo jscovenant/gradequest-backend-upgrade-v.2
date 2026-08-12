@@ -6,6 +6,8 @@ use Illuminate\Support\Facades\Schedule;
 use App\Jobs\ProcessAutoFeeInvoicesJob;
 use App\Models\SchoolSetting;
 use App\Models\SalesPayoutPolicy;
+use App\Models\SchoolDomain;
+use App\Services\SchoolDomainService;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -13,7 +15,10 @@ Artisan::command('inspire', function () {
 
 
 // Run every day at 7am (change as you like)
-Schedule::job(new ProcessAutoFeeInvoicesJob(24))->everyMinute();
+Schedule::job(new ProcessAutoFeeInvoicesJob())
+    ->everyFifteenMinutes()
+    ->name('automatic-fee-reminders')
+    ->withoutOverlapping();
 
 Schedule::command('subscriptions:send-reminders')
     ->everyMinute();
@@ -22,8 +27,16 @@ Schedule::command('subscriptions:auto-renew-wallet')->everyMinute();
 
 
 Schedule::command('results:scan-incomplete')->everyMinute();
-Schedule::command('results:scan-incomplete')->everyMinute();
 Schedule::command('results:scan-anomalies')->everyMinute();
+
+Schedule::call(function (SchoolDomainService $domains) {
+    SchoolDomain::query()
+        ->where('status', 'active')
+        ->orderBy('id')
+        ->chunkById(100, function ($records) use ($domains) {
+            $records->each(fn (SchoolDomain $domain) => $domains->checkHealth($domain));
+        });
+})->dailyAt('03:30')->name('custom-domain-health-check')->withoutOverlapping();
 
 Schedule::command('sales:review-eligible')
     ->dailyAt('02:00')
@@ -45,6 +58,11 @@ Schedule::command('sales:payouts-monthly')
     ->name('monthly-sales-payouts')
     ->withoutOverlapping();
 
+Schedule::command('sales:payouts-reconcile')
+    ->everyTenMinutes()
+    ->name('sales-payout-reconciliation')
+    ->withoutOverlapping();
+
 
 Schedule::call(function () {
     SchoolSetting::where('whatsapp_monthly_limit', '>', 0)
@@ -53,9 +71,4 @@ Schedule::call(function () {
             'whatsapp_usage_reset_date' => now(),
         ]);
 })->monthly()->name('reset-whatsapp-usage')->withoutOverlapping();
-
-
-
-
-
 

@@ -19,6 +19,13 @@ class GradequestBillingPolicy extends Model
         'offline_grace_days' => 'integer',
         'offline_school_block_enabled' => 'boolean',
         'platform_fee_per_student' => 'decimal:2',
+        'whatsapp_credit_unit_price' => 'decimal:2',
+        'legacy_plus_ai_credits' => 'integer',
+        'ai_result_comment_credit_cost' => 'integer',
+        'ai_cbt_question_credit_cost' => 'integer',
+        'ai_lesson_plan_credit_cost' => 'integer',
+        'ai_fee_collection_credit_cost' => 'integer',
+        'ai_credit_unit_price' => 'decimal:2',
         'legacy_subscription_honor_enabled' => 'boolean',
         'per_student_billing_starts_at' => 'datetime',
         'temporary_access_min_days' => 'integer',
@@ -26,3 +33,5 @@ class GradequestBillingPolicy extends Model
         'allowed_blocked_actions' => 'array',
     ];
 }
+
+

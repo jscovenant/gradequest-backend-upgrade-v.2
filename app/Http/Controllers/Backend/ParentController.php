@@ -394,20 +394,23 @@ public function update(Request $request, $id)
         'password' => 'nullable|string|min:6',
     ]);
 
-    // ✅ Update basic info
-    $parent->firstname = $request->firstname;
-    $parent->surname = $request->surname;
-    $parent->email = $request->email;
-    $parent->phone = $request->phone;
-    $parent->address = $request->address;
+    $updates = [
+        'firstname' => $request->firstname,
+        'surname' => $request->surname,
+        'email' => $request->email,
+        'phone' => $request->phone,
+        'address' => $request->address,
+        'updated_at' => now(),
+    ];
 
-    // ✅ Handle optional password update
-    if (!empty($request->password)) {
-        $parent->password = Hash::make($request->password);
-        $parent->default_password = encrypt($request->password);
+    if ($request->filled('password')) {
+        $updates['password'] = Hash::make($request->password);
+        $updates['default_password'] = encrypt($request->password);
     }
 
-    $parent->save();
+    // Direct update avoids decrypting legacy invalid default_password values during Eloquent dirty checks.
+    User::whereKey($parent->id)->update($updates);
+    $parent = User::whereKey($parent->id)->first();
 
     return response()->json([
         'message' => 'Parent updated successfully',
@@ -570,3 +573,4 @@ public function myChildren(Request $request)
 
 
 }
+

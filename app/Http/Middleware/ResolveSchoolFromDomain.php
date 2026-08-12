@@ -9,33 +9,25 @@ use Symfony\Component\HttpFoundation\Response;
 
 class ResolveSchoolFromDomain
 {
-    // Hosts that are never school domains — skip resolution entirely
-    private array $bypass = [
-        'localhost',
-        '127.0.0.1',
-        '::1',
-    ];
-
     public function handle(Request $request, Closure $next): Response
     {
-        $host = $request->getHost();
+        $host = strtolower(trim($request->getHost(), '. '));
 
-        // Skip for local development and your own production app domain
-        if (
-            $request->is('api/offline-cbt*')
-            || in_array($host, $this->bypass, true)
+        if ($request->is('api/offline-cbt*')
+            || in_array($host, ['localhost', '127.0.0.1', '::1'], true)
             || filter_var($host, FILTER_VALIDATE_IP)
-            || $host === config('app.domain')
+            || in_array($host, $this->platformHosts(), true)
         ) {
             return $next($request);
         }
 
-        $schoolDomain = SchoolDomain::with('school')
+        $schoolDomain = SchoolDomain::query()
+            ->with('school')
             ->where('domain', $host)
-            ->where('status', 'verified')
+            ->where('status', 'active')
             ->first();
 
-        if (!$schoolDomain) {
+        if (! $schoolDomain?->school) {
             abort(404, 'Domain not recognised.');
         }
 
@@ -43,5 +35,19 @@ class ResolveSchoolFromDomain
         $request->attributes->set('school', $schoolDomain->school);
 
         return $next($request);
+    }
+
+    private function platformHosts(): array
+    {
+        $hosts = config('domains.platform_hosts', []);
+
+        foreach ([config('app.url'), config('app.frontend_url')] as $url) {
+            $parsed = parse_url((string) $url, PHP_URL_HOST);
+            if ($parsed) {
+                $hosts[] = strtolower($parsed);
+            }
+        }
+
+        return array_values(array_unique(array_filter($hosts)));
     }
 }

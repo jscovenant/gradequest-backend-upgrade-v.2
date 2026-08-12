@@ -486,14 +486,26 @@ class ResultExcelImportService
             });
 
         if (! empty($departmentIds)) {
-            $query->whereIn('department_id', $departmentIds);
+            $query->where(function ($inner) use ($departmentIds) {
+                $inner->whereNull('department_id')
+                    ->orWhereIn('department_id', $departmentIds);
+            });
+        } else {
+            $query->whereNull('department_id');
         }
 
-        return $query
-            ->select('id', 'name')
-            ->distinct()
+        $subjects = $query
+            ->select('id', 'name', 'department_id')
             ->orderBy('name')
             ->get();
+
+        return app(\App\Services\Results\SubjectService::class)
+            ->preferGeneralSubjects($subjects)
+            ->map(fn ($subject) => (object) [
+                'id' => (int) $subject->id,
+                'name' => (string) $subject->name,
+            ])
+            ->values();
     }
 
     private function normalizeHeader($value): string
@@ -742,3 +754,4 @@ class ResultExcelImportService
         return true;
     }
 }
+

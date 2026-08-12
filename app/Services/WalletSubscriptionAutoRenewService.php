@@ -167,6 +167,13 @@ class WalletSubscriptionAutoRenewService
                 'email_token' => null,
             ]);
 
+
+            if ($this->planIncludesAi($plan)) {
+                app(SubscriptionAiCreditService::class)->allocateForSubscription(
+                    $subscription->fresh('user', 'plan'),
+                    'subscription-ai-allocation:' . $reference
+                );
+            }
             Log::info('Wallet auto-renew successful', [
                 'subscription_id' => $subscription->id,
                 'user_id' => $subscription->user_id,
@@ -179,6 +186,27 @@ class WalletSubscriptionAutoRenewService
         });
     }
 
+
+    protected function planIncludesAi(SubscriptionPlan $plan): bool
+    {
+        $features = is_array($plan->features ?? null)
+            ? $plan->features
+            : json_decode((string) ($plan->features ?? '[]'), true);
+
+        $keys = collect(is_array($features) ? $features : [])
+            ->pluck('feature_key')
+            ->filter()
+            ->map(fn ($key) => strtolower((string) $key))
+            ->all();
+
+        return str_contains(strtolower((string) $plan->name), 'plus')
+            || in_array('ai_cbt_question_generator', $keys, true)
+            || in_array('ai_result_comment_generator', $keys, true)
+            || in_array('ai_lesson_plan_generator', $keys, true)
+            || in_array('support_ai_cbt_question_generator', $keys, true)
+            || in_array('support_ai_result_comment_generator', $keys, true)
+            || in_array('support_ai_lesson_plan_generator', $keys, true);
+    }
     protected function isEligibleForWalletAutoRenew(Subscription $subscription): bool
     {
         $autoRenew = strtolower((string) $subscription->auto_renew);
@@ -190,3 +218,5 @@ class WalletSubscriptionAutoRenewService
         return $enabled && $walletSource;
     }
 }
+
+
