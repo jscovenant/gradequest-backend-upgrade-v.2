@@ -473,41 +473,45 @@ class ResultExcelImportService
 
     private function subjectsForBatch(ResultBatch $batch, $students, ?int $departmentId = null)
     {
-        $departmentIds = $departmentId
-            ? [$departmentId]
-            : collect($students)->pluck('department_id')->filter()->unique()->values()->all();
-
-        $query = DB::table('subjects')
+        $sessionId = DB::table('academic_sessions')
             ->where('school_id', (int) $batch->school_id)
-            ->whereNull('archived_at')
-            ->where(function ($query) use ($batch) {
-                $query->where('class_id', (int) $batch->class_id)
-                    ->orWhereNull('class_id');
-            });
+            ->where('name', (string) $batch->session)
+            ->value('id');
 
-        if (! empty($departmentIds)) {
-            $query->where(function ($inner) use ($departmentIds) {
-                $inner->whereNull('department_id')
-                    ->orWhereIn('department_id', $departmentIds);
-            });
-        } else {
-            $query->whereNull('department_id');
+        $termId = DB::table('terms')
+            ->where('school_id', (int) $batch->school_id)
+            ->where('name', (string) $batch->term)
+            ->value('id');
+
+        $subjectService = app(\App\Services\Results\SubjectService::class);
+        $subjects = collect();
+
+        foreach ($students as $studentRow) {
+            if ($departmentId && (int) $studentRow->department_id !== (int) $departmentId) {
+                continue;
+            }
+
+            $student = new \App\Models\User();
+            $student->id = (int) $studentRow->id;
+            $student->school_id = (int) $batch->school_id;
+            $student->level_id = (int) $batch->class_id;
+            $student->section_id = $studentRow->section_id ? (int) $studentRow->section_id : null;
+            $student->department_id = $studentRow->department_id ? (int) $studentRow->department_id : null;
+
+            $subjects = $subjects->merge($subjectService->subjectsForStudent(
+                $student,
+                $sessionId ? (int) $sessionId : null,
+                $termId ? (int) $termId : null
+            ));
         }
 
-        $subjects = $query
-            ->select('id', 'name', 'department_id')
-            ->orderBy('name')
-            ->get();
-
-        return app(\App\Services\Results\SubjectService::class)
-            ->preferGeneralSubjects($subjects)
+        return $subjectService->preferGeneralSubjects($subjects)
             ->map(fn ($subject) => (object) [
                 'id' => (int) $subject->id,
                 'name' => (string) $subject->name,
             ])
             ->values();
     }
-
     private function normalizeHeader($value): string
     {
         $value = strtolower(trim((string) $value));

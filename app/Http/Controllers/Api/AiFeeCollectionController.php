@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\AutoFeeInvoiceService;
 use App\Services\Fees\AiFeeCollectionAssistantService;
 use App\Services\SubscriptionAiCreditService;
 use Illuminate\Http\JsonResponse;
@@ -64,6 +65,29 @@ class AiFeeCollectionController extends Controller
         ]);
     }
 
+
+    public function sendReminder(Request $request, AutoFeeInvoiceService $reminders): JsonResponse
+    {
+        $auth = $request->user();
+        abort_unless(in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'bursar'], true), 403, 'Unauthorized.');
+
+        $data = $request->validate([
+            'parent_id' => ['required', 'integer', 'exists:users,id'],
+            'session_id' => ['nullable', 'integer', 'exists:academic_sessions,id'],
+            'term_id' => ['nullable', 'integer', 'exists:terms,id'],
+            'class_id' => ['nullable', 'integer', 'exists:student_classes,id'],
+            'section_id' => ['nullable', 'integer', 'exists:sections,id'],
+        ]);
+
+        $schoolId = (int) ($auth->school_id ?? 0);
+        $parentId = (int) $data['parent_id'];
+        unset($data['parent_id']);
+
+        $result = $reminders->sendManualParentReminder($schoolId, $parentId, $data);
+        $status = ($result['delivered'] ?? false) ? 200 : 422;
+
+        return response()->json($result, $status);
+    }
     private function logAiUsage(Request $request, string $status, array $usage = [], array $metadata = [], ?int $creditUsageId = null, int $creditsCharged = 0): void
     {
         if (! DB::getSchemaBuilder()->hasTable('ai_usage_logs')) {

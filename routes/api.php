@@ -13,6 +13,7 @@ use App\Http\Controllers\Backend\SessionController;
 use App\Http\Controllers\Backend\StudentClassController;
 use App\Http\Controllers\Backend\StudentController;
 use App\Http\Controllers\Backend\SubjectController;
+use App\Http\Controllers\Backend\SubjectOfferingController;
 use App\Http\Controllers\Backend\SuperAdminController;
 use App\Http\Controllers\Backend\PlatformStaffController;
 use App\Http\Controllers\Backend\SalesRepresentativeController;
@@ -363,9 +364,34 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
         ->middleware('subscription.feature:ai_result_comment_generator');
     Route::get('/admin/ai/credits/verify/{reference}', [AiCreditPurchaseController::class, 'verifyOnline'])
         ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::get('/admin/ai/lessons/workspace', [AiLessonPlanController::class, 'workspace'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::post('/admin/ai/lesson-schemes', [AiLessonPlanController::class, 'storeScheme'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::post('/admin/ai/lesson-schemes/generate', [AiLessonPlanController::class, 'generateScheme'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_scheme_work_generator']);
+    Route::put('/admin/ai/lesson-schemes/{scheme}', [AiLessonPlanController::class, 'updateScheme'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::delete('/admin/ai/lesson-schemes/{scheme}', [AiLessonPlanController::class, 'archiveScheme'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
     Route::post('/admin/ai/lesson-plans/generate', [AiLessonPlanController::class, 'generate'])
         ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::put('/admin/ai/lesson-plans/{plan}', [AiLessonPlanController::class, 'updatePlan'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::delete('/admin/ai/lesson-plans/{plan}', [AiLessonPlanController::class, 'archivePlan'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
+    Route::post('/admin/ai/lesson-notes/generate', [AiLessonPlanController::class, 'generateNote'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_note_generator']);
+    Route::put('/admin/ai/lesson-notes/{note}', [AiLessonPlanController::class, 'updateNote'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_note_generator']);
+    Route::delete('/admin/ai/lesson-notes/{note}', [AiLessonPlanController::class, 'archiveNote'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_note_generator']);
+    Route::post('/admin/ai/lesson-notes/{note}/publish', [AiLessonPlanController::class, 'publishNote'])
+        ->middleware(['teacher.active', 'subscription.feature:ai_lesson_note_generator']);
+    Route::get('/student/lesson-notes', [AiLessonPlanController::class, 'studentNotes']);
     Route::post('/admin/ai/fee-collection/analyze', [AiFeeCollectionController::class, 'analyze'])
+        ->middleware('subscription.feature:ai_fee_collection_assistant');
+    Route::post('/admin/ai/fee-collection/reminders/send', [AiFeeCollectionController::class, 'sendReminder'])
         ->middleware('subscription.feature:ai_fee_collection_assistant');
     Route::get('/whatsapp/credits/quote', [WhatsappCreditPurchaseController::class, 'quote'])
         ->middleware('subscription.feature:whatsapp_notifications');
@@ -800,6 +826,10 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     //route for subjects
     Route::get('/departments/{id}/subjects', [SubjectController::class, 'getAllSubjects']);
     Route::post('/subjects/assign-section', [SubjectController::class, 'assignSection']);
+    Route::get('/subject-offerings', [SubjectOfferingController::class, 'index']);
+    Route::post('/subject-offerings', [SubjectOfferingController::class, 'store']);
+    Route::get('/students/{student}/subject-overrides', [SubjectOfferingController::class, 'studentOverrides']);
+    Route::post('/students/{student}/subject-overrides', [SubjectOfferingController::class, 'saveStudentOverrides']);
 
 Route::get('/sections', [SubjectController::class, 'getSections']);
 
@@ -855,12 +885,14 @@ Route::get('/sections', [SubjectController::class, 'getSections']);
 
 //route for assigning subjects to teacher
 
+Route::get('/teacher-subjects/workspace', [TeacherSubjectController::class, 'workspace']);
 Route::get('/teacher-subjects', [TeacherSubjectController::class, 'index']);
 Route::get('/subjects', [TeacherSubjectController::class, 'allSubjects']);
 Route::get('/teachers', [TeacherSubjectController::class, 'allTeachers']);
 Route::post('/teacher-subjects', [TeacherSubjectController::class, 'store'])
     ->middleware('subscription.feature:teacher_management');
-Route::delete('/teacher-subjects/{teacher_id}/{subject_id}', [TeacherSubjectController::class, 'destroy']);
+Route::delete('/teacher-subjects/{teacher_id}/{subject_id}', [TeacherSubjectController::class, 'destroy'])
+    ->middleware('subscription.feature:teacher_management');
 
 //end route
 
@@ -1023,6 +1055,9 @@ Route::middleware(['auth:sanctum', 'tenant'])->get('/user', function (Request $r
 
 Route::middleware(['auth:sanctum', 'tenant'])->post('/terms/bulk-create', [TermController::class, 'bulkCreate']);
 // Route::post('/paystack/webhook', [OnlineFeePaymentController::class, 'webhook']);
+
+
+
 
 
 

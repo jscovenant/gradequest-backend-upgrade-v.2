@@ -525,10 +525,21 @@ public function resultForm(int $batchId, int $studentId)
         ], 402);
     }
 
-    // Subjects
-    $subjects = $this->subjectService->subjectsForDepartment(
-        $schoolId,
-        $student->department_id
+    // Subjects offered by this exact student for the batch period.
+    $sessionId = DB::table('academic_sessions')
+        ->where('school_id', $schoolId)
+        ->where('name', (string) $batch->session)
+        ->value('id');
+
+    $termId = DB::table('terms')
+        ->where('school_id', $schoolId)
+        ->where('name', (string) $batch->term)
+        ->value('id');
+
+    $subjects = $this->subjectService->subjectsForStudent(
+        $student,
+        $sessionId ? (int) $sessionId : null,
+        $termId ? (int) $termId : null
     );
 
     // Existing results

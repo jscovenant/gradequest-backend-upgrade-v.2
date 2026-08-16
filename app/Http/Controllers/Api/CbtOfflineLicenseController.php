@@ -276,6 +276,28 @@ class CbtOfflineLicenseController extends Controller
             ->limit($license->max_exams > 0 ? (int) $license->max_exams : 100)
             ->get();
 
+        if ($exams->isEmpty()) {
+            if ($examIds !== []) {
+                $selected = CbtExam::query()
+                    ->where('school_id', $license->school_id)
+                    ->whereIn('id', $examIds)
+                    ->get(['id', 'title', 'status', 'delivery_mode']);
+
+                $reason = $selected->map(fn (CbtExam $exam) => sprintf(
+                    '%s is %s and set to %s mode',
+                    $exam->title,
+                    $exam->status,
+                    $exam->delivery_mode
+                ))->implode('; ');
+
+                abort(422, $reason !== ''
+                    ? 'No selected exam can be exported. ' . $reason . '. Publish the exam and set mode to Offline/LAN or Hybrid.'
+                    : 'No selected exam can be exported. Publish the exam and set mode to Offline/LAN or Hybrid.');
+            }
+
+            abort(422, 'No published Offline/LAN or Hybrid CBT exam is available for this package.');
+        }
+
         $students = User::query()
             ->with(['level:id,name', 'section:id,name', 'department:id,name'])
             ->where('school_id', $license->school_id)

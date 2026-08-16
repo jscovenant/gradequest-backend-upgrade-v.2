@@ -255,6 +255,7 @@ class SubscriptionGate
             'fee_management' => ['fee_management', 'support_fee_management', 'school_fees', 'support_school_fees'],
             'finance_management' => ['finance_management', 'support_finance_management', 'finance', 'support_finance'],
             'attendance_management' => ['attendance_management', 'support_attendance_management', 'staff_attendance', 'support_staff_attendance'],
+            'staff_attendance' => ['staff_attendance', 'support_staff_attendance', 'attendance_management', 'support_attendance_management'],
             'settings_management' => ['settings_management', 'support_settings_management', 'school_settings', 'support_school_settings'],
             'online_payment' => ['online_payment', 'support_online_payment', 'fee_management', 'support_fee_management'],
             'parent_management' => ['parent_management', 'support_parent_management'],
@@ -267,6 +268,8 @@ class SubscriptionGate
             'ai_cbt_question_generator' => ['ai_cbt_question_generator', 'support_ai_cbt_question_generator', 'ai_question_generator', 'cbt_ai'],
             'ai_result_comment_generator' => ['ai_result_comment_generator', 'support_ai_result_comment_generator', 'ai_result_comments', 'result_comment_ai'],
             'ai_lesson_plan_generator' => ['ai_lesson_plan_generator', 'support_ai_lesson_plan_generator', 'lesson_plan_ai', 'ai_lesson_planner'],
+            'ai_scheme_work_generator' => ['ai_scheme_work_generator', 'support_ai_scheme_work_generator', 'scheme_work_ai', 'gradequest_plus'],
+            'ai_lesson_note_generator' => ['ai_lesson_note_generator', 'support_ai_lesson_note_generator', 'lesson_note_ai', 'gradequest_plus'],
             'ai_fee_collection_assistant' => ['ai_fee_collection_assistant', 'support_ai_fee_collection_assistant', 'ai_fee_assistant', 'fee_collection_ai'],
             'report_card_designer' => ['report_card_designer', 'support_report_card_designer', 'custom_report_designer', 'result_template_designer'],
         ];

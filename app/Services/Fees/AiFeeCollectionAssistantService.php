@@ -25,8 +25,14 @@ class AiFeeCollectionAssistantService
             throw new RuntimeException('OpenAI API key is not configured. Add OPENAI_API_KEY to your backend .env file.');
         }
 
+        $timeout = max(30, (int) config('openai.timeout', 90));
+        if (function_exists('set_time_limit')) {
+            @set_time_limit($timeout + 20);
+        }
+
         $response = Http::withToken($apiKey)
-            ->timeout((int) config('openai.timeout', 90))
+            ->connectTimeout(15)
+            ->timeout($timeout)
             ->acceptJson()
             ->post('https://api.openai.com/v1/responses', $this->payload($dataset, $filters));
 
@@ -286,3 +292,4 @@ PROMPT;
         return trim(implode("\n", $parts));
     }
 }
+

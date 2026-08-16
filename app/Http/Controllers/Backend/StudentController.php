@@ -84,9 +84,23 @@ class StudentController extends Controller
             ], 404);
         }
 
-        $subjects = app(SubjectService::class)->subjectsForDepartment(
-            (int) $student->school_id,
-            $student->department_id ? (int) $student->department_id : null
+        $currentSessionId = DB::table('academic_sessions')
+            ->where('school_id', (int) $student->school_id)
+            ->where('is_current', 1)
+            ->orderByDesc('id')
+            ->value('id');
+
+        $currentTermId = DB::table('terms')
+            ->where('school_id', (int) $student->school_id)
+            ->where('status', 'Active')
+            ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+            ->orderBy('id')
+            ->value('id');
+
+        $subjects = app(SubjectService::class)->subjectsForStudent(
+            $student,
+            $currentSessionId ? (int) $currentSessionId : null,
+            $currentTermId ? (int) $currentTermId : null
         );
 
         if ($subjects->isEmpty()) {

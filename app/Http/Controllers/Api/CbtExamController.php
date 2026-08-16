@@ -8,6 +8,7 @@ use App\Models\CbtExam;
 use App\Models\CbtExamSection;
 use App\Models\CbtQuestion;
 use App\Models\CbtQuestionGroup;
+use App\Models\LessonNote;
 use App\Services\Cbt\CbtQuestionImportService;
 use App\Services\Cbt\AiCbtQuestionGeneratorService;
 use App\Services\CbtAccessService;
@@ -322,6 +323,32 @@ class CbtExamController extends Controller
             'formats.*' => ['required', Rule::in(['single_choice', 'multiple_choice', 'true_false', 'fill_blank', 'theory', 'comprehension'])],
         ]);
 
+        $lessonNoteIds = collect($data['lesson_note_ids'] ?? [])
+            ->push($data['lesson_note_id'] ?? null)
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($lessonNoteIds->isNotEmpty()) {
+            $lessonNotes = LessonNote::query()
+                ->where('school_id', (int) $request->user()->school_id)
+                ->whereNull('archived_at')
+                ->whereIn('id', $lessonNoteIds->all())
+                ->get();
+
+            abort_unless($lessonNotes->count() === $lessonNoteIds->count(), 422, 'One or more selected lesson notes are unavailable.');
+
+            $noteSourceText = $lessonNotes
+                ->map(fn (LessonNote $lessonNote) => $this->lessonNoteToSourceText($lessonNote))
+                ->implode("\n\n--- NEXT SELECTED LESSON NOTE ---\n\n");
+
+            $data['source_text'] = trim($noteSourceText . "\n" . ($data['source_text'] ?? ''));
+            $selectedTopics = $lessonNotes->pluck('topic')->filter()->unique()->implode(', ');
+            $data['topics'] = trim((string) ($data['topics'] ?? '')) ?: $selectedTopics;
+            $data['lesson_note_ids'] = $lessonNoteIds->all();
+        }
+
         try {
             $result = $service->generate($exam->load(['subject', 'class', 'section', 'department']), $data);
         } catch (\Throwable $exception) {
@@ -353,6 +380,31 @@ class CbtExamController extends Controller
                 'remaining' => $creditUsage->remainingCredits(),
             ],
         ]);
+    }
+    private function lessonNoteToSourceText(LessonNote $note): string
+    {
+        $content = is_array($note->content) ? $note->content : [];
+        $parts = [
+            'Title: ' . $note->title,
+            'Subject: ' . $note->subject,
+            'Class: ' . $note->class_name,
+            'Topic: ' . $note->topic,
+        ];
+
+        foreach (($content['sections'] ?? []) as $section) {
+            if (is_array($section)) {
+                $parts[] = trim(($section['heading'] ?? 'Section') . "\n" . ($section['body'] ?? ''));
+            }
+        }
+
+        foreach (['examples', 'board_notes', 'class_activity', 'summary', 'homework'] as $key) {
+            $items = collect($content[$key] ?? [])->map(fn ($item) => trim((string) $item))->filter()->values()->all();
+            if ($items) {
+                $parts[] = ucwords(str_replace('_', ' ', $key)) . ":\n- " . implode("\n- ", $items);
+            }
+        }
+
+        return trim(implode("\n\n", array_filter($parts)));
     }
     public function importAiQuestions(Request $request, CbtExam $exam): JsonResponse
     {

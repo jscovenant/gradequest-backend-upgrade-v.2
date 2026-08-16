@@ -62,7 +62,8 @@ public function login(Request $request)
         ->where(function ($q) use ($request) {
             // Wrap in a closure so orWhere doesn't escape the school scope
             $q->where('email', $request->identifier)
-              ->orWhere('reg_no', $request->identifier);
+              ->orWhere('reg_no', $request->identifier)
+              ->orWhere('username', $request->identifier);
         })
         // Only add school_id scope when a domain was resolved.
         // Schools without a custom domain: $school is null, clause is skipped.
@@ -427,3 +428,4 @@ public function resetPassword(Request $request)
     return response()->json(['message' => 'Password reset successfully.']);
 }
 }
+

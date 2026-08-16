@@ -24,6 +24,8 @@ class GradequestBillingPolicy extends Model
         'ai_result_comment_credit_cost' => 'integer',
         'ai_cbt_question_credit_cost' => 'integer',
         'ai_lesson_plan_credit_cost' => 'integer',
+        'ai_scheme_work_credit_cost' => 'integer',
+        'ai_lesson_note_credit_cost' => 'integer',
         'ai_fee_collection_credit_cost' => 'integer',
         'ai_credit_unit_price' => 'decimal:2',
         'legacy_subscription_honor_enabled' => 'boolean',

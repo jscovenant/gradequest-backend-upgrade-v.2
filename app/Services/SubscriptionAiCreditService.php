@@ -98,6 +98,8 @@ class SubscriptionAiCreditService
             'ai_cbt_question_generator' => max(1, (int) $policy->ai_cbt_question_credit_cost),
             'ai_result_comment_generator' => max(1, (int) $policy->ai_result_comment_credit_cost),
             'ai_lesson_plan_generator' => max(1, (int) $policy->ai_lesson_plan_credit_cost),
+            'ai_scheme_work_generator' => max(1, (int) ($policy->ai_scheme_work_credit_cost ?? 4)),
+            'ai_lesson_note_generator' => max(1, (int) ($policy->ai_lesson_note_credit_cost ?? 5)),
             'ai_fee_collection_assistant' => max(1, (int) ($policy->ai_fee_collection_credit_cost ?? 2)),
             default => 1,
         };
@@ -194,6 +196,8 @@ class SubscriptionAiCreditService
             'ai_result_comment_credit_cost' => (int) $policy->ai_result_comment_credit_cost,
             'ai_cbt_question_credit_cost' => (int) $policy->ai_cbt_question_credit_cost,
             'ai_lesson_plan_credit_cost' => (int) $policy->ai_lesson_plan_credit_cost,
+            'ai_scheme_work_credit_cost' => (int) ($policy->ai_scheme_work_credit_cost ?? 4),
+            'ai_lesson_note_credit_cost' => (int) ($policy->ai_lesson_note_credit_cost ?? 5),
             'ai_fee_collection_credit_cost' => (int) ($policy->ai_fee_collection_credit_cost ?? 2),
             'ai_credit_unit_price' => (float) $policy->ai_credit_unit_price,
         ];
@@ -255,6 +259,8 @@ class SubscriptionAiCreditService
             'ai_result_comment_credit_cost' => 1,
             'ai_cbt_question_credit_cost' => 5,
             'ai_lesson_plan_credit_cost' => 3,
+            'ai_scheme_work_credit_cost' => 4,
+            'ai_lesson_note_credit_cost' => 5,
             'ai_credit_unit_price' => 25,
             'legacy_subscription_honor_enabled' => true,
             'per_student_billing_starts_at' => now(),

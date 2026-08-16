@@ -159,6 +159,153 @@ class AutoFeeInvoiceService
         return ['notified' => $notified, 'skipped' => $skipped];
     }
 
+    public function sendManualParentReminder(int $schoolId, int $parentId, array $filters = []): array
+    {
+        $settings = SchoolSetting::find($schoolId);
+        $parent = User::query()
+            ->where('school_id', $schoolId)
+            ->whereKey($parentId)
+            ->first();
+
+        if (! $settings || ! $parent) {
+            return [
+                'delivered' => false,
+                'email_queued' => false,
+                'whatsapp_sent' => false,
+                'message' => 'Parent record was not found for this school.',
+            ];
+        }
+
+        $studentIds = DB::table('parent_students')
+            ->where('school_id', $schoolId)
+            ->where('parent_id', $parentId)
+            ->pluck('student_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($studentIds->isEmpty()) {
+            return [
+                'delivered' => false,
+                'email_queued' => false,
+                'whatsapp_sent' => false,
+                'message' => 'No student is linked to this parent.',
+            ];
+        }
+
+        $fees = StudentFee::query()
+            ->with(['student', 'feeType', 'term', 'session'])
+            ->where('school_id', $schoolId)
+            ->whereIn('student_id', $studentIds)
+            ->where('balance', '>', 0)
+            ->when(! empty($filters['session_id']), fn ($query) => $query->where('session_id', (int) $filters['session_id']))
+            ->when(! empty($filters['term_id']), fn ($query) => $query->where('term_id', (int) $filters['term_id']))
+            ->when(! empty($filters['section_id']), fn ($query) => $query->where('section_id', (int) $filters['section_id']))
+            ->when(! empty($filters['class_id']), fn ($query) => $query->whereHas('student', fn ($students) => $students->where('level_id', (int) $filters['class_id'])))
+            ->orderBy('student_id')
+            ->orderBy('id')
+            ->get();
+
+        if ($fees->isEmpty()) {
+            return [
+                'delivered' => false,
+                'email_queued' => false,
+                'whatsapp_sent' => false,
+                'message' => 'No outstanding fee record was found for this parent in the selected filter.',
+            ];
+        }
+
+        $sendEmail = filled($parent->email);
+        $sendWhatsApp = (bool) ($settings->whatsapp_enabled ?? false) && filled($this->whatsapp->parentPhone($parent));
+
+        if (! $sendEmail && ! $sendWhatsApp) {
+            return [
+                'delivered' => false,
+                'email_queued' => false,
+                'whatsapp_sent' => false,
+                'message' => 'This parent has no available email or WhatsApp contact.',
+            ];
+        }
+
+        $scopeKey = 'manual:' . $this->scopeKey($fees) . ':' . now()->format('YmdHis');
+        $payload = $this->payload($settings, $parent, $fees, $scopeKey);
+        $payload['manual'] = true;
+        $payload['triggered_by'] = auth()->id();
+        $payload['filters'] = $filters;
+
+        $notificationId = $this->createReminderLog($schoolId, $parentId, $payload);
+        $payload['notification_id'] = $notificationId;
+        $payload['payment_url'] = rtrim((string) config('app.frontend_url'), '/')
+            . '/payment-instructions/' . $notificationId;
+
+        $emailQueued = false;
+        $whatsAppSent = false;
+
+        try {
+            if ($sendEmail) {
+                $parent->notifyNow(new FeeInvoiceReminderNotification(
+                    data: $payload,
+                    forceEmail: true,
+                    forceWhatsApp: false
+                ));
+                $emailQueued = true;
+            }
+
+            if ($sendWhatsApp) {
+                $message = WhatsAppMessageBuilder::feeReminder(
+                    $fees,
+                    $parent,
+                    $this->paymentLinks($schoolId, $fees),
+                    $this->bankAccounts($schoolId)
+                );
+
+                $whatsAppSent = $this->whatsapp->sendToParent($schoolId, (string) $this->whatsapp->parentPhone($parent), $message);
+            }
+
+            $payload['delivery'] = [
+                'email_queued' => $emailQueued,
+                'whatsapp_sent' => $whatsAppSent,
+                'manual' => true,
+            ];
+            $this->finalizeReminderLog($notificationId, $payload, $emailQueued || $whatsAppSent);
+
+            return [
+                'delivered' => $emailQueued || $whatsAppSent,
+                'email_queued' => $emailQueued,
+                'whatsapp_sent' => $whatsAppSent,
+                'notification_id' => $emailQueued || $whatsAppSent ? $notificationId : null,
+                'payment_url' => $emailQueued || $whatsAppSent ? $payload['payment_url'] : null,
+                'message' => $emailQueued || $whatsAppSent
+                    ? 'Reminder sent through the available channel(s).'
+                    : 'Reminder could not be delivered through the available channel(s).',
+            ];
+        } catch (\Throwable $e) {
+            $payload['delivery'] = [
+                'email_queued' => $emailQueued,
+                'whatsapp_sent' => $whatsAppSent,
+                'manual' => true,
+                'error' => $e->getMessage(),
+            ];
+            $this->finalizeReminderLog($notificationId, $payload, $emailQueued || $whatsAppSent);
+
+            Log::error('Manual fee reminder delivery failed', [
+                'school_id' => $schoolId,
+                'parent_id' => $parentId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'delivered' => $emailQueued || $whatsAppSent,
+                'email_queued' => $emailQueued,
+                'whatsapp_sent' => $whatsAppSent,
+                'notification_id' => $emailQueued || $whatsAppSent ? $notificationId : null,
+                'payment_url' => $emailQueued || $whatsAppSent ? $payload['payment_url'] : null,
+                'message' => $emailQueued || $whatsAppSent
+                    ? 'Reminder was partially delivered. Check the delivery log for details.'
+                    : 'Reminder could not be delivered. Check contact details and messaging settings.',
+            ];
+        }
+    }
     private function payload(SchoolSetting $settings, User $parent, Collection $fees, string $scopeKey): array
     {
         $children = $fees->groupBy('student_id')->map(function (Collection $studentFees) {
@@ -222,6 +369,37 @@ class AutoFeeInvoiceService
             ->get(['bank_name', 'account_name', 'account_number', 'currency']);
     }
 
+    private function paymentLinks(int $schoolId, Collection $fees): array
+    {
+        $admin = User::query()
+            ->where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['admin'])
+            ->orderBy('id')
+            ->first(['reg_no']);
+
+        if (! $admin?->reg_no) {
+            return [];
+        }
+
+        $baseUrl = rtrim((string) config('app.frontend_url', config('app.url')), '/');
+
+        return $fees->groupBy('student_id')
+            ->mapWithKeys(function (Collection $studentFees, $studentId) use ($admin, $baseUrl) {
+                $student = $studentFees->first()?->student;
+                if (! $student?->reg_no) {
+                    return [];
+                }
+
+                $query = http_build_query([
+                    'school_code' => $admin->reg_no,
+                    'student_reg_no' => $student->reg_no,
+                    'amount' => number_format((float) $studentFees->sum('balance'), 2, '.', ''),
+                ]);
+
+                return [(int) $studentId => "{$baseUrl}/pay-school-fee?{$query}"];
+            })
+            ->all();
+    }
     private function createReminderLog(int $schoolId, int $parentId, array $payload): int
     {
         return (int) DB::table('combined_fee_reminder_logs')->insertGetId([
@@ -249,3 +427,6 @@ class AutoFeeInvoiceService
         ]);
     }
 }
+
+
+

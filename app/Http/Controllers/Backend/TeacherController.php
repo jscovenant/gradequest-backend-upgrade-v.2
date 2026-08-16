@@ -99,12 +99,7 @@ public function viewTeacher($id)
             ], 404);
         }
 
-        $decryptedPassword = null;
-        try {
-            $decryptedPassword = decrypt($teacher->default_password);
-        } catch (\Exception $e) {
-            $decryptedPassword = 'Unable to decrypt';
-        }
+        $decryptedPassword = $this->readableDefaultPassword($teacher);
 
         return response()->json([
             'teacher' => $teacher,
@@ -150,12 +145,11 @@ public function StoreTeacher(Request $request)
 
     $randomPassword = Str::random(10);
     $hashedPassword = Hash::make($randomPassword);
-    $encryptedPassword = encrypt($randomPassword);
 
     $user = new User();
     $user->firstname = $request->firstname;
     $user->surname = $request->surname;
-    $user->username = $request->username;
+    $user->username = $request->username ?: $final_reg_no;
     $user->dob = $request->dob;
     $user->address = $request->address;
     $user->email = $request->email;
@@ -167,7 +161,7 @@ public function StoreTeacher(Request $request)
     $user->status = "1";
     $user->teacher_status = 'active';
     $user->password = $hashedPassword;
-    $user->default_password = $encryptedPassword;
+    $user->default_password = $randomPassword;
 
     if ($request->hasFile('photo') && $request->file('photo')->isValid()) {
         $file = $request->file('photo');
@@ -359,7 +353,7 @@ public function updateTeacher(Request $request, $id)
 
     if ($request->filled('password')) {
         $updates['password'] = Hash::make($request->password);
-        $updates['default_password'] = encrypt($request->password);
+        $updates['default_password'] = Crypt::encryptString($request->password);
     }
 
     $updates['updated_at'] = now();
@@ -378,8 +372,15 @@ public function updateTeacher(Request $request, $id)
         );
     }
 
+    $updatedTeacher = User::with(['teacherEnrollment.level'])
+        ->whereKey($teacher->id)
+        ->first();
+
     return response()->json([
         'message' => 'Teacher updated successfully',
+        'teacher' => $updatedTeacher,
+        'decrypted_password' => $updatedTeacher ? $this->readableDefaultPassword($updatedTeacher) : null,
+        'password_updated' => $request->filled('password'),
     ]);
 }
 
@@ -397,12 +398,15 @@ public function deleteTeacher($id)
 
     return response()->json(['message' => 'Teacher deleted successfully']);
 }
-
-
-
-
- 
-
- 
+private function readableDefaultPassword(User $user): ?string
+{
+    try {
+        return $user->default_password ?: null;
+    } catch (\Throwable $e) {
+        return null;
+    }
 }
+}
+
+
 

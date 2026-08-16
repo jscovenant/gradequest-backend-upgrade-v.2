@@ -37,7 +37,7 @@ class BusarController extends Controller
             'role' => 'Bursar',
             'school_id' => $auth->school_id,
             'password' => Hash::make($randomPassword),
-            'default_password' => encrypt($randomPassword),
+            'default_password' => $randomPassword,
             'status' => 1,
         ]);
 
@@ -71,13 +71,7 @@ class BusarController extends Controller
         ->where('school_id', $auth->school_id) // optional, if you want to restrict to your school
         ->findOrFail($id);
 
-    // 🔹 Decrypt default password
-    $decryptedPassword = null;
-    try {
-        $decryptedPassword = Crypt::decrypt($bursar->default_password);
-    } catch (\Exception $e) {
-        $decryptedPassword = 'N/A';
-    }
+    $decryptedPassword = $this->readableDefaultPassword($bursar) ?: 'N/A';
 
     return response()->json([
         'bursar' => [
@@ -102,13 +96,7 @@ public function edit($id)
         ->withRole('bursar')
         ->firstOrFail();
 
-    // 🔹 Decrypt default password
-    $decryptedPassword = null;
-    try {
-        $decryptedPassword = Crypt::decrypt($bursar->default_password);
-    } catch (\Exception $e) {
-        $decryptedPassword = null; // or "N/A" if you prefer
-    }
+    $decryptedPassword = $this->readableDefaultPassword($bursar);
 
     return response()->json([
         'bursar' => [
@@ -146,7 +134,7 @@ public function edit($id)
 
     if ($request->filled('password')) {
         $data['password'] = Hash::make($request->password);
-        $data['default_password'] = encrypt($request->password);
+        $data['default_password'] = $request->password;
     }
 
     $bursar->update($data);
@@ -187,33 +175,29 @@ public function edit($id)
         ->forSchool($auth->school_id)
         ->findOrFail($request->user_id);
 
-    if (!$student->default_password) {
+    $decryptedPassword = $this->readableDefaultPassword($student);
+
+    if (!$decryptedPassword) {
         return response()->json([
             'success' => false,
-            'message' => 'No default password found for this user',
+            'message' => 'No default password found for this user. Reset the password and try again.',
         ], 404);
     }
 
+    return response()->json([
+        'success' => true,
+        'message' => 'Password fetched successfully',
+        'decrypted_password' => $decryptedPassword,
+    ], 200);
+}
+private function readableDefaultPassword(User $user): ?string
+{
     try {
-        $decryptedPassword = Crypt::decrypt($student->default_password);
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Password decrypted successfully',
-            'decrypted_password' => $decryptedPassword,
-        ], 200);
-
-    } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
-        Log::error('Password decryption failed', [
-            'user_id' => $student->id,
-            'error' => $e->getMessage()
-        ]);
-
-        return response()->json([
-            'success' => false,
-            'message' => 'Failed to decrypt password. The password may be corrupted.',
-        ], 500);
+        return $user->default_password ?: null;
+    } catch (\Throwable $e) {
+        return null;
     }
 }
-
 }
+
+

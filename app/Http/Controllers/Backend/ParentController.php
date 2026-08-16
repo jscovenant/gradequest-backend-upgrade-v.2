@@ -46,7 +46,7 @@ class ParentController extends Controller
             'role' => 'Parent',
             'school_id' => $auth->school_id,
             'password' => Hash::make($randomPassword),
-            'default_password' => encrypt($randomPassword),
+            'default_password' => $randomPassword,
             'status' => 1,
         ]);
 
@@ -191,12 +191,7 @@ public function assignChild(Request $request)
         }])
         ->firstOrFail();
 
-    $decryptedPassword = null;
-    try {
-        $decryptedPassword = Crypt::decrypt($parent->default_password);
-    } catch (\Exception $e) {
-        $decryptedPassword = 'N/A';
-    }
+    $decryptedPassword = $this->readableDefaultPassword($parent) ?: 'N/A';
 
     return response()->json([
         'parent' => [
@@ -345,12 +340,7 @@ public function edit($id)
         return response()->json(['message' => 'Parent not found'], 404);
     }
 
-    $decryptedPassword = null;
-    try {
-        $decryptedPassword = Crypt::decrypt($parent->default_password);
-    } catch (\Exception $e) {
-        $decryptedPassword = 'N/A';
-    }
+    $decryptedPassword = $this->readableDefaultPassword($parent) ?: 'N/A';
 
     return response()->json([
         'parent' => [
@@ -405,7 +395,7 @@ public function update(Request $request, $id)
 
     if ($request->filled('password')) {
         $updates['password'] = Hash::make($request->password);
-        $updates['default_password'] = encrypt($request->password);
+        $updates['default_password'] = Crypt::encryptString($request->password);
     }
 
     // Direct update avoids decrypting legacy invalid default_password values during Eloquent dirty checks.
@@ -569,8 +559,13 @@ public function myChildren(Request $request)
         'children' => $children,
     ]);
 }
-
-
-
+private function readableDefaultPassword(User $user): ?string
+{
+    try {
+        return $user->default_password ?: null;
+    } catch (\Throwable $e) {
+        return null;
+    }
+}
 }
 

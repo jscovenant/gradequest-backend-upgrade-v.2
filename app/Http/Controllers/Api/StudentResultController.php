@@ -129,7 +129,21 @@ public function findByAdmissionNo($admissionNo)
         ], 422);
     }
 
-    $subjects = $this->subjectService->subjectsForDepartment($schoolId, $student->department_id);
+        $sessionId = AcademicSession::query()
+        ->where('school_id', $schoolId)
+        ->where('name', $currentSessionName)
+        ->value('id');
+
+    $termId = Term::query()
+        ->where('school_id', $schoolId)
+        ->where('name', $activeTermName)
+        ->value('id');
+
+    $subjects = $this->subjectService->subjectsForStudent(
+        $student,
+        $sessionId ? (int) $sessionId : null,
+        $termId ? (int) $termId : null
+    );
 
     return response()->json([
         'student'  => $student,
@@ -422,7 +436,29 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
             ]);
         }
 
+        $sessionId = AcademicSession::query()
+            ->where('school_id', (int) $batch->school_id)
+            ->where('name', (string) $batch->session)
+            ->value('id');
+
+        $termId = Term::query()
+            ->where('school_id', (int) $batch->school_id)
+            ->where('name', (string) $batch->term)
+            ->value('id');
+
+        $allowedSubjectIds = $this->subjectService
+            ->subjectsForStudent($student, $sessionId ? (int) $sessionId : null, $termId ? (int) $termId : null)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
         foreach ($request->input('results') as $row) {
+            if (! in_array((int) $row['subject_id'], $allowedSubjectIds, true)) {
+                return response()->json([
+                    'message' => 'This student does not offer one of the selected subjects. Check the student subject offering setup before saving results.',
+                    'subject_id' => (int) $row['subject_id'],
+                ], 422);
+            }
             $existing = DB::table('subject_results_v2')
                 ->where('student_result_id', $srId)
                 ->where('subject_id', $row['subject_id'])

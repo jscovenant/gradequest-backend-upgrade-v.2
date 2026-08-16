@@ -19,8 +19,14 @@ class AiResultCommentGeneratorService
 
         $payload = $this->buildPayload($batch, $student, $data);
 
+        $timeout = max(30, (int) config('openai.timeout', 90));
+        if (function_exists('set_time_limit')) {
+            @set_time_limit($timeout + 20);
+        }
+
         $response = Http::withToken($apiKey)
-            ->timeout((int) config('openai.timeout', 90))
+            ->connectTimeout(15)
+            ->timeout($timeout)
             ->acceptJson()
             ->post('https://api.openai.com/v1/responses', $payload);
 
@@ -122,3 +128,4 @@ PROMPT;
         return trim(implode("\n", $parts));
     }
 }
+

@@ -165,7 +165,7 @@ class PeopleExcelImportService
                     'status' => 1,
                     'teacher_status' => 'active',
                     'password' => Hash::make($password),
-                    'default_password' => encrypt($password),
+                    'default_password' => $password,
                 ]);
 
                 $teacher->assignRole('Teacher');
@@ -303,7 +303,7 @@ class PeopleExcelImportService
                     'school_id' => $schoolId,
                     'status' => 1,
                     'password' => Hash::make($password),
-                    'default_password' => encrypt($password),
+                    'default_password' => $password,
                 ]);
 
                 $parent->assignRole('Parent');
@@ -459,3 +459,6 @@ class PeopleExcelImportService
         return collect($row)->filter(fn ($value) => trim((string) $value) !== '')->isEmpty();
     }
 }
+
+
+
