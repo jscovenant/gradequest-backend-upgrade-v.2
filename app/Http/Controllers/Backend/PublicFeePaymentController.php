@@ -408,9 +408,10 @@ class PublicFeePaymentController extends Controller
         if ($gateway === 'wema_alat') {
             try {
                 $wemaQuery = $this->wemaService->verifyTransaction($reference);
-                $isSandbox = config('services.wema_alat.env') === 'sandbox' || config('services.wema_alat.sandbox', true);
+                $isLocalDev = app()->environment('local', 'testing');
+                $isVerified = !empty($wemaQuery['verified']);
 
-                if ($wemaQuery['verified'] || $isSandbox) {
+                if ($isVerified || ($isLocalDev && config('services.wema_alat.sandbox', false))) {
                     $this->finalizeSuccessfulPaymentIntent($intent, 'wema_alat', $wemaQuery['raw'] ?? ['mode' => 'sandbox_verified']);
                     $intent = $intent->fresh(['student']);
 

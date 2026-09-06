@@ -242,16 +242,22 @@ class WemaAlatService
      */
     public function verifyWebhookSignature(\Illuminate\Http\Request $request): bool
     {
-        $signature = $request->header('x-wema-signature') 
+        $signature = (string) (
+            $request->header('x-wema-signature') 
             ?? $request->header('x-alatpay-signature') 
-            ?? $request->header('signature');
+            ?? $request->header('signature')
+            ?? ''
+        );
 
-        if (empty($signature)) {
-            // In local/sandbox testing without webhook secrets configured
-            return true;
+        if (empty($signature) || empty($this->webhookSecret)) {
+            // Only allow unsigned in local dev environment
+            if (app()->environment('local', 'testing')) {
+                return true;
+            }
+            return false;
         }
 
-        $expected = hash_hmac('sha512', $request->getContent(), $this->webhookSecret);
-        return hash_equals($expected, (string) $signature);
+        $expected = hash_hmac('sha512', $request->getContent(), (string) $this->webhookSecret);
+        return hash_equals($expected, $signature);
     }
 }
