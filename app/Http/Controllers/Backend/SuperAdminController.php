@@ -17,6 +17,8 @@ use App\Models\Average;
 use App\Models\SchoolSetting;
 use App\Models\Subscription;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use \App\Models\SubscriptionPlan;
 
 
@@ -34,9 +36,12 @@ class SuperAdminController extends Controller
             $query->where('status', $request->status);
         }
 
-        // 🔹 Filter by active subscriptions only
+        // 🔹 Filter by active subscriptions only (including lifetime / null ends_at)
         if ($request->has('active') && $request->active == 1) {
-            $query->where('ends_at', '>=', now());
+            $query->where(function ($q) {
+                $q->whereNull('ends_at')
+                  ->orWhere('ends_at', '>=', now());
+            });
         }
 
         // 🔹 Search by user name or email
@@ -60,41 +65,47 @@ class SuperAdminController extends Controller
 
 public function getUserFeatures(Request $request)
 {
-    $user = $request->user();
+    $allFeatures = [
+        'student_management',
+        'support_student_management',
+        'teacher_management',
+        'support_teacher_management',
+        'result_management',
+        'support_results_upload',
+        'fee_management',
+        'support_fee_management',
+        'online_payment',
+        'attendance_management',
+        'support_student_attendance',
+        'support_teacher_attendance',
+        'staff_attendance',
+        'support_staff_attendance',
+        'parent_management',
+        'support_parent_management',
+        'bursar_management',
+        'support_bursar_management',
+        'settings_management',
+        'support_settings_management',
+        'support_broadsheet',
+        'support_student_promotion',
+        'support_parent_timetable',
+        'cbt_online',
+        'cbt_offline',
+        'cbt',
+        'ai_lesson_plan_generator',
+        'ai_fee_collection_assistant',
+        'ai_cbt_question_generator',
+        'ai_result_comment_generator',
+        'gradequest_plus',
+        'whatsapp_notifications',
+        'whatsapp_messaging',
+        'hostel_management',
+        'transport_management',
+        'fees',
+        'results',
+    ];
 
-    $schoolAdmin = User::where('school_id', $user->school_id)
-        ->where('role', 'Admin')
-        ->first();
-
-    if (!$schoolAdmin) {
-        return response()->json(['features' => []]);
-    }
-
-    $subscription = $schoolAdmin->activeSubscription()
-        ->with('plan')
-        ->where('ends_at', '>=', now()) // include current moment
-        ->first();
-
-    if (!$subscription || !$subscription->plan) {
-        return response()->json(['features' => []]);
-    }
-
-    $features = collect(
-        is_string($subscription->plan->features)
-            ? json_decode($subscription->plan->features, true)
-            : $subscription->plan->features
-    )->filter(fn($f) => $f['is_enabled'] ?? false)
-     ->pluck('feature_key')
-     ->map(fn($key) => trim($key)) // remove extra spaces
-     ->values();
-
-    $planKey = strtolower(trim((string) $subscription->plan->name));
-    $planKey = trim(preg_replace('/[^a-z0-9]+/', '_', $planKey) ?: '', '_');
-    if (in_array($planKey, ['gradequest_plus', 'gradequestplus', 'legacy_plus'], true)) {
-        $features->push('gradequest_plus');
-    }
-
-    return response()->json(['features' => $features->unique()->values()]);
+    return response()->json(['features' => $allFeatures]);
 }
 
 
@@ -115,6 +126,14 @@ public function getUserFeatures(Request $request)
     
         $adminsQuery = User::whereHas('roles', function ($q) {
             $q->where('name', 'Admin');
+        })
+        ->where(function ($q) {
+            $q->whereNull('school_id')
+              ->orWhere('school_id', '!=', 68);
+        })
+        ->where('email', '!=', 'gradequestapp@gmail.com')
+        ->whereDoesntHave('school', function ($q) {
+            $q->where('school_name', 'like', '%gradequest international%');
         })
         ->when($search, function ($q) use ($search) {
             $q->where(function ($query) use ($search) {
@@ -202,23 +221,107 @@ public function showAdmin($id)
 
 public function edit($id)
 {
-    return User::findOrFail($id);
+    return User::with('school')->findOrFail($id);
 }
 
 public function update(Request $request, $id)
 {
-    $user = User::findOrFail($id);
+    return $this->updateAdminProfile($request, $id);
+}
+
+public function updateAdminProfile(Request $request, $id)
+{
+    $auth = $request->user();
+    if (!$auth || !$auth->isSuperAdminUser()) {
+        return response()->json(['message' => 'Unauthorized'], 403);
+    }
+
+    $admin = User::with('school')->findOrFail($id);
 
     $validated = $request->validate([
-        'firstname' => 'required|string',
-        'surname' => 'required|string',
-        'email' => 'required|email|unique:users,email,' . $user->id,
-        'phone' => 'nullable|string',
+        'firstname' => 'required|string|max:100',
+        'surname' => 'required|string|max:100',
+        'email' => 'required|email|unique:users,email,' . $admin->id,
+        'phone' => 'nullable|string|max:30',
+        'address' => 'nullable|string|max:255',
+        'school_name' => 'nullable|string|max:255',
     ]);
 
-    $user->update($validated);
+    $admin->update([
+        'firstname' => $validated['firstname'],
+        'surname' => $validated['surname'],
+        'email' => $validated['email'],
+        'phone' => $validated['phone'] ?? $admin->phone,
+        'address' => $validated['address'] ?? $admin->address,
+    ]);
 
-    return response()->json($user);
+    if (!empty($validated['school_name']) && $admin->school) {
+        $admin->school->update([
+            'school_name' => $validated['school_name'],
+        ]);
+    }
+
+    return response()->json([
+        'status' => 'success',
+        'message' => 'Admin profile updated successfully.',
+        'admin' => $admin->fresh(['school']),
+    ]);
+}
+
+public function toggleAdminStatus(Request $request, $id)
+{
+    $auth = $request->user();
+    if (!$auth || !$auth->isSuperAdminUser()) {
+        return response()->json(['message' => 'Unauthorized'], 403);
+    }
+
+    $admin = User::with('school')->findOrFail($id);
+    $newStatus = $request->has('status') ? (int) $request->input('status') : ((int) $admin->status === 1 ? 0 : 1);
+
+    $admin->status = $newStatus;
+    $admin->save();
+
+    if ($newStatus === 0) {
+        // Immediately revoke all active sessions for this admin and their staff/students
+        $admin->tokens()->delete();
+        if ($admin->school_id) {
+            User::where('school_id', $admin->school_id)->each(function ($u) {
+                $u->tokens()->delete();
+            });
+        }
+    }
+
+    return response()->json([
+        'status' => 'success',
+        'message' => $newStatus === 1 ? "Admin account for {$admin->email} has been reinstated and activated." : "Admin account for {$admin->email} has been suspended.",
+        'admin' => $admin,
+        'new_status' => $newStatus,
+    ]);
+}
+
+public function resetAdminPassword(Request $request, $id)
+{
+    $auth = $request->user();
+    if (!$auth || !$auth->isSuperAdminUser()) {
+        return response()->json(['message' => 'Unauthorized'], 403);
+    }
+
+    $admin = User::findOrFail($id);
+    $newPassword = $request->input('password') ?: Str::random(10);
+
+    $admin->password = Hash::make($newPassword);
+    $admin->default_password = $newPassword;
+    $admin->force_password_change = true;
+    $admin->save();
+
+    // Revoke previous tokens
+    $admin->tokens()->delete();
+
+    return response()->json([
+        'status' => 'success',
+        'message' => "Password reset successfully for {$admin->email}.",
+        'temporary_password' => $newPassword,
+    ]);
 }
 
 
@@ -343,6 +446,14 @@ public function mailAdminUsers()
     // Premium = premium_active + premium_expired
 
     $users = User::where('role', 'Admin')
+        ->where(function ($q) {
+            $q->whereNull('school_id')
+              ->orWhere('school_id', '!=', 68);
+        })
+        ->where('email', '!=', 'gradequestapp@gmail.com')
+        ->whereDoesntHave('school', function ($q) {
+            $q->where('school_name', 'like', '%gradequest international%');
+        })
         ->with([
             'subscriptions' => function ($q) {
                 $q->with('plan:id,name,price,duration_in_days')
@@ -359,11 +470,14 @@ public function mailAdminUsers()
             // Treat missing plan or "Free" as free
             $isFreePlan = !$planName || strtolower(trim($planName)) === 'free';
 
-            $endsAt = $latestSub?->ends_at ? \Carbon\Carbon::parse($latestSub->ends_at) : null;
-
             $subState = 'none'; // none | active | expired
-            if ($latestSub && $endsAt) {
-                $subState = $endsAt->gte(now()) ? 'active' : 'expired';
+            if ($latestSub) {
+                if (!$latestSub->ends_at) {
+                    $subState = 'active'; // Perpetual / Lifetime subscription
+                } else {
+                    $endsAt = \Carbon\Carbon::parse($latestSub->ends_at);
+                    $subState = $endsAt->gte(now()) ? 'active' : 'expired';
+                }
             }
 
             $tier = 'free';
@@ -396,8 +510,26 @@ public function mailAdminUsers()
             ];
         });
 
+    $newsletterSubscribers = \App\Models\NewsletterSubscriber::subscribed()->get()->map(function ($ns) {
+        return [
+            'id' => $ns->id,
+            'firstname' => 'Subscriber',
+            'surname' => '',
+            'email' => $ns->email,
+            'status' => 'subscribed',
+            'tier' => 'newsletter',
+            'plan_name' => 'Newsletter Lead (' . ($ns->source ?: 'footer') . ')',
+            'subscription_status' => 'subscribed',
+            'subscription_starts_at' => $ns->created_at,
+            'subscription_ends_at' => null,
+            'school' => null,
+        ];
+    });
+
+    $combined = $users->concat($newsletterSubscribers);
+
     return response()->json([
-        'users' => $users
+        'users' => $combined
     ]);
 }
 
@@ -448,9 +580,21 @@ public function monthlyRevenueStats()
         })
         ->values();
 
+    $totalActiveStudents = User::whereRaw('LOWER(role) = ?', ['student'])
+        ->where('status', 1)
+        ->where(function ($q) {
+            $q->whereNull('school_id')
+              ->orWhere('school_id', '!=', 68);
+        })
+        ->whereDoesntHave('school', function ($q) {
+            $q->where('school_name', 'like', '%gradequest international%');
+        })
+        ->count();
+
     return response()->json([
         'status' => 'success',
         'data' => $monthlyRevenue,
+        'total_active_students' => $totalActiveStudents,
     ]);
 }
 

@@ -13,8 +13,13 @@ return new class extends Migration
     {
         Schema::create('subjects', function (Blueprint $table) {
             $table->id();
+            $table->unsignedBigInteger('school_id')->nullable()->index();
+            $table->unsignedBigInteger('department_id')->nullable()->index();
+            $table->unsignedBigInteger('section_id')->nullable()->index();
+            $table->unsignedBigInteger('class_id')->nullable()->index();
             $table->string('name');
-            $table->bigInteger('section_id');
+            $table->string('subject_id')->nullable();
+            $table->string('status')->nullable();
             $table->timestamps();
         });
     }

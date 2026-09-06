@@ -2,14 +2,18 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
+use App\Mail\SalesRepresentativeApplicationReceivedMail;
+use App\Mail\SalesRepresentativeApprovedMail;
 use App\Mail\SalesRepresentativeLoginMail;
-use App\Mail\SchoolAdminLoginMail;
+use App\Models\GradiosEduBillingPolicy;
+use App\Models\SchoolProfitBillingPolicy;
 use App\Models\SalesCommission;
 use App\Models\SalesRepAssignment;
 use App\Models\SalesRepStatusEvent;
 use App\Models\SalesRepresentative;
 use App\Models\SchoolSetting;
 use App\Models\User;
+use App\Services\CloudflareTurnstileService;
 use App\Services\SalesRepresentativeActivityService;
 use App\Services\SalesReferralService;
 use Illuminate\Http\JsonResponse;
@@ -28,6 +32,180 @@ class SalesRepresentativeController extends Controller
         private SalesReferralService $referrals,
     )
     {
+    }
+
+    /**
+     * Public Self-Registration for Prospective Sales Representatives.
+     * New applicants start in 'pending_approval' state with inactive user status (0).
+     */
+    public function publicRegister(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'firstname' => ['required', 'string', 'max:120'],
+            'surname' => ['required', 'string', 'max:120'],
+            'email' => ['required', 'email', 'max:180', 'unique:users,email'],
+            'phone' => ['required', 'string', 'max:40'],
+            'region' => ['required', 'string', 'max:180'],
+            'state' => ['nullable', 'string', 'max:120'],
+            'lga' => ['nullable', 'string', 'max:120'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+            'next_of_kin_name' => ['nullable', 'string', 'max:180'],
+            'next_of_kin_phone' => ['nullable', 'string', 'max:50'],
+            'next_of_kin_relationship' => ['nullable', 'string', 'max:80'],
+            'notes' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        $rep = DB::transaction(function () use ($data) {
+            $code = $this->generateCode();
+
+            $user = User::create([
+                'firstname' => $data['firstname'],
+                'surname' => $data['surname'],
+                'email' => $data['email'],
+                'phone' => $data['phone'],
+                'username' => $code,
+                'reg_no' => $code,
+                'role' => 'Sales-Representative',
+                'status' => 0, // Inactive pending admin approval
+                'password' => Hash::make($data['password']),
+                'force_password_change' => false,
+            ]);
+
+            $policy = SchoolProfitBillingPolicy::first() ?? GradiosEduBillingPolicy::first();
+            $term1Rate = (float) ($policy?->sales_partner_term_1_commission_rate ?? 30.00);
+            $retentionRate = (float) ($policy?->sales_partner_retention_commission_rate ?? 12.00);
+
+            $salesRep = SalesRepresentative::create([
+                'user_id' => $user->id,
+                'code' => $code,
+                'region' => $data['region'],
+                'status' => 'pending_approval',
+                'term_1_commission_rate' => $term1Rate,
+                'retention_commission_rate' => $retentionRate,
+                'commission_rate' => $term1Rate,
+                'core_commission_rate' => $term1Rate,
+                'premium_commission_rate' => $term1Rate,
+                'monthly_target_amount' => 0,
+                'monthly_target_schools' => 0,
+                'next_of_kin_name' => $data['next_of_kin_name'] ?? null,
+                'next_of_kin_phone' => $data['next_of_kin_phone'] ?? null,
+                'next_of_kin_relationship' => $data['next_of_kin_relationship'] ?? null,
+                'joined_at' => now()->toDateString(),
+                'notes' => trim(($data['notes'] ?? '') . "\n[Registered via public sales partner portal on " . now()->toDateTimeString() . "]"),
+            ]);
+
+            SalesRepStatusEvent::create([
+                'sales_representative_id' => $salesRep->id,
+                'old_status' => null,
+                'new_status' => 'pending_approval',
+                'reason' => 'Public partner registration received',
+                'metadata' => [
+                    'ip' => request()->ip(),
+                    'region' => $data['region'],
+                ],
+            ]);
+
+            return $salesRep->load(['user', 'assignments', 'commissions']);
+        });
+
+        // Send confirmation email to applicant
+        try {
+            Mail::to($rep->user->email)->send(
+                new SalesRepresentativeApplicationReceivedMail($rep)
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Sales representative application confirmation email failed: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => 'Your sales representative application has been submitted successfully. Our administrative team will review and verify your account within 24 hours. You will receive an email confirmation once approved.',
+            'data' => [
+                'code' => $rep->code,
+                'name' => $rep->user->firstname . ' ' . $rep->user->surname,
+                'email' => $rep->user->email,
+                'status' => 'pending_approval',
+            ],
+        ], 201);
+    }
+
+    /**
+     * Super Admin: Approve a pending sales representative.
+     */
+    public function approve(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
+    {
+        $salesRepresentative->loadMissing('user');
+        $oldStatus = $salesRepresentative->status;
+
+        DB::transaction(function () use ($salesRepresentative, $request, $oldStatus) {
+            $salesRepresentative->update([
+                'status' => 'active',
+                'status_changed_at' => now(),
+                'status_reason' => 'Approved by administrator',
+            ]);
+
+            $salesRepresentative->user()->update([
+                'status' => 1,
+            ]);
+
+            SalesRepStatusEvent::create([
+                'sales_representative_id' => $salesRepresentative->id,
+                'changed_by' => $request->user()?->id,
+                'old_status' => $oldStatus,
+                'new_status' => 'active',
+                'reason' => 'Account verified and approved by Super Admin',
+            ]);
+        });
+
+        // Send approval confirmation email to representative
+        try {
+            Mail::to($salesRepresentative->user->email)->send(
+                new SalesRepresentativeApprovedMail($salesRepresentative, $this->loginUrl())
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Sales representative approval notification email failed: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => 'Sales representative approved and activation notification sent successfully.',
+            'data' => $this->representativePayload($salesRepresentative->fresh(['user', 'assignments', 'commissions'])),
+        ]);
+    }
+
+    /**
+     * Super Admin: Decline a sales representative application.
+     */
+    public function reject(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
+    {
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $oldStatus = $salesRepresentative->status;
+
+        DB::transaction(function () use ($salesRepresentative, $request, $oldStatus, $data) {
+            $salesRepresentative->update([
+                'status' => 'rejected',
+                'status_changed_at' => now(),
+                'status_reason' => $data['reason'] ?? 'Application declined by administrator',
+            ]);
+
+            $salesRepresentative->user()->update([
+                'status' => 0,
+            ]);
+
+            SalesRepStatusEvent::create([
+                'sales_representative_id' => $salesRepresentative->id,
+                'changed_by' => $request->user()?->id,
+                'old_status' => $oldStatus,
+                'new_status' => 'rejected',
+                'reason' => $data['reason'] ?? 'Application declined by Super Admin',
+            ]);
+        });
+
+        return response()->json([
+            'message' => 'Sales representative application declined.',
+            'data' => $this->representativePayload($salesRepresentative->fresh(['user', 'assignments', 'commissions'])),
+        ]);
     }
 
     public function workspace(Request $request): JsonResponse
@@ -296,6 +474,12 @@ class SalesRepresentativeController extends Controller
 
             $school->update(['user_id' => $admin->id]);
 
+            try {
+                \App\Services\Students\StudentExcelImportService::provisionDefaultAcademicStructure($school->id);
+            } catch (\Throwable $e) {
+                Log::warning('Failed to provision default academic structure for converted school: ' . $e->getMessage());
+            }
+
             $lead->update([
                 'school_id' => $school->id,
                 'admin_user_id' => $admin->id,
@@ -314,8 +498,8 @@ class SalesRepresentativeController extends Controller
 
         return response()->json([
             'message' => $emailSent
-                ? 'Lead converted and login details emailed. The school admin can claim the ₦5,000 GradeQuestPlus wallet credit after completing onboarding.'
-                : 'Lead converted. The school admin can claim the ₦5,000 GradeQuestPlus wallet credit after completing onboarding.',
+                ? 'Lead converted and login details emailed. The school admin can claim the ₦5,000 GradiosEduPlus wallet credit after completing onboarding.'
+                : 'Lead converted. The school admin can claim the ₦5,000 GradiosEduPlus wallet credit after completing onboarding.',
             'data' => $lead->fresh(['representative.user', 'demoBooking', 'school', 'adminUser']),
             'school' => $school,
             'admin' => $admin,
@@ -339,9 +523,6 @@ class SalesRepresentativeController extends Controller
         $perPage = min(max((int) $request->get('per_page', 15), 1), 100);
 
         $query = SalesRepresentative::query()
-            // Do not explicitly select last_login_at here. Older databases may
-            // not have run the activity-tracking migration yet, and selecting a
-            // missing column makes the entire representatives page fail.
             ->with(['user', 'assignments', 'commissions'])
             ->latest();
 
@@ -380,6 +561,8 @@ class SalesRepresentativeController extends Controller
             'email' => ['required', 'email', 'max:180', 'unique:users,email'],
             'phone' => ['nullable', 'string', 'max:40'],
             'region' => ['nullable', 'string', 'max:120'],
+            'term_1_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'retention_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'core_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'premium_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
@@ -414,14 +597,19 @@ class SalesRepresentativeController extends Controller
                 'force_password_change' => true,
             ]);
 
+            $term1Rate = $data['term_1_commission_rate'] ?? $data['commission_rate'] ?? 30.00;
+            $retentionRate = $data['retention_commission_rate'] ?? 12.00;
+
             return SalesRepresentative::create([
                 'user_id' => $user->id,
                 'code' => $code,
                 'region' => $data['region'] ?? null,
                 'status' => 'active',
-                'commission_rate' => $data['premium_commission_rate'] ?? $data['commission_rate'] ?? 5,
-                'core_commission_rate' => $data['core_commission_rate'] ?? $data['commission_rate'] ?? 5,
-                'premium_commission_rate' => $data['premium_commission_rate'] ?? $data['commission_rate'] ?? 5,
+                'term_1_commission_rate' => $term1Rate,
+                'retention_commission_rate' => $retentionRate,
+                'commission_rate' => $term1Rate,
+                'core_commission_rate' => $data['core_commission_rate'] ?? $term1Rate,
+                'premium_commission_rate' => $data['premium_commission_rate'] ?? $term1Rate,
                 'monthly_target_amount' => $data['monthly_target_amount'] ?? 0,
                 'monthly_target_schools' => $data['monthly_target_schools'] ?? 0,
                 'next_of_kin_name' => $data['next_of_kin_name'] ?? null,
@@ -494,47 +682,48 @@ class SalesRepresentativeController extends Controller
             'assignments.school',
             'assignments.adminUser:id,firstname,surname,email,phone,school_id',
             'commissions.school',
-            'commissions.subscription',
-            'commissions.subPayment',
         ]);
 
         return response()->json([
-            'data' => $this->representativePayload($salesRepresentative, true),
+            'representative' => $this->representativePayload($salesRepresentative, true),
         ]);
     }
 
     public function update(Request $request, SalesRepresentative $salesRepresentative): JsonResponse
     {
+        $salesRepresentative->load('user');
+
         $data = $request->validate([
-            'firstname' => ['sometimes', 'required', 'string', 'max:120'],
+            'firstname' => ['nullable', 'string', 'max:120'],
             'surname' => ['nullable', 'string', 'max:120'],
-            'email' => ['sometimes', 'required', 'email', 'max:180', Rule::unique('users', 'email')->ignore($salesRepresentative->user_id)],
+            'email' => ['nullable', 'email', 'max:180', Rule::unique('users', 'email')->ignore($salesRepresentative->user_id)],
             'phone' => ['nullable', 'string', 'max:40'],
             'region' => ['nullable', 'string', 'max:120'],
-            'status' => ['sometimes', 'required', Rule::in(['active', 'suspended', 'under_review', 'terminated', 'closed', 'deceased', 'inactive', 'paused'])],
-            'status_reason' => ['nullable', 'string'],
-            'closure_requested_at' => ['nullable', 'date'],
-            'death_reported_at' => ['nullable', 'date'],
-            'next_of_kin_name' => ['nullable', 'string', 'max:180'],
-            'next_of_kin_phone' => ['nullable', 'string', 'max:50'],
-            'next_of_kin_relationship' => ['nullable', 'string', 'max:80'],
-            'final_settlement_status' => ['nullable', Rule::in(['pending_review', 'approved', 'paid', 'forfeited', 'not_applicable'])],
+            'status' => ['nullable', Rule::in(['active', 'pending_approval', 'paused', 'suspended', 'under_review', 'terminated', 'closed', 'deceased', 'inactive', 'rejected'])],
+            'status_reason' => ['nullable', 'string', 'max:255'],
+            'final_settlement_status' => ['nullable', Rule::in(['pending_review', 'in_progress', 'settled', 'forfeited', 'not_applicable'])],
             'final_settlement_notes' => ['nullable', 'string'],
+            'term_1_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'retention_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'core_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'premium_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'monthly_target_amount' => ['nullable', 'numeric', 'min:0'],
             'monthly_target_schools' => ['nullable', 'integer', 'min:0'],
+            'next_of_kin_name' => ['nullable', 'string', 'max:180'],
+            'next_of_kin_phone' => ['nullable', 'string', 'max:50'],
+            'next_of_kin_relationship' => ['nullable', 'string', 'max:80'],
             'joined_at' => ['nullable', 'date'],
             'notes' => ['nullable', 'string'],
         ]);
 
-        if (array_key_exists('premium_commission_rate', $data)) {
-            $data['commission_rate'] = $data['premium_commission_rate'];
-        }
-
         DB::transaction(function () use ($data, $salesRepresentative, $request) {
-            $userData = array_intersect_key($data, array_flip(['firstname', 'surname', 'email', 'phone']));
+            $userData = array_filter([
+                'firstname' => $data['firstname'] ?? null,
+                'surname' => $data['surname'] ?? null,
+                'email' => $data['email'] ?? null,
+                'phone' => $data['phone'] ?? null,
+            ]);
 
             if ($userData) {
                 $salesRepresentative->user()->update($userData);
@@ -552,6 +741,8 @@ class SalesRepresentativeController extends Controller
                 'next_of_kin_relationship',
                 'final_settlement_status',
                 'final_settlement_notes',
+                'term_1_commission_rate',
+                'retention_commission_rate',
                 'commission_rate',
                 'core_commission_rate',
                 'premium_commission_rate',
@@ -578,7 +769,7 @@ class SalesRepresentativeController extends Controller
                     ],
                 ]);
 
-                if (in_array($data['status'], ['suspended', 'under_review', 'terminated', 'closed', 'deceased'], true)) {
+                if (in_array($data['status'], ['suspended', 'under_review', 'terminated', 'closed', 'deceased', 'rejected'], true)) {
                     SalesCommission::query()
                         ->where('sales_representative_id', $salesRepresentative->id)
                         ->whereIn('status', ['pending', 'approved'])
@@ -691,6 +882,7 @@ class SalesRepresentativeController extends Controller
         return [
             'total_representatives' => SalesRepresentative::count(),
             'active_representatives' => SalesRepresentative::where('status', 'active')->count(),
+            'pending_representatives' => SalesRepresentative::where('status', 'pending_approval')->count(),
             'assigned_leads' => SalesRepAssignment::count(),
             'converted_leads' => SalesRepAssignment::where('stage', 'converted')->count(),
             'pipeline_value' => (float) SalesRepAssignment::sum('pipeline_value'),
@@ -716,9 +908,11 @@ class SalesRepresentativeController extends Controller
             'region' => $rep->region,
             'status' => $rep->status,
             'sales_page_url' => $this->referrals->salesPageUrl($rep->code),
-            'commission_rate' => (float) $rep->commission_rate,
-            'core_commission_rate' => (float) ($rep->core_commission_rate ?? $rep->commission_rate),
-            'premium_commission_rate' => (float) ($rep->premium_commission_rate ?? $rep->commission_rate),
+            'term_1_commission_rate' => (float) ($rep->term_1_commission_rate ?? $rep->commission_rate ?? 30.00),
+            'retention_commission_rate' => (float) ($rep->retention_commission_rate ?? 12.00),
+            'commission_rate' => (float) ($rep->term_1_commission_rate ?? $rep->commission_rate ?? 30.00),
+            'core_commission_rate' => (float) ($rep->core_commission_rate ?? $rep->term_1_commission_rate ?? 30.00),
+            'premium_commission_rate' => (float) ($rep->premium_commission_rate ?? $rep->term_1_commission_rate ?? 30.00),
             'monthly_target_amount' => (float) $rep->monthly_target_amount,
             'monthly_target_schools' => (int) $rep->monthly_target_schools,
             'joined_at' => optional($rep->joined_at)?->toDateString(),
@@ -762,7 +956,7 @@ class SalesRepresentativeController extends Controller
     private function generateAdminRegNo(): string
     {
         do {
-            $regNo = 'R' . random_int(100000, 999999);
+            $regNo = (string) random_int(1000000000, 9999999999);
         } while (User::where('reg_no', $regNo)->exists());
 
         return $regNo;

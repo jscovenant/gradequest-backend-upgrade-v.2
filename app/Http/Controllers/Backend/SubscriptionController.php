@@ -21,6 +21,7 @@ use Carbon\Carbon;
 use App\Services\SalesCommissionService;
 use App\Services\WelcomeWalletCreditService;
 use App\Services\SubscriptionAiCreditService;
+use App\Models\GradiosEduBillingPolicy;
 
 class SubscriptionController extends Controller
 {
@@ -97,15 +98,22 @@ class SubscriptionController extends Controller
             : 0.0;
 
         $plans = SubscriptionPlan::where('is_active', 1)
+            ->whereRaw('LOWER(name) NOT LIKE ?', ['%core%'])
+            ->where(function ($q) {
+                $q->where('price_per_student', '>', 0)
+                  ->orWhere('price', '>', 0);
+            })
             ->orderBy('price_per_student')
             ->get(['id', 'name', 'price', 'price_per_student', 'currency', 'max_students', 'duration_in_days', 'billing_interval', 'description', 'is_active'])
-            ->map(function (SubscriptionPlan $plan) use ($activeStudents, $current, $hasActiveUnexpired, $remainingDays, $upgradeCredit, $currentPackageValue) {
+            ->map(function (SubscriptionPlan $plan) use ($user, $activeStudents, $current, $hasActiveUnexpired, $remainingDays, $upgradeCredit, $currentPackageValue) {
                 $pricePerStudent = (float) ($plan->price_per_student ?? $plan->price ?? 0);
                 $studentLimit = (int) ($plan->max_students ?? 0);
                 $samePlan = $hasActiveUnexpired && (int) $current->subscription_plan_id === (int) $plan->id;
                 $higherPlan = ! $hasActiveUnexpired || $this->isHigherPlan($plan, $current?->plan);
                 $canSelect = ! $hasActiveUnexpired || (! $samePlan && $higherPlan);
                 $baseAmount = $activeStudents * $pricePerStudent;
+
+                $promo = $user ? $this->evaluatePromo($plan, $user, 3, $current) : null;
 
                 return [
                     'id' => $plan->id,
@@ -137,6 +145,7 @@ class SubscriptionController extends Controller
                     'projected_expiry' => $canSelect
                         ? now()->addDays(((int) $plan->duration_in_days) + ($hasActiveUnexpired ? $remainingDays : 0))->toIso8601String()
                         : null,
+                    'promo' => $promo,
                 ];
             });
 
@@ -190,6 +199,86 @@ class SubscriptionController extends Controller
         return $students * (float) ($plan->price_per_student ?? $plan->price ?? 0);
     }
 
+    protected function evaluatePromo(SubscriptionPlan $plan, User $user, int $cycles, ?Subscription $current = null): array
+    {
+        $policy = GradiosEduBillingPolicy::first();
+        if (! $policy || ! $policy->promo_enabled) {
+            return [
+                'enabled' => false,
+                'applied' => false,
+                'bonus_days' => 0,
+                'reason' => 'No active promotion.',
+            ];
+        }
+
+        $now = now();
+        if ($policy->promo_starts_at && $now->lt($policy->promo_starts_at)) {
+            return [
+                'enabled' => false,
+                'applied' => false,
+                'bonus_days' => 0,
+                'reason' => 'Promotion has not started yet.',
+            ];
+        }
+
+        if ($policy->promo_ends_at && $now->gt($policy->promo_ends_at)) {
+            return [
+                'enabled' => false,
+                'applied' => false,
+                'bonus_days' => 0,
+                'reason' => 'Promotion has ended.',
+            ];
+        }
+
+        if ($policy->promo_max_claims && $policy->promo_claims_count >= $policy->promo_max_claims) {
+            return [
+                'enabled' => false,
+                'applied' => false,
+                'bonus_days' => 0,
+                'reason' => 'Promotion claim limit has been reached.',
+            ];
+        }
+
+        $planName = strtolower(trim((string) $plan->name));
+        $targetPlan = strtolower(trim((string) ($policy->promo_target_plan ?: 'GradiosEdu Plus')));
+        $isTargetPlan = str_contains($planName, 'plus') || ($targetPlan !== '' && str_contains($planName, $targetPlan));
+
+        $activeStudents = $this->activeStudentCountFor($user);
+        $minStudents = (int) ($policy->promo_min_students ?? 100);
+        $hasMinStudents = $activeStudents >= $minStudents;
+
+        $planDays = (int) ($plan->duration_in_days ?? 0);
+        $totalPaidDays = $planDays * max(1, $cycles);
+        $isAnnualBilling = $totalPaidDays >= 300 || $cycles >= 3;
+
+        $isEligible = $isTargetPlan && $isAnnualBilling && $hasMinStudents;
+        $bonusDays = $isEligible ? (int) ($policy->promo_bonus_days ?: 365) : 0;
+
+        return [
+            'enabled' => true,
+            'applied' => $isEligible,
+            'title' => $policy->promo_title ?: 'Buy 1 Year, Get +1 Year Free Promo',
+            'description' => $policy->promo_description ?: 'Subscribe to GradiosEdu Plus for 1 year with at least 100 students and get an additional year 100% free.',
+            'target_plan' => $policy->promo_target_plan ?: 'GradiosEdu Plus',
+            'min_students' => $minStudents,
+            'current_students' => $activeStudents,
+            'has_min_students' => $hasMinStudents,
+            'is_target_plan' => $isTargetPlan,
+            'is_annual_billing' => $isAnnualBilling,
+            'bonus_days' => $bonusDays,
+            'ends_at' => $policy->promo_ends_at?->toIso8601String(),
+            'max_claims' => $policy->promo_max_claims,
+            'claims_count' => $policy->promo_claims_count,
+            'reason' => ! $isTargetPlan
+                ? 'Only applicable to ' . ($policy->promo_target_plan ?: 'GradiosEdu Plus')
+                : (! $isAnnualBilling
+                    ? 'Annual billing (1 year / 3 terms) required for promo'
+                    : (! $hasMinStudents
+                        ? "Minimum {$minStudents} students required (current: {$activeStudents})"
+                        : 'Eligible for +' . ($policy->promo_bonus_days ?: 365) . ' bonus days!')),
+        ];
+    }
+
     protected function subscriptionQuote(SubscriptionPlan $plan, User $user, int $cycles): array
     {
         $current = Subscription::with('plan')
@@ -213,6 +302,7 @@ class SubscriptionController extends Controller
         [$totalBeforeCredit, $discountAmount, $subtotal] = $this->computeTotal($this->planBaseAmount($plan, $user), $cycles);
         $upgradeCredit = $hasActiveUnexpired ? $this->unusedCreditForSubscription($current, $user) : 0.0;
         $payable = max(0, round($totalBeforeCredit - $upgradeCredit, 2));
+        $promo = $this->evaluatePromo($plan, $user, $cycles, $current);
 
         return [
             'action' => $action,
@@ -228,6 +318,8 @@ class SubscriptionController extends Controller
             'remaining_days' => $hasActiveUnexpired
                 ? max(0, (int) ceil(now()->diffInDays(Carbon::parse($current->ends_at), false)))
                 : 0,
+            'promo' => $promo,
+            'promo_bonus_days' => (int) ($promo['bonus_days'] ?? 0),
         ];
     }
 
@@ -326,6 +418,14 @@ class SubscriptionController extends Controller
             );
         }
 
+        $baseDays = (int) ($plan->duration_in_days ?? 0) * $cycles;
+        if ($durationDays >= ($baseDays + 300)) {
+            $policy = GradiosEduBillingPolicy::first();
+            if ($policy && $policy->promo_enabled) {
+                $policy->increment('promo_claims_count');
+            }
+        }
+
         return $subscription;
     }
 
@@ -369,7 +469,8 @@ class SubscriptionController extends Controller
     $totalAmount = $quote['payable_amount'];
     $discountAmount = $quote['discount_amount'];
     $subtotal = $quote['subtotal'];
-    $newPackageDays = (int) $plan->duration_in_days * $cycles;
+    $promoBonusDays = (int) ($quote['promo']['bonus_days'] ?? 0);
+    $newPackageDays = ((int) $plan->duration_in_days * $cycles) + $promoBonusDays;
     $totalDurationDays = $newPackageDays + (int) $quote['remaining_days'];
 
     $reference = 'trx_' . uniqid();
@@ -418,11 +519,18 @@ class SubscriptionController extends Controller
 
     $amountInKobo = (int) round($totalAmount * 100);
 
+    $origin = $request->input('callback_url')
+        ?: $request->header('origin')
+        ?: ($request->header('referer') ? rtrim(parse_url($request->header('referer'), PHP_URL_SCHEME) . '://' . parse_url($request->header('referer'), PHP_URL_HOST), '/') : null)
+        ?: rtrim((string) (config('app.frontend_url') ?: 'https://gradequest.com.ng'), '/');
+
+    $callbackUrl = str_ends_with($origin, '/checkout') ? $origin : rtrim($origin, '/') . '/checkout';
+
     $payload = [
         'email' => $user->email,
         'amount' => $amountInKobo,
         'reference' => $reference,
-        'callback_url' => rtrim(config('app.frontend_url'), '/') . '/checkout',
+        'callback_url' => $callbackUrl,
         'metadata' => [
             'plan_id' => $plan->id,
             'user_id' => $user->id,
@@ -637,7 +745,8 @@ class SubscriptionController extends Controller
         $totalAmount = $quote['payable_amount'];
         $discountAmount = $quote['discount_amount'];
         $subtotal = $quote['subtotal'];
-        $newPackageDays = (int) $plan->duration_in_days * $cycles;
+        $promoBonusDays = (int) ($quote['promo']['bonus_days'] ?? 0);
+        $newPackageDays = ((int) $plan->duration_in_days * $cycles) + $promoBonusDays;
         $totalDurationDays = $newPackageDays + (int) $quote['remaining_days'];
 
         app(WelcomeWalletCreditService::class)->expireUnusedCredits($user);

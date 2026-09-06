@@ -43,7 +43,7 @@ class SuperAdminTwilioController extends Controller
 
         $sent = $whatsapp->sendSystemMessage(
             (string) $data['phone'],
-            "*GradeQuest Platform Test*\n\nThis is a Super Admin Twilio WhatsApp test.\n\nThe platform sender is working."
+            "*GradiosEdu Platform Test*\n\nThis is a Super Admin Twilio WhatsApp test.\n\nThe platform sender is working."
         );
 
         return $sent

@@ -42,7 +42,7 @@ class SubscriptionExpiryReminderNotification extends Notification implements Sho
             $logoUrl = asset($settings->logo);
         }
 
-        $schoolName = $settings->school_name ?? config('app.name', 'GradeQuest');
+        $schoolName = $settings->school_name ?? config('app.name', 'SchoolProfit');
         $schoolEmail = $settings->email ?? null;
         $schoolPhone = $settings->phone ?? null;
         $schoolAddress = $settings->address ?? null;

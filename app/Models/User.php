@@ -26,7 +26,9 @@ class User extends Authenticatable
      */
 
 
-protected $guarded = [];
+    protected $guarded = [];
+
+    protected $appends = ['name'];
 
     /**
      * The attributes that should be hidden for serialization.
@@ -51,7 +53,6 @@ protected $casts = [
     'email_verified_at' => 'datetime',
     'password' => 'hashed',
     'password_reset_expires_at' => 'datetime',
-    'default_password' => 'encrypted', 
     'force_password_change' => 'boolean',
     'password_changed_at' => 'datetime',
     'twilio_auth_token' => 'encrypted',
@@ -224,6 +225,25 @@ public function thirdtermresults()
         return $this->role === $role;
     }
 
+    public function getNameAttribute($value)
+    {
+        if (! empty($value)) {
+            return $value;
+        }
+
+        $composed = trim(implode(' ', array_filter([
+            $this->attributes['firstname'] ?? null,
+            $this->attributes['surname'] ?? null,
+            $this->attributes['third_name'] ?? null,
+        ])));
+
+        if (! empty($composed)) {
+            return $composed;
+        }
+
+        return $this->attributes['username'] ?? ('User #' . ($this->attributes['id'] ?? ''));
+    }
+
     public function getIsTeacherAttribute()
     {
         return $this->hasRole('Teacher');
@@ -335,16 +355,38 @@ public function hasFeature(string $featureKey): ?array
 
 
 
- public function routeNotificationForWhatsapp(): ?string
+    public function getDefaultPasswordAttribute($value): ?string
     {
-        return $this->phone ?: null;
+        if (!$value) {
+            return null;
+        }
+
+        try {
+            return \Illuminate\Support\Facades\Crypt::decryptString($value);
+        } catch (\Throwable $e) {
+            if (is_string($value) && strlen($value) < 60 && !str_starts_with($value, 'eyJ')) {
+                return $value;
+            }
+            return null;
+        }
     }
 
+    public function setDefaultPasswordAttribute($value): void
+    {
+        if (!$value) {
+            $this->attributes['default_password'] = null;
+            return;
+        }
 
+        try {
+            $this->attributes['default_password'] = \Illuminate\Support\Facades\Crypt::encryptString($value);
+        } catch (\Throwable $e) {
+            $this->attributes['default_password'] = $value;
+        }
+    }
 
-
-
-
-
-
+    public function readableDefaultPassword(): ?string
+    {
+        return $this->default_password;
+    }
 }

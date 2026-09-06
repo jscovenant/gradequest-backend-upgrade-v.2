@@ -10,6 +10,9 @@ class SalesPayoutPolicy extends Model
 
     protected $casts = [
         'default_commission_rate' => 'decimal:2',
+        'default_term_1_rate' => 'decimal:2',
+        'default_retention_rate' => 'decimal:2',
+        'max_commission_terms' => 'integer',
         'minimum_payout_amount' => 'decimal:2',
         'monthly_payout_day' => 'integer',
         'commission_waiting_days' => 'integer',
@@ -27,7 +30,10 @@ class SalesPayoutPolicy extends Model
         return static::query()->firstOrCreate(
             ['id' => 1],
             [
-                'default_commission_rate' => 5,
+                'default_commission_rate' => 30,
+                'default_term_1_rate' => 30,
+                'default_retention_rate' => 12,
+                'max_commission_terms' => 3,
                 'minimum_payout_amount' => 5000,
                 'monthly_payout_day' => 5,
                 'commission_waiting_days' => 7,

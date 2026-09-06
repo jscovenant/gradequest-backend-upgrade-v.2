@@ -79,7 +79,7 @@ class PublicSalesPageController extends Controller
         $this->recordEvent($request, $rep, 'lead_submitted', $data['marketing_material_id'] ?? null, ['lead_id' => $lead->id]);
 
         return response()->json([
-            'message' => 'Your interest has been sent to the GradeQuest representative.',
+            'message' => 'Your interest has been sent to the GradiosEdu representative.',
             'lead_id' => $lead->id,
         ], $lead->wasRecentlyCreated ? 201 : 200);
     }

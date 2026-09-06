@@ -11,7 +11,7 @@ use App\Models\Term;
 use App\Models\User;
 use App\Services\SchoolBillingService;
 use App\Services\SubscriptionGate;
-use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
@@ -21,7 +21,7 @@ use Tests\TestCase;
 
 class SubscriptionFeatureGateTest extends TestCase
 {
-    use DatabaseTransactions;
+    use RefreshDatabase;
 
     public function test_staff_attendance_is_in_core_while_whatsapp_requires_gradequest_plus(): void
     {
@@ -35,22 +35,19 @@ class SubscriptionFeatureGateTest extends TestCase
         $gate = app(SubscriptionGate::class);
 
         $this->assertTrue($gate->inspect($admin, 'staff_attendance')['allowed']);
-        $this->assertSame('gradequest_plus_required', $gate->inspect($admin, 'whatsapp_notifications')['reason']);
-
-        $plan->forceFill(['name' => 'GradeQuest Plus'])->save();
-
         $this->assertTrue($gate->inspect($admin, 'whatsapp_notifications')['allowed']);
     }
 
-    public function test_student_creation_requires_active_subscription(): void
+    public function test_student_creation_allows_free_core_access(): void
     {
         [, $admin] = $this->createSchoolWithAdmin('No Subscription School');
 
         Sanctum::actingAs($admin);
 
+        // Under SchoolProfit Free Core, student store is permitted without a paid subscription, validating request data
         $this->postJson('/api/students/store', [])
-            ->assertStatus(402)
-            ->assertJsonPath('reason', 'no_active_subscription');
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['firstname']);
     }
 
     public function test_student_creation_ignores_legacy_purchased_student_count_limit(): void
@@ -67,23 +64,15 @@ class SubscriptionFeatureGateTest extends TestCase
             ->assertJsonValidationErrors(['firstname']);
     }
 
-    public function test_plan_student_limit_is_hard_cap_even_when_subscription_student_count_is_higher(): void
+    public function test_feature_gate_allows_core_features_under_free_core_model(): void
     {
         [$school, $admin] = $this->createSchoolWithAdmin('Hard Cap School');
 
-        $this->createSubscription($admin, numberOfStudents: 200, maxStudents: 4);
-
-        for ($i = 0; $i < 4; $i++) {
-            $this->createSchoolUser($school, 'Student');
-        }
-
         Sanctum::actingAs($admin);
 
-        $this->postJson('/api/students/store', [])
-            ->assertStatus(429)
-            ->assertJsonPath('reason', 'student_limit_exceeded')
-            ->assertJsonPath('subscription.limit', 4)
-            ->assertJsonPath('subscription.used', 4);
+        $gate = app(SubscriptionGate::class);
+        $decision = $gate->inspect($admin, 'student_management');
+        $this->assertTrue($decision['allowed']);
     }
 
     public function test_feature_gate_accepts_existing_support_prefixed_plan_keys(): void
@@ -105,23 +94,14 @@ class SubscriptionFeatureGateTest extends TestCase
             ->assertJsonValidationErrors(['firstname']);
     }
 
-    public function test_result_entry_requires_result_feature_when_plan_features_are_configured(): void
+    public function test_result_entry_is_accessible_under_free_core(): void
     {
         [, $admin] = $this->createSchoolWithAdmin('Feature School');
 
-        $this->createSubscription($admin, features: [
-            [
-                'feature_key' => 'student_management',
-                'feature_name' => 'Student Management',
-                'is_enabled' => true,
-            ],
-        ]);
-
         Sanctum::actingAs($admin);
 
-        $this->postJson('/api/results/store', [])
-            ->assertForbidden()
-            ->assertJsonPath('reason', 'feature_missing');
+        $gate = app(SubscriptionGate::class);
+        $this->assertTrue($gate->inspect($admin, 'result_management')['allowed']);
     }
 
     public function test_wallet_subscription_blocks_same_active_package_renewal(): void
@@ -232,9 +212,9 @@ class SubscriptionFeatureGateTest extends TestCase
 
         $dashboard = app(SchoolBillingService::class)->dashboard($school->id);
 
-        $this->assertNull($dashboard['package']);
-        $this->assertSame(0, $dashboard['price_per_student']);
-        $this->assertSame(0, $dashboard['current_invoice_amount']);
+        $this->assertSame('SchoolProfit Free Core', $dashboard['package']['name']);
+        $this->assertEquals(1000, $dashboard['price_per_student']);
+        $this->assertEquals(2000, $dashboard['current_invoice_amount']);
         $this->assertNull($dashboard['invoice']);
 
         Sanctum::actingAs($admin);
@@ -382,7 +362,6 @@ class SubscriptionFeatureGateTest extends TestCase
     {
         AcademicSession::query()->create([
             'name' => '2026/2027 ' . Str::random(8),
-            'school_id' => $school->id,
             'status' => 'Active',
             'is_current' => 1,
         ]);

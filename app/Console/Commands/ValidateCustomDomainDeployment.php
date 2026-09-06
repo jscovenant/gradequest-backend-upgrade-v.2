@@ -44,7 +44,7 @@ class ValidateCustomDomainDeployment extends Command
 
         $domain = strtolower(trim((string) $this->option('domain'), '. '));
         if ($domain !== '') {
-            $checks['Requested domain is active in GradeQuest'] = SchoolDomain::query()
+            $checks['Requested domain is active in GradiosEdu'] = SchoolDomain::query()
                 ->where('domain', $domain)
                 ->where('status', 'active')
                 ->exists();
@@ -52,7 +52,7 @@ class ValidateCustomDomainDeployment extends Command
             if (! $this->option('skip-dns')) {
                 $target = strtolower(trim((string) config('domains.cname_target'), '. '));
                 $records = @dns_get_record($domain, DNS_CNAME | DNS_A | DNS_AAAA) ?: [];
-                $checks['Requested domain routes to GradeQuest'] = collect($records)->contains(function (array $record) use ($target, $targetIps) {
+                $checks['Requested domain routes to GradiosEdu'] = collect($records)->contains(function (array $record) use ($target, $targetIps) {
                     $cname = strtolower(trim((string) ($record['target'] ?? ''), '. '));
                     $address = (string) ($record['ip'] ?? $record['ipv6'] ?? '');
 

@@ -48,7 +48,7 @@ class WhatsAppMessageBuilder
             $lines[] = "Tap this link to check the result:";
             $lines[] = $resultLink;
         } else {
-            $lines[] = "Please login to GradeQuest or contact the school for more details.";
+            $lines[] = "Please login to SchoolProfit or contact the school for more details.";
         }
         $lines[] = "";
         $lines[] = "_{$schoolName}_";

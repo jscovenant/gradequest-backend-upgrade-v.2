@@ -43,6 +43,16 @@ return [
         'base_url' => env('MONNIFY_BASE_URL'),
     ],
 
+    'wema_alat' => [
+        'alatpay_key' => env('WEMA_ALAT_ALATPAY_KEY', 'f325c0f65b3b4758bf9e0c81fcc23bd6'),
+        'payout_key' => env('WEMA_ALAT_PAYOUT_KEY', '1eb9d69581404ba4b89d856b7147711a'),
+        'virtual_account_key' => env('WEMA_ALAT_VIRTUAL_ACCOUNT_KEY', 'schooproft_virtual_acct_pending'),
+        'base_url' => env('WEMA_ALAT_BASE_URL', 'https://wema-alatdev-apimgt.azure-api.net'),
+        'corporate_account' => env('WEMA_CORPORATE_ACCOUNT_NUMBER', '0123456789'),
+        'webhook_secret' => env('WEMA_ALAT_WEBHOOK_SECRET', 'sp_wema_webhook_secret_2026'),
+        'env' => env('WEMA_ALAT_ENV', 'sandbox'),
+    ],
+
 
     'paystack' => [
         'secret' => env('PAYSTACK_SECRET_KEY'),
@@ -57,12 +67,15 @@ return [
 
  
 
-// config/services.php
-'twilio' => [
-    'sid'        => env('TWILIO_SID'),
-    'auth_token' => env('TWILIO_AUTH_TOKEN'),
-    'from'       => env('TWILIO_WHATSAPP_FROM'),
-],
+    'twilio' => [
+        'sid'        => env('TWILIO_SID'),
+        'auth_token' => env('TWILIO_AUTH_TOKEN'),
+        'from'       => env('TWILIO_WHATSAPP_FROM'),
+    ],
 
+    'turnstile' => [
+        'secret'  => env('CLOUDFLARE_TURNSTILE_SECRET_KEY'),
+        'enabled' => env('CLOUDFLARE_TURNSTILE_ENABLED', true),
+    ],
 
 ];

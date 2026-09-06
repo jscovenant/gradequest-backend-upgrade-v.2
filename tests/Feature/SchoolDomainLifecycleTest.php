@@ -73,7 +73,7 @@ class SchoolDomainLifecycleTest extends TestCase
         $this->postJson('/api/settings/domain/activate', ['domain_id' => $domainId])
             ->assertUnprocessable();
 
-        $service->records['portal.example-school.test'] = [['target' => 'domains.gradequest.com.ng']];
+        $service->records['portal.example-school.test'] = [['target' => config('domains.cname_target')]];
         $this->postJson('/api/settings/domain/activate', ['domain_id' => $domainId])
             ->assertOk()
             ->assertJsonPath('data.status', 'active');

@@ -86,7 +86,7 @@ class AiLessonPlanController extends Controller
         $scope = $this->resolveAcademicScope($data, $schoolId, $auth);
         $featureKey = 'ai_scheme_work_generator';
         $creditCost = $credits->costForFeature($featureKey);
-        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost);
+        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost, $auth);
 
         try {
             $result = $generator->generateScheme($data + ['school_context' => 'Nigerian/African primary and secondary school classroom']);
@@ -95,7 +95,7 @@ class AiLessonPlanController extends Controller
             return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
         }
 
-        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-scheme', $schoolId), $data);
+        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-scheme', $schoolId), $data, $auth);
         $schemeData = $result['scheme'];
         $scheme = LessonScheme::query()->create($scope + [
             'school_id' => $schoolId,
@@ -134,7 +134,7 @@ class AiLessonPlanController extends Controller
         $scope = $this->resolveAcademicScope($data, $schoolId, $auth);
         $featureKey = 'ai_lesson_plan_generator';
         $creditCost = $credits->costForFeature($featureKey);
-        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost);
+        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost, $auth);
 
         try {
             $result = $generator->generate($data);
@@ -143,7 +143,7 @@ class AiLessonPlanController extends Controller
             return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
         }
 
-        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-plan', $schoolId), $data);
+        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-plan', $schoolId), $data, $auth);
         $plan = $result['lesson_plan'];
         $record = GeneratedLessonPlan::query()->create($scope + [
             'school_id' => $schoolId,
@@ -183,7 +183,7 @@ class AiLessonPlanController extends Controller
         $scope = $this->resolveAcademicScope($data, $schoolId, $auth);
         $featureKey = 'ai_lesson_note_generator';
         $creditCost = $credits->costForFeature($featureKey);
-        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost);
+        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost, $auth);
 
         $scheme = ! empty($data['scheme_id']) ? LessonScheme::query()->where('school_id', $schoolId)->find($data['scheme_id']) : null;
         $plan = ! empty($data['lesson_plan_id']) ? GeneratedLessonPlan::query()->where('school_id', $schoolId)->find($data['lesson_plan_id']) : null;
@@ -198,7 +198,7 @@ class AiLessonPlanController extends Controller
             return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
         }
 
-        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-note', $schoolId), $data);
+        $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-note', $schoolId), $data, $auth);
         $noteData = $result['lesson_note'];
         $note = LessonNote::query()->create($scope + [
             'school_id' => $schoolId,
@@ -315,6 +315,7 @@ class AiLessonPlanController extends Controller
 
         return response()->json(['message' => 'Lesson note updated.', 'lesson_note' => $note->fresh()]);
     }
+
     public function publishNote(Request $request, LessonNote $note): JsonResponse
     {
         $this->authorizeSchoolResource($request, $note->school_id);
@@ -368,6 +369,7 @@ class AiLessonPlanController extends Controller
 
         return response()->json(['message' => 'Lesson note archived.']);
     }
+
     public function studentNotes(Request $request): JsonResponse
     {
         $auth = $request->user();
@@ -695,6 +697,3 @@ class AiLessonPlanController extends Controller
         ]);
     }
 }
-
-
-

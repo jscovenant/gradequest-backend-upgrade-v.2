@@ -11,6 +11,13 @@ class SchoolSetting extends Model
 
     protected $guarded = [];
 
+    protected $appends = ['name'];
+
+    public function getNameAttribute(): ?string
+    {
+        return $this->school_name ?? null;
+    }
+
     public function user()
     {
         return $this->belongsTo(User::class, 'school_id', 'id');

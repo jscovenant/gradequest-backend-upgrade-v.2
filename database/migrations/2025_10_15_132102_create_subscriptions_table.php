@@ -12,17 +12,22 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('subscriptions', function (Blueprint $table) {
-               $table->id();
+            $table->id();
             $table->foreignId('user_id')->constrained('users')->onDelete('cascade');
             $table->bigInteger('subscription_plan_id');
+            $table->string('customer_code')->nullable();
+            $table->string('subscription_code')->nullable();
+            $table->string('email_token')->nullable();
+            $table->string('authorization_code')->nullable();
             $table->string('paystack_customer_code')->nullable();
             $table->string('paystack_subscription_code')->nullable();
-            $table->string('status')->default('inactive'); // e.g., active, inactive, cancelled
+            $table->string('auto_renew_source')->nullable()->default('paystack');
+            $table->string('status')->default('inactive');
             $table->boolean('auto_renew')->default(false);
             $table->timestamp('starts_at')->nullable();
             $table->timestamp('ends_at')->nullable();
             $table->timestamps();
-    });
+        });
     }
 
     /**

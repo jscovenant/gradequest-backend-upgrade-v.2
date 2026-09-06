@@ -601,7 +601,7 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
             $record->school_id = $auth->school_id;
             $record->class_id = $classId;
             $record->subject_id = $res['subject_id'] ?? null;
-            $record->ca = $res['ca'] ?? '';
+            $record->ca = (is_array($res['ca'] ?? null) || is_object($res['ca'] ?? null)) ? json_encode($res['ca']) : ($res['ca'] ?? '');
             $record->exam = $res['exam'] ?? '';
             $record->total = $res['total'] ?? '';
             $record->grade = $res['grade'] ?? '';
@@ -626,9 +626,58 @@ public function updateStudentResult(Request $request, $studentId, $session, $cla
             $record->save();
         }
 
+        // Synchronize with V2 batch system if present
+        $batch = \App\Models\ResultBatch::where('school_id', $auth->school_id)
+            ->where('class_id', $classId)
+            ->where('session', $session)
+            ->where('term', $term)
+            ->first();
+
+        if ($batch) {
+            $studentResultV2 = \App\Models\StudentResultV2::updateOrCreate(
+                [
+                    'batch_id' => $batch->id,
+                    'user_id' => $studentId,
+                ],
+                [
+                    'total_average' => $request->summary['total_average'] ?? 0,
+                    'total_grade' => $request->summary['total_grade'] ?? '',
+                    'class_teacher_comment' => $request->summary['class_teacher_comment'] ?? '',
+                    'principal_comment' => $request->summary['principal_comment'] ?? '',
+                    'general_remark' => $request->summary['general_remark'] ?? '',
+                    'class_size' => $request->summary['class_size'] ?? 0,
+                    'position' => $request->summary['position'] ?? '',
+                    'meta_json' => [
+                        'school_open' => $request->summary['school_open'] ?? 0,
+                        'no_present' => $request->summary['no_present'] ?? 0,
+                        'no_absent' => $request->summary['no_absent'] ?? 0,
+                        'resumption_date' => $request->summary['resumption_date'] ?? null,
+                    ],
+                ]
+            );
+
+            // Re-sync subject results v2
+            \App\Models\SubjectResultV2::where('student_result_id', $studentResultV2->id)->delete();
+            foreach ($request->results as $res) {
+                \App\Models\SubjectResultV2::create([
+                    'student_result_id' => $studentResultV2->id,
+                    'subject_id' => $res['subject_id'] ?? null,
+                    'subject_name' => \App\Models\Subject::find($res['subject_id'] ?? 0)?->name ?? '',
+                    'ca' => (is_array($res['ca'] ?? null) || is_object($res['ca'] ?? null)) ? json_encode($res['ca']) : ($res['ca'] ?? ''),
+                    'exam' => $res['exam'] ?? 0,
+                    'total' => $res['total'] ?? 0,
+                    'grade' => $res['grade'] ?? '',
+                    'remark' => $res['remark'] ?? '',
+                ]);
+            }
+        }
+
         DB::commit();
 
-        return response()->json(['message' => 'Result updated successfully.']);
+        return response()->json([
+            'message' => 'Result updated and synchronized successfully!',
+            'average' => $average,
+        ], 200);
 
     } catch (\Throwable $e) {
         DB::rollBack();
@@ -1011,24 +1060,23 @@ public function fetchBroadsheet(Request $request)
 public function verifyResult(Request $request)
 {
     $request->validate([
-        'studentId' => 'required|integer',
+        'studentId' => 'nullable|integer',
         'reg_no' => 'required|string',
         'term' => 'required|string',
         'session' => 'required|string'
     ]);
 
-    // Validate the student
-    $student = User::where('id', $request->studentId)
-        ->where('reg_no', $request->reg_no)
-        ->first();
+    $query = User::where('reg_no', trim($request->reg_no));
+    if ($request->filled('studentId')) {
+        $query->where('id', $request->studentId);
+    }
+    $student = $query->first();
 
     if (!$student) {
         return response()->json([
-            'message' => 'Invalid or tampered QR code.'
+            'message' => 'Invalid or tampered QR code / student record not found.'
         ], 404);
     }
-    
-
 
     // Get result
     $average = Average::where('user_id', $student->id)
@@ -1038,7 +1086,7 @@ public function verifyResult(Request $request)
 
     if (!$average) {
         return response()->json([
-            'message' => 'No matching result found.'
+            'message' => 'No published result found for the specified term and session.'
         ], 404);
     }
 
@@ -1046,16 +1094,39 @@ public function verifyResult(Request $request)
     $school = SchoolSetting::find($student->school_id);
 
     return response()->json([
-        'student' => $student,
+        'student' => [
+            'id' => $student->id,
+            'firstname' => $student->firstname,
+            'surname' => $student->surname,
+            'third_name' => $student->third_name,
+            'reg_no' => $student->reg_no,
+            'gender' => $student->gender,
+            'photo' => $student->photo,
+            'dob' => $student->dob,
+            'blood_group' => $student->blood_group,
+            'status' => $student->status,
+        ],
         'result' => [
             'class' => $class?->name,
             'term' => $average->term,
             'session' => $average->session,
             'total_average' => $average->total_average,
             'total_grade' => $average->total_grade,
-            'general_remark' => $average->general_remark
+            'general_remark' => $average->general_remark,
+            'status' => $average->status ?? 'approved',
+            'created_at' => $average->created_at,
+            'updated_at' => $average->updated_at,
         ],
-        'school' => $school
+        'school' => [
+            'school_name' => $school?->school_name ?? $school?->schoolName ?? 'Accredited Institution',
+            'logo_url' => $school?->logo_url,
+            'address' => $school?->address,
+            'phone' => $school?->phone,
+            'email' => $school?->email,
+            'website' => $school?->website,
+        ],
+        'verified_at' => now()->toIso8601String(),
+        'verification_code' => 'GQ-VER-' . strtoupper(substr(md5($student->id . $student->reg_no . $average->term . $average->session), 0, 12)),
     ]);
 }
 
@@ -1160,6 +1231,193 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
     return null;
 }
 
+    public function adminStudentResultLookup(Request $request)
+    {
+        $auth = Auth::user();
+        if (!$auth || !$auth->school_id) {
+            return response()->json(['message' => 'Unauthenticated or invalid school.'], 401);
+        }
 
+        $sessions = AcademicSession::where('school_id', $auth->school_id)->whereNull('archived_at')->orderByDesc('id')->get();
+        $terms = Term::where('school_id', $auth->school_id)->whereNull('archived_at')->orderBy('id')->get();
+        $classes = StudentClass::where('school_id', $auth->school_id)->get();
+
+        $currentSession = $request->query('session') ?: ($sessions->first()?->name ?? '2025/2026');
+        $currentTerm = $request->query('term') ?: ($terms->first()?->name ?? 'First Term');
+        $classId = $request->query('class_id') ? (int) $request->query('class_id') : ($classes->first()?->id ?? null);
+
+        $regNo = trim((string) $request->query('reg_no', ''));
+        if (!$regNo) {
+            return response()->json([
+                'student' => null,
+                'sessions' => $sessions,
+                'terms' => $terms,
+                'classes' => $classes,
+                'current_session' => $currentSession,
+                'current_term' => $currentTerm,
+                'current_class_id' => $classId,
+                'permanent_access' => true,
+            ]);
+        }
+
+        $student = User::where('school_id', $auth->school_id)
+            ->where(function ($q) use ($regNo) {
+                $q->where('reg_no', $regNo)
+                  ->orWhere('id', is_numeric($regNo) ? (int)$regNo : 0);
+            })
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->with(['level', 'department', 'section'])
+            ->first();
+
+        if (!$student) {
+            return response()->json([
+                'message' => "Student with Reg No '{$regNo}' was not found in your school records.",
+                'sessions' => $sessions,
+                'terms' => $terms,
+                'classes' => $classes,
+            ], 404);
+        }
+
+        if (!$request->query('class_id') && $student->level_id) {
+            $classId = (int) $student->level_id;
+        }
+
+        $subjects = app(\App\Services\Results\SubjectService::class)->subjectsForDepartment(
+            (int) $auth->school_id,
+            $student->department_id ? (int) $student->department_id : null
+        );
+
+        $termModel = match ($currentTerm) {
+            'First Term' => \App\Models\FirstTermResult::class,
+            'Second Term' => \App\Models\SecondTermResult::class,
+            'Third Term' => \App\Models\ThirdTermResult::class,
+            default => null,
+        };
+
+        $average = null;
+        $existingResults = collect();
+        if ($termModel) {
+            // 1. Try finding with requested classId
+            if ($classId) {
+                $average = \App\Models\Average::where([
+                    'user_id' => $student->id,
+                    'school_id' => $auth->school_id,
+                    'class_id' => $classId,
+                    'session' => $currentSession,
+                    'term' => $currentTerm,
+                ])->first();
+            }
+
+            // 2. Intelligent Auto-Resolution: If not found in requested class, find any class where result exists for this session & term
+            if (!$average) {
+                $average = \App\Models\Average::where([
+                    'user_id' => $student->id,
+                    'school_id' => $auth->school_id,
+                    'session' => $currentSession,
+                    'term' => $currentTerm,
+                ])->first();
+
+                if ($average && $average->class_id) {
+                    $classId = (int) $average->class_id;
+                }
+            }
+
+            if ($average) {
+                $existingResults = $termModel::with('subject')
+                    ->where('average_id', $average->id)
+                    ->get();
+            }
+
+            // 3. Fallback for legacy rows without average_id foreign key
+            if ($existingResults->isEmpty() && $classId) {
+                $existingResults = $termModel::with('subject')
+                    ->where('user_id', $student->id)
+                    ->where('school_id', $auth->school_id)
+                    ->where('class_id', $classId)
+                    ->get();
+            }
+        }
+
+        // Defensively load affective & psychomotor domains
+        $affectiveRatings = [];
+        $psychomotorRatings = [];
+        try {
+            if (\Illuminate\Support\Facades\Schema::hasTable('user_has_affective_domains')) {
+                $affectiveRatings = \App\Models\UserHasAffectiveDomain::where('user_id', $student->id)
+                    ->where('school_id', $auth->school_id)
+                    ->with('affectiveDomain')
+                    ->get();
+            }
+            if (\Illuminate\Support\Facades\Schema::hasTable('user_has_psychomotor_domains')) {
+                $psychomotorRatings = \App\Models\UserHasPsychomotorDomain::where('user_id', $student->id)
+                    ->where('school_id', $auth->school_id)
+                    ->with('psychomotorDomain')
+                    ->get();
+            }
+        } catch (\Throwable $e) {
+            // Fail safely without blocking result editing
+        }
+
+        $score_type = '40/60';
+        if ($existingResults->isNotEmpty()) {
+            $firstCa = json_decode($existingResults->first()->ca ?? '{}', true);
+            $caCount = is_array($firstCa) ? count(array_filter(array_keys($firstCa), fn($k) => str_starts_with($k, 'ca'))) : 0;
+            $score_type = match ($caCount) {
+                4 => '10/10/10/10/60',
+                2 => '20/20/60',
+                default => '40/60',
+            };
+        }
+
+        $school = \App\Models\SchoolSetting::find($auth->school_id);
+        $templateSetting = \App\Models\ResultTemplateSetting::where('school_id', $auth->school_id)->first();
+
+        $logoBase64 = null;
+        if ($school && $school->logo && file_exists(public_path($school->logo))) {
+            $logoBase64 = 'data:' . mime_content_type(public_path($school->logo)) . ';base64,' . base64_encode(file_get_contents(public_path($school->logo)));
+        }
+
+        $signatureBase64 = null;
+        if ($school && $school->principal_signature && file_exists(public_path($school->principal_signature))) {
+            $signatureBase64 = 'data:' . mime_content_type(public_path($school->principal_signature)) . ';base64,' . base64_encode(file_get_contents(public_path($school->principal_signature)));
+        }
+
+        $photoBase64 = null;
+        if ($student && $student->photo && file_exists(public_path('uploads/users/' . $student->photo))) {
+            $photoPath = public_path('uploads/users/' . $student->photo);
+            $photoBase64 = 'data:' . mime_content_type($photoPath) . ';base64,' . base64_encode(file_get_contents($photoPath));
+        }
+
+        $school_info = [
+            'name' => $school?->school_name ?? 'School Academic Portal',
+            'address' => $school?->address ?? '',
+            'phone' => $school?->phone ?? '',
+            'logo' => $logoBase64 ?? ($school?->logo ? url($school->logo) : null),
+            'principal_signature' => $signatureBase64 ?? ($school?->principal_signature ? url($school->principal_signature) : null),
+            'primary_color' => $templateSetting?->primary_color ?? $school?->primary_color ?? '#0d47a1',
+            'secondary_color' => $templateSetting?->secondary_color ?? $school?->secondary_color ?? '#ffc107',
+            'background_color' => $templateSetting?->background_color ?? $school?->background_color ?? '#ffffff',
+        ];
+
+        return response()->json([
+            'student' => $student,
+            'student_photo_base64' => $photoBase64,
+            'sessions' => $sessions,
+            'terms' => $terms,
+            'classes' => $classes,
+            'subjects' => $subjects,
+            'current_session' => $currentSession,
+            'current_term' => $currentTerm,
+            'current_class_id' => $classId,
+            'average' => $average,
+            'results' => $existingResults,
+            'affective_ratings' => $affectiveRatings,
+            'psychomotor_ratings' => $psychomotorRatings,
+            'score_type' => $score_type,
+            'school_info' => $school_info,
+            'result_template' => $templateSetting,
+            'permanent_access' => true,
+        ]);
+    }
 }
 

@@ -33,32 +33,47 @@ class WalletController extends Controller
     {
         $user = $request->user();
 
-        $request->validate([
-            'quantity' => 'required|integer|min:1',
-        ]);
+        // Support direct monetary amount in Naira, or fallback to quantity for backward compatibility
+        $amount = $request->input('amount');
+        $quantity = $request->input('quantity');
 
-        $pricePerUnit = 100; // Naira per slot
-        $amountInKobo = (int) ($request->quantity * $pricePerUnit * 100);
-
-        // ₦5,000 minimum => 500,000 kobo
-        if ($amountInKobo < 10000) {
+        if ($amount !== null && $amount !== '') {
+            $amountInNaira = (float) $amount;
+        } elseif ($quantity !== null && $quantity !== '') {
+            $pricePerUnit = 100; // Naira per unit
+            $amountInNaira = (float) ($quantity * $pricePerUnit);
+        } else {
             return response()->json([
-                'error' => 'Minimum payment amount is ₦100. Please increase the number of students.'
+                'error' => 'Please provide a valid top-up amount in Naira.'
             ], 422);
         }
 
+        if ($amountInNaira < 100) {
+            return response()->json([
+                'error' => 'Minimum wallet top-up amount is ₦100.'
+            ], 422);
+        }
+
+        $amountInKobo = (int) round($amountInNaira * 100);
         $reference = (string) Str::uuid();
+
+        $origin = $request->input('callback_url')
+            ?: $request->header('origin')
+            ?: ($request->header('referer') ? rtrim(parse_url($request->header('referer'), PHP_URL_SCHEME) . '://' . parse_url($request->header('referer'), PHP_URL_HOST), '/') : null)
+            ?: rtrim((string) (config('app.frontend_url') ?: 'https://gradequest.com.ng'), '/');
+
+        $callbackUrl = str_ends_with($origin, '/wallet') ? $origin : rtrim($origin, '/') . '/wallet';
 
         $payload = [
             'email' => $user->email,
             'amount' => $amountInKobo,
             'reference' => $reference,
-            // If you have a frontend verify page, set it there:
-            // 'callback_url' => config('app.frontend_url') . '/wallet/verify',
+            'callback_url' => $callbackUrl,
             'metadata' => [
                 'user_id' => $user->id,
-                'quantity' => (int) $request->quantity,
-                'price_per_unit' => $pricePerUnit,
+                'school_id' => $user->school_id,
+                'amount_in_naira' => $amountInNaira,
+                'quantity' => $quantity ? (int) $quantity : null,
                 'purpose' => 'wallet_topup',
             ],
         ];
@@ -74,7 +89,7 @@ class WalletController extends Controller
             ]);
 
             return response()->json([
-                'error' => 'Payment initialization failed'
+                'error' => 'Payment initialization failed. Please try again.'
             ], 500);
         }
 
@@ -122,44 +137,46 @@ class WalletController extends Controller
             }
 
             $meta = $data['metadata'] ?? [];
-            $userId = $meta['user_id'] ?? null;
-            $quantity = (int) ($meta['quantity'] ?? 1);
+            $userId = (int) ($meta['user_id'] ?? $user->id);
+            $schoolId = (int) ($meta['school_id'] ?? $user->school_id);
+            $quantity = isset($meta['quantity']) && $meta['quantity'] ? (int) $meta['quantity'] : null;
 
             $amountInKobo = (int) ($data['amount'] ?? 0);
             $amountInNaira = $amountInKobo / 100;
 
             $paystackRef = $data['reference'] ?? $reference;
 
-            if (!$userId) {
-                return response()->json([
-                    'status' => 'error',
-                    'message' => 'User ID missing in Paystack metadata.'
-                ], 422);
-            }
-
             // Prevent double-credit
             if (WalletTransaction::where('reference_id', $paystackRef)->exists()) {
+                $wallet = Wallet::where('school_id', $schoolId)->first();
                 return response()->json([
-                    'status' => 'info',
-                    'message' => 'Payment already recorded.'
+                    'status' => 'success',
+                    'message' => 'Payment already verified and recorded.',
+                    'balance' => $wallet ? $wallet->balance : 0,
+                    'data' => $data
                 ]);
             }
 
             DB::beginTransaction();
 
+            $description = $quantity
+                ? "Purchased {$quantity} result slot(s) (₦" . number_format($amountInNaira, 2) . ")"
+                : "Wallet Top-up of ₦" . number_format($amountInNaira, 2);
+
             WalletTransaction::create([
                 'user_id' => $userId,
                 'type' => 'credit',
                 'amount' => $amountInNaira,
-                'school_id' => $user->school_id,
-                'description' => "Purchased {$quantity} result slot(s)",
+                'school_id' => $schoolId,
+                'description' => $description,
                 'reference_id' => $paystackRef,
             ]);
 
-            // wallet keyed by user_id in your code
-            $wallet = Wallet::firstOrNew(['user_id' => $userId]);
+            // wallet keyed by school_id
+            $wallet = Wallet::firstOrNew(['school_id' => $schoolId]);
             $wallet->balance = (float) ($wallet->balance ?? 0) + (float) $amountInNaira;
-            $wallet->school_id = $user->school_id;
+            $wallet->user_id = $userId;
+            $wallet->school_id = $schoolId;
             $wallet->save();
 
             // Email receipt object used by your mailable
@@ -170,21 +187,29 @@ class WalletController extends Controller
                 'created_at' => now(),
             ];
 
-            Mail::to($user->email)->send(new WalletTopupMail($user, $payment));
+            try {
+                Mail::to($user->email)->send(new WalletTopupMail($user, $payment));
+            } catch (\Throwable $e) {
+                Log::warning('Wallet top-up email sending failed: ' . $e->getMessage());
+            }
 
             // System notification
-           $user->notify(new SystemNotification(
-                "Your wallet has been credited with ₦" . number_format($amountInNaira, 2) . ". Reference: {$paystackRef}.",
-                url(''),
-                'success'
-            ));
-
+            try {
+                $user->notify(new SystemNotification(
+                    "Your wallet has been credited with ₦" . number_format($amountInNaira, 2) . ". Reference: {$paystackRef}.",
+                    url('/wallet'),
+                    'success'
+                ));
+            } catch (\Throwable $e) {
+                Log::warning('Wallet top-up notification failed: ' . $e->getMessage());
+            }
 
             DB::commit();
 
             return response()->json([
                 'status' => 'success',
                 'message' => 'Payment verified and wallet credited.',
+                'balance' => $wallet->balance,
                 'data' => $data
             ]);
         } catch (\Exception $e) {
@@ -196,6 +221,63 @@ class WalletController extends Controller
                 'message' => 'Something went wrong during verification.',
                 'error' => $e->getMessage()
             ], 500);
+        }
+    }
+
+    public function verifyFromWebhook(array $data): bool
+    {
+        $reference = (string) ($data['reference'] ?? '');
+        if ($reference === '') return false;
+
+        if (WalletTransaction::where('reference_id', $reference)->exists()) {
+            return true;
+        }
+
+        $meta = $data['metadata'] ?? [];
+        $userId = (int) ($meta['user_id'] ?? 0);
+        $schoolId = (int) ($meta['school_id'] ?? 0);
+        $quantity = isset($meta['quantity']) && $meta['quantity'] ? (int) $meta['quantity'] : null;
+
+        $amountInKobo = (int) ($data['amount'] ?? 0);
+        $amountInNaira = $amountInKobo / 100;
+
+        if (!$schoolId && $userId) {
+            $u = \App\Models\User::find($userId);
+            $schoolId = $u ? (int) $u->school_id : 0;
+        }
+
+        if (!$schoolId) {
+            Log::warning('Paystack wallet webhook could not determine school_id', ['reference' => $reference]);
+            return false;
+        }
+
+        DB::beginTransaction();
+        try {
+            $description = $quantity
+                ? "Purchased {$quantity} result slot(s) (₦" . number_format($amountInNaira, 2) . ")"
+                : "Wallet Top-up of ₦" . number_format($amountInNaira, 2);
+
+            WalletTransaction::create([
+                'user_id' => $userId ?: null,
+                'type' => 'credit',
+                'amount' => $amountInNaira,
+                'school_id' => $schoolId,
+                'description' => $description,
+                'reference_id' => $reference,
+            ]);
+
+            $wallet = Wallet::firstOrNew(['school_id' => $schoolId]);
+            $wallet->balance = (float) ($wallet->balance ?? 0) + (float) $amountInNaira;
+            if ($userId) $wallet->user_id = $userId;
+            $wallet->school_id = $schoolId;
+            $wallet->save();
+
+            DB::commit();
+            return true;
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Wallet webhook verification error: ' . $e->getMessage());
+            return false;
         }
     }
 

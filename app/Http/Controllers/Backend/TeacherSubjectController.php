@@ -108,7 +108,7 @@ class TeacherSubjectController extends Controller
         abort_unless($teacher, 422, 'Selected teacher is invalid for this school.');
 
         $subjectExists = Subject::query()
-            ->where('school_id', $schoolId)
+            ->when(Schema::hasColumn('subjects', 'school_id'), fn ($q) => $q->where('school_id', $schoolId))
             ->whereKey((int) $subject_id)
             ->exists();
         abort_unless($subjectExists, 422, 'Selected subject is invalid for this school.');
@@ -163,7 +163,7 @@ class TeacherSubjectController extends Controller
             ->leftJoin('sections as sec', 'sec.id', '=', 's.section_id')
             ->leftJoin('departments as dep', 'dep.id', '=', 's.department_id')
             ->where('t.school_id', $schoolId)
-            ->where('s.school_id', $schoolId)
+            ->when(Schema::hasColumn('subjects', 'school_id'), fn ($q) => $q->where('s.school_id', $schoolId))
             ->whereRaw('LOWER(t.role) = ?', ['teacher'])
             ->select([
                 'teacher_subjects.teacher_id',
@@ -205,7 +205,7 @@ class TeacherSubjectController extends Controller
         return Subject::query()
             ->leftJoin('sections as sec', 'sec.id', '=', 'subjects.section_id')
             ->leftJoin('departments as dep', 'dep.id', '=', 'subjects.department_id')
-            ->where('subjects.school_id', $schoolId)
+            ->when(Schema::hasColumn('subjects', 'school_id'), fn ($q) => $q->where('subjects.school_id', $schoolId))
             ->whereNull('subjects.archived_at')
             ->select([
                 'subjects.id',

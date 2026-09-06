@@ -22,10 +22,19 @@ class CorsMiddleware
             'http://gradequest.com.ng',  // in case http is needed (not recommended in prod)
         ];
 
-        if (
-            $origin &&
-            (in_array($origin, $allowedOrigins) || preg_match($allowedPattern, $origin))
-        ) {
+        $isAllowed = false;
+        if ($origin) {
+            if (in_array($origin, $allowedOrigins) || preg_match($allowedPattern, $origin)) {
+                $isAllowed = true;
+            } else {
+                $host = parse_url($origin, PHP_URL_HOST);
+                if ($host && \App\Models\SchoolDomain::where('domain', $host)->where('status', 'active')->exists()) {
+                    $isAllowed = true;
+                }
+            }
+        }
+
+        if ($isAllowed) {
             $requestedHeaders = $request->headers->get('Access-Control-Request-Headers');
             $allowHeaders = $requestedHeaders ?: 'Content-Type, Authorization, X-Requested-With, X-XSRF-TOKEN, X-CSRF-TOKEN';
 

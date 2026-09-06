@@ -9,6 +9,8 @@ class GradequestBillingPolicy extends Model
 {
     use HasFactory;
 
+    protected $table = 'gradequest_billing_policies';
+
     protected $guarded = [];
 
     protected $casts = [
@@ -33,7 +35,14 @@ class GradequestBillingPolicy extends Model
         'temporary_access_min_days' => 'integer',
         'temporary_access_max_days' => 'integer',
         'allowed_blocked_actions' => 'array',
+        'promo_enabled' => 'boolean',
+        'promo_min_students' => 'integer',
+        'promo_bonus_days' => 'integer',
+        'promo_starts_at' => 'datetime',
+        'promo_ends_at' => 'datetime',
+        'promo_max_claims' => 'integer',
+        'promo_claims_count' => 'integer',
+        'sales_partner_term_1_commission_rate' => 'decimal:2',
+        'sales_partner_retention_commission_rate' => 'decimal:2',
     ];
 }
-
-

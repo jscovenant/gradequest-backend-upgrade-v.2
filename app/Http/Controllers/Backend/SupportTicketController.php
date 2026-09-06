@@ -25,7 +25,7 @@ class SupportTicketController extends Controller
         abort_if($user->isSuperAdminUser() && ! $platform, 403, 'Support access is required.');
 
         $query = SupportTicket::query()
-            ->with(['school:id,name', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email'])
+            ->with(['school:id,school_name,logo', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email'])
             ->withCount('messages');
 
         if (! $platform) {
@@ -45,7 +45,7 @@ class SupportTicketController extends Controller
                 $search = '%' . trim((string) $request->input('search')) . '%';
                 $q->where(fn ($inner) => $inner->where('ticket_number', 'like', $search)
                     ->orWhere('subject', 'like', $search)
-                    ->orWhereHas('school', fn ($school) => $school->where('name', 'like', $search)));
+                    ->orWhereHas('school', fn ($school) => $school->where('school_name', 'like', $search)));
             })
             ->orderByRaw("CASE status WHEN 'open' THEN 1 WHEN 'in_progress' THEN 2 WHEN 'waiting_for_school' THEN 3 WHEN 'resolved' THEN 4 ELSE 5 END")
             ->orderByDesc('last_reply_at');
@@ -100,7 +100,7 @@ class SupportTicketController extends Controller
     public function show(Request $request, SupportTicket $ticket)
     {
         $this->authorizeTicket($request->user(), $ticket);
-        $ticket->load(['school:id,name', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email', 'messages.user:id,firstname,surname,email,role']);
+        $ticket->load(['school:id,school_name,logo', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email', 'messages.user:id,firstname,surname,email,role']);
 
         return response()->json(['ticket' => $this->payload($ticket, true), 'is_support_user' => $this->isSupportUser($request->user())]);
     }
@@ -225,7 +225,7 @@ class SupportTicketController extends Controller
 
     private function payload(SupportTicket $ticket, bool $withMessages = false): array
     {
-        $ticket->loadMissing(['school:id,name', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email']);
+        $ticket->loadMissing(['school:id,school_name,logo', 'creator:id,firstname,surname,email', 'assignee:id,firstname,surname,email']);
         $data = $ticket->toArray();
         if ($withMessages) {
             $ticket->loadMissing('messages.user:id,firstname,surname,email,role');

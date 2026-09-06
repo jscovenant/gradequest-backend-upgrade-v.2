@@ -18,6 +18,7 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Auth\Events\Registered;
 use Carbon\Carbon;
 use Symfony\Component\HttpFoundation\Response;
+use App\Services\CloudflareTurnstileService;
 
 class AuthController extends Controller
 {
@@ -87,11 +88,23 @@ public function login(Request $request)
         ], Response::HTTP_UNPROCESSABLE_ENTITY);
     }
 
-    $userRole = $user->role ?? null;
+    if ((int) $user->status !== 1) {
+        if ($user->role === 'Sales-Representative') {
+            $salesRep = \App\Models\SalesRepresentative::where('user_id', $user->id)->first();
+            if ($salesRep && $salesRep->status === 'pending_approval') {
+                return response()->json([
+                    'message' => 'Your sales representative application is currently pending verification and approval by the administrator. You will receive an email confirmation once approved.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+            if ($salesRep && in_array($salesRep->status, ['suspended', 'terminated', 'rejected', 'closed', 'deceased'], true)) {
+                return response()->json([
+                    'message' => 'Your sales representative account is inactive or restricted. Please contact GradiosEdu support.',
+                ], Response::HTTP_FORBIDDEN);
+            }
+        }
 
-    if ((int) $user->status !== 1 && $userRole !== 'Admin') {
         return response()->json([
-            'message' => 'Account is inactive.',
+            'message' => 'Account is inactive. Please contact support.',
         ], Response::HTTP_FORBIDDEN);
     }
 
@@ -121,7 +134,7 @@ public function login(Request $request)
         'email'     => $user->email,
         'reg_no'    => $user->reg_no,
         'school_id' => $user->school_id,
-        'role'      => $userRole,
+        'role'      => $user->role,
         'photo_url' => $user->photo
             ? asset('uploads/users/' . $user->photo)
             : asset('img/profile.png'),
@@ -208,7 +221,9 @@ public function register(Request $request)
 ]);
 
     $role = 'Admin';
-    $reg_no = 'R' . random_int(100000, 999999);
+    do {
+        $reg_no = (string) random_int(1000000000, 9999999999);
+    } while (User::where('reg_no', $reg_no)->exists());
 
     DB::beginTransaction();
 
@@ -243,6 +258,12 @@ public function register(Request $request)
         // Link school to user
         $school->user_id = $user->id;
         $school->save();
+
+        try {
+            \App\Services\Students\StudentExcelImportService::provisionDefaultAcademicStructure($school->id);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to provision default academic structure: ' . $e->getMessage());
+        }
 
         // 🔹 Send verification email if email exists
         if ($user->email) {
@@ -324,33 +345,33 @@ public function register(Request $request)
 
 
     public function sendAdminResetLink(Request $request)
-{
-    $request->validate([
-        'email' => ['required', 'email'],
-    ]);
+    {
+        $request->validate([
+            'email' => ['required', 'email'],
+        ]);
 
-    $user = User::where('email', $request->email)
-                ->where('role', 'Admin')
-                ->first();
+        $user = User::where('email', $request->email)
+                    ->where('role', 'Admin')
+                    ->first();
 
-   
+        if ($user) {
+            $code = random_int(100000, 999999);
 
-  
+            $user->password_reset_code = Hash::make((string) $code);
+            $user->password_reset_expires_at = now()->addMinutes(15);
+            $user->save();
 
-    $code = random_int(100000, 999999);
+            try {
+                Mail::to($user->email)->send(new ForgotPassword($user, $code));
+            } catch (\Throwable $e) {
+                Log::error('Failed sending admin forgot password email: ' . $e->getMessage());
+            }
+        }
 
-    $user->password_reset_code = Hash::make((string) $code);
-    $user->password_reset_expires_at = now()->addMinutes(15);
-    $user->save();
-
- 
-
-    Mail::to($user->email)->send(new ForgotPassword($user, $code));
-
-    return response()->json([
-        'message' => 'If an account exists, a reset code has been sent.'
-    ]);
-}
+        return response()->json([
+            'message' => 'If an account exists, a reset code has been sent.'
+        ]);
+    }
 
 
  

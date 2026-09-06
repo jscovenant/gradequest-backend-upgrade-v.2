@@ -20,6 +20,10 @@ return new class extends Migration
             return;
         }
 
+        if (DB::getDriverName() !== 'mysql') {
+            return;
+        }
+
         $column = collect(DB::select("SHOW COLUMNS FROM subjects LIKE 'department_id'"))->first();
 
         if (! $column || strtoupper((string) ($column->Null ?? '')) === 'YES') {

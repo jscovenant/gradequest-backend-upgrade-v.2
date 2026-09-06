@@ -58,7 +58,7 @@ return new class extends Migration
                 $table->unsignedBigInteger('term_id');
                 $table->enum('billing_mode', ['online', 'offline'])->default('offline');
                 $table->enum('status', ['unpaid', 'grace', 'paid', 'waived', 'override'])->default('unpaid');
-                $table->enum('source', ['online_fee', 'offline_invoice', 'manual_waiver', 'admin_override', 'system'])->default('system');
+                $table->enum('source', ['online_fee', 'offline_invoice', 'manual_waiver', 'admin_override', 'system', 'subscription_payment', 'online_collection', 'legacy_subscription', 'temporary_grant'])->default('system');
                 $table->unsignedBigInteger('student_fee_id')->nullable();
                 $table->unsignedBigInteger('invoice_id')->nullable();
                 $table->timestamp('covered_at')->nullable();

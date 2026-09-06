@@ -88,7 +88,7 @@ class PeopleExcelImportService
             $email = strtolower(trim((string) ($row['email'] ?? '')));
             $phone = trim((string) ($row['phone'] ?? ''));
             $gender = $this->normalizeGender($row['gender'] ?? $row['sex'] ?? '');
-            $class = $this->resolveSetup($classes, $row['class'] ?? $row['level'] ?? null);
+            $class = $this->resolveOrCreateClass($schoolId, $classes, $row['class'] ?? $row['level'] ?? null);
 
             if ($firstname === '') $rowErrors[] = 'Firstname is required.';
             if ($surname === '') $rowErrors[] = 'Surname is required.';
@@ -400,15 +400,37 @@ class PeopleExcelImportService
         ];
     }
 
-    private function resolveSetup($items, mixed $value)
+    private function resolveOrCreateClass(int $schoolId, $classes, mixed $value)
     {
-        $value = trim((string) $value);
-        if ($value === '') {
+        $val = trim((string) $value);
+        if ($val === '') {
             return null;
         }
 
-        return $items->first(fn ($item) => (string) $item->id === $value)
-            ?: $items->first(fn ($item) => strtolower((string) $item->name) === strtolower($value));
+        $found = $classes->first(fn ($item) => (string) $item->id === $val)
+            ?: $classes->first(fn ($item) => strtolower(trim((string) $item->name)) === strtolower($val));
+
+        if ($found) {
+            return $found;
+        }
+
+        $cleanVal = preg_replace('/[^a-z0-9]/', '', strtolower($val));
+        if ($cleanVal !== '') {
+            $found = $classes->first(fn ($item) => preg_replace('/[^a-z0-9]/', '', strtolower((string) $item->name)) === $cleanVal);
+            if ($found) {
+                return $found;
+            }
+        }
+
+        try {
+            $created = StudentClass::firstOrCreate(
+                ['school_id' => $schoolId, 'name' => $val]
+            );
+            $classes->push($created);
+            return $created;
+        } catch (\Throwable) {
+            return $classes->first();
+        }
     }
 
     private function normalizeGender(mixed $value): string

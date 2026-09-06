@@ -3,6 +3,10 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
+use App\Models\Payment;
+use App\Models\SchoolSetting;
+use App\Models\StudentFee;
+use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -408,4 +412,88 @@ class ParentStudentFeesController extends Controller
         ]);
     }
 
+    public function downloadPaymentReceipt(Request $request, string $reference)
+    {
+        $user = Auth::user();
+        $schoolId = (int) $user->school_id;
+
+        $payment = Payment::with([
+            'studentFee.student.level',
+            'studentFee.student.section',
+            'studentFee.feeType',
+            'studentFee.session',
+            'studentFee.term'
+        ])
+            ->where('school_id', $schoolId)
+            ->where('reference', $reference)
+            ->firstOrFail();
+
+        $student = $payment->studentFee?->student;
+        if (! $student) {
+            abort(404, 'Student fee record not found.');
+        }
+
+        $isParent = strtolower((string) ($user->role ?? '')) === 'parent';
+        if ($isParent) {
+            $this->assertParentOwnsStudent((int) $user->id, (int) $student->id);
+        }
+
+        $school = SchoolSetting::find($schoolId);
+        $logoBase64 = $this->schoolLogoDataUri($school?->logo);
+
+        $items = [
+            [
+                'name' => $payment->studentFee?->feeType?->name ?? 'School Fee',
+                'session' => $payment->studentFee?->session?->name ?? '',
+                'term' => $payment->studentFee?->term?->name ?? '',
+                'amount' => (float) $payment->amount,
+            ]
+        ];
+
+        $remainingBalance = StudentFee::where('school_id', $schoolId)
+            ->where('student_id', $student->id)
+            ->sum('balance');
+
+        $payload = [
+            'school' => $school,
+            'student' => $student,
+            'reference' => $payment->reference,
+            'receipt_no' => 'REC-' . strtoupper(substr(md5($payment->reference), 0, 8)),
+            'paid_at' => $payment->created_at ?? now(),
+            'payer_name' => $payment->email ?? $user->name,
+            'payer_email' => $payment->email ?? $user->email,
+            'amount' => (float) $payment->amount,
+            'remaining_balance' => (float) $remainingBalance,
+            'items' => $items,
+            'logoBase64' => $logoBase64,
+        ];
+
+        $filename = 'receipt-' . preg_replace('/[^A-Za-z0-9_-]+/', '-', (string) ($payment->reference)) . '.pdf';
+
+        $response = Pdf::loadView('pdf.fee-payment-receipt', $payload)
+            ->setPaper('a4', 'portrait')
+            ->download($filename);
+
+        $response->headers->set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+        $response->headers->set('Pragma', 'no-cache');
+        $response->headers->set('Expires', '0');
+
+        return $response;
+    }
+
+    private function schoolLogoDataUri(?string $logo): ?string
+    {
+        if (! $logo) {
+            return null;
+        }
+
+        $relativePath = ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $logo), DIRECTORY_SEPARATOR);
+        $path = public_path($relativePath);
+        if (! is_file($path) || ! is_readable($path)) {
+            return null;
+        }
+
+        $mime = mime_content_type($path) ?: 'image/png';
+        return 'data:'.$mime.';base64,'.base64_encode(file_get_contents($path));
+    }
 }

@@ -7,6 +7,7 @@ use App\Models\{FeeType, StudentFee, Payment, PaymentReceipt, User, Section};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Services\FeePaymentService;
+use App\Services\SchoolFeeAccessPolicyService;
 use Illuminate\Support\Facades\Log;
 
 class FeePaymentController extends Controller
@@ -207,6 +208,7 @@ public function payFee(Request $request)
         'student_fee_id' => 'required|exists:student_fees,id',
         'amount' => 'required|numeric|min:1',
         'payment_method' => 'required|string|max:50',
+        'reference' => 'nullable|string|max:100',
     ]);
 
     // ✅ Get the fee record with student info
@@ -214,61 +216,48 @@ public function payFee(Request $request)
         ->with(['feeType', 'term', 'session', 'student'])
         ->findOrFail($request->student_fee_id);
 
-    // ✅ Check if there is a receipt uploaded for this payment
-    $receipt = PaymentReceipt::where('student_id', $studentFee->student_id)
-        ->where('school_id', $schoolId)
-        ->where('payment_method', $request->payment_method)
-        ->latest()
-        ->first();
-
-    if (!$receipt) {
+    // ✅ Prevent duplicate full payment if already settled
+    if ($studentFee->balance <= 0 && $studentFee->status === 'paid') {
         return response()->json([
-            'message' => 'No payment receipt uploaded for this fee.',
-        ], 422);
-    }
-
-    // ✅ Check the status of the receipt
-    if ($receipt->status === 'rejected') {
-        return response()->json([
-            'message' => 'Payment was rejected by the school. Please upload a valid receipt.',
-        ], 422);
-    } elseif ($receipt->status !== 'approved') {
-        return response()->json([
-            'message' => 'Payment is pending school approval. Cannot mark as paid yet.',
-        ], 422);
-    }
-
-    // ✅ Prevent duplicate full payment for same fee type, term & session
-    $alreadyPaid = StudentFee::where('student_id', $studentFee->student_id)
-        ->where('fee_type_id', $studentFee->fee_type_id)
-        ->where('term_id', $studentFee->term_id)
-        ->where('session_id', $studentFee->session_id)
-        ->where('status', 'paid')
-        ->exists();
-
-    if ($alreadyPaid) {
-        return response()->json([
-            'message' => 'This fee type has already been fully paid for this term and session.',
+            'message' => 'This fee has already been fully paid for this term and session.',
         ], 422);
     }
 
     // ✅ Prevent overpayment
     if ($request->amount > $studentFee->balance) {
         return response()->json([
-            'message' => 'Amount exceeds remaining balance.',
+            'message' => 'Amount exceeds remaining balance of ₦' . number_format($studentFee->balance, 2),
             'balance' => $studentFee->balance,
         ], 422);
     }
 
-    // ✅ Record payment
+    $ref = $request->filled('reference') && trim($request->reference) !== ''
+        ? trim($request->reference)
+        : uniqid('GQ-PAY-');
+
+    // ✅ Record payment directly
     $payment = Payment::create([
         'student_fee_id' => $studentFee->id,
         'amount' => $request->amount,
         'payment_method' => $request->payment_method,
         'school_id' => $schoolId,
-        'reference' => uniqid('PAY-'),
+        'reference' => $ref,
         'received_by' => $user->id,
     ]);
+
+    // ✅ If an uploaded receipt exists for this student and payment method, approve it
+    $receipt = PaymentReceipt::where('student_id', $studentFee->student_id)
+        ->where('school_id', $schoolId)
+        ->where('payment_method', $request->payment_method)
+        ->where('status', 'pending')
+        ->latest()
+        ->first();
+
+    if ($receipt) {
+        $receipt->status = 'approved';
+        $receipt->approved_by = $user->id;
+        $receipt->save();
+    }
 
     // ✅ Update totals & status
     $studentFee->amount_paid += $request->amount;
@@ -286,9 +275,10 @@ public function payFee(Request $request)
     $studentFee->save();
 
     return response()->json([
-        'message' => 'Payment successful and approved by school.',
+        'message' => 'Payment recorded successfully.',
         'payment' => $payment,
         'balance' => $studentFee->balance,
+        'amount_paid' => $studentFee->amount_paid,
         'status' => $studentFee->status,
     ]);
 }
@@ -339,6 +329,17 @@ public function studentFeeDetails(Request $request)
             'balance',
         ]);
 
+        $totalTermAmount = (float) $fees->sum('total_amount');
+        $totalTermPaid = (float) $fees->sum('amount_paid');
+        $totalBalance = (float) $fees->sum('balance');
+
+        $installmentPlan = $this->feeAccessPolicyService->calculateInstallmentPlan(
+            (int) $schoolId,
+            $totalTermAmount,
+            $totalTermPaid,
+            $totalBalance
+        );
+
     return response()->json([
         'student' => [
             'id' => $student->id,
@@ -347,13 +348,17 @@ public function studentFeeDetails(Request $request)
             'section' => optional($student->section)->name ?? 'N/A',
             'class' => optional($student->level)->name ?? 'N/A',
         ],
+        'installment_plan' => $installmentPlan,
         'fees' => $fees,
     ]);
 }
 
 
 
-  public function __construct(private FeePaymentService $feePaymentService)
+  public function __construct(
+      private FeePaymentService $feePaymentService,
+      private SchoolFeeAccessPolicyService $feeAccessPolicyService
+  )
     {
     }
 
@@ -380,14 +385,22 @@ public function studentFeeDetails(Request $request)
         ], 422);
     }
 
-    $payerEmail = $request->email ?: Auth::user()->email; 
+    $payerEmail = $request->email ?: Auth::user()->email;
+
+    $origin = $request->input('callback_url')
+        ?: $request->header('origin')
+        ?: ($request->header('referer') ? rtrim(parse_url($request->header('referer'), PHP_URL_SCHEME) . '://' . parse_url($request->header('referer'), PHP_URL_HOST), '/') : null)
+        ?: rtrim((string) (config('app.frontend_url') ?: 'https://gradequest.com.ng'), '/');
+
+    $callbackUrl = str_contains($origin, '/parent') ? $origin : rtrim($origin, '/') . '/parent/payments';
 
     try {
         $result = $this->feePaymentService->initialize(
             $studentFee,
             (int) $request->amount,
             $payerEmail,
-            Auth::id()
+            Auth::id(),
+            $callbackUrl
         );
     } catch (\RuntimeException $e) {
         return response()->json(['message' => $e->getMessage()], 422);

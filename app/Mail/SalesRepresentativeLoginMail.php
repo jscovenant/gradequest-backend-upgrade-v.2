@@ -24,7 +24,7 @@ class SalesRepresentativeLoginMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your GradeQuest Sales Representative Login Details',
+            subject: 'Your SchoolProfit Sales Representative Login Details',
         );
     }
 

@@ -6,7 +6,7 @@ use App\Models\Concerns\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class GradequestTermInvoice extends Model
+class GradiosEduTermInvoice extends Model
 {
     use BelongsToSchool;
     use HasFactory;

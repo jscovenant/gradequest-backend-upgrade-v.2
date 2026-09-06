@@ -74,7 +74,7 @@ class WhatsAppSettingsController extends Controller
         $sent = $whatsapp->sendToParent(
             (int) $school->id,
             (string) $request->phone,
-            "*GradeQuest Test*\n\nThis is a test message from *{$school->school_name}*.\n\nWhatsApp integration is working."
+            "*GradiosEdu Test*\n\nThis is a test message from *{$school->school_name}*.\n\nWhatsApp integration is working."
         );
 
         return $sent

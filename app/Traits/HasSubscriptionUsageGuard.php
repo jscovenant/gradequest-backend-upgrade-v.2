@@ -66,17 +66,63 @@ trait HasSubscriptionUsageGuard
      */
     public function isSubscriptionActive(): bool
     {
+        // 1. Platform staff
+        if (in_array(strtolower((string) $this->role), ['superadmin', 'super-admin', 'platform_staff', 'platformstaff'], true)) {
+            return true;
+        }
+
+        // 2. Active Subscription record
         $subscription = $this->resolveGuardSubscription();
+        if ($subscription && $subscription->status === 'active') {
+            if (!$subscription->ends_at || Carbon::parse($subscription->ends_at)->isFuture()) {
+                return true;
+            }
+        }
 
-        if (!$subscription || $subscription->status !== 'active') {
+        $schoolId = (int) ($this->school_id ?? $this->id);
+        if ($schoolId <= 0) {
             return false;
         }
 
-        if ($subscription->ends_at && Carbon::parse($subscription->ends_at)->isPast()) {
-            return false;
+        // 3. Active Temporary Access
+        $hasTemp = \App\Models\SchoolBillingTemporaryAccess::withoutGlobalScopes()
+            ->where('school_id', $schoolId)
+            ->where('status', 'active')
+            ->where(function ($query) {
+                $query->whereNull('starts_at')->orWhere('starts_at', '<=', now());
+            })
+            ->where('ends_at', '>', now())
+            ->exists();
+
+        if ($hasTemp) {
+            return true;
         }
 
-        return true;
+        // 4. Online Payment Core Access
+        $hasOnlineCore = \App\Models\SchoolBankAccount::query()
+            ->where('school_id', $schoolId)
+            ->where('is_active', true)
+            ->where(function ($query) {
+                $query->where('online_payment_enabled', true)
+                    ->orWhereNotNull('paystack_subaccount_code');
+            })
+            ->exists();
+
+        if ($hasOnlineCore) {
+            return true;
+        }
+
+        // 5. Dynamic Enforcement / Grace Period Clearance from SchoolBillingService
+        try {
+            $clearance = app(\App\Services\SchoolBillingService::class)->schoolCrudClearanceStatus($schoolId);
+            if (!empty($clearance['allowed'])) {
+                return true;
+            }
+        } catch (\Throwable) {
+            // Fallback
+        }
+
+        return false;
     }
 
     /**

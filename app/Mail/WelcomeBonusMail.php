@@ -30,7 +30,7 @@ class WelcomeBonusMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Welcome to GradeQuest - ₦5,000 Wallet Credit Added',
+            subject: 'Welcome to SchoolProfit - ₦5,000 Wallet Credit Added',
         );
     }
 

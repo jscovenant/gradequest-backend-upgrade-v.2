@@ -1,11 +1,11 @@
 <?php
 
 return [
-    'cname_target' => strtolower(trim((string) env('CUSTOM_DOMAIN_CNAME_TARGET', 'domains.gradequest.com.ng'), '. ')),
+    'cname_target' => strtolower(trim((string) env('CUSTOM_DOMAIN_CNAME_TARGET', 'domains.schoolprofit.ng'), '. ')),
     'verification_prefix' => env('CUSTOM_DOMAIN_VERIFICATION_PREFIX', '_gradequest-verification'),
     'platform_hosts' => array_values(array_filter(array_map(
         fn (string $host) => strtolower(trim($host, '. ')),
-        explode(',', (string) env('PLATFORM_HOSTS', 'gradequest.com.ng,www.gradequest.com.ng,app.gradequest.com.ng,api.gradequest.com.ng'))
+        explode(',', (string) env('PLATFORM_HOSTS', 'schoolprofit.ng,www.schoolprofit.ng,app.schoolprofit.ng,api.schoolprofit.ng'))
     ))),
     'target_ips' => array_values(array_filter(array_map(
         'trim',

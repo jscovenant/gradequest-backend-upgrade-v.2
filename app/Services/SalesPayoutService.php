@@ -384,7 +384,7 @@ class SalesPayoutService
                 'source' => 'balance',
                 'amount' => (int) round(((float) $batch->total_amount) * 100),
                 'recipient' => $recipientCode,
-                'reason' => 'GradeQuest sales commission payout ' . $batch->reference,
+                'reason' => 'SchoolProfit sales commission payout ' . $batch->reference,
                 'reference' => $batch->reference,
             ]);
 

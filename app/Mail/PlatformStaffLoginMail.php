@@ -24,7 +24,7 @@ class PlatformStaffLoginMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your GradeQuest Platform Staff Login Details',
+            subject: 'Your SchoolProfit Platform Staff Login Details',
         );
     }
 

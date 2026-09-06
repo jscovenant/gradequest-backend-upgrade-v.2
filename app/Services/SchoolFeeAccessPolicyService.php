@@ -16,8 +16,16 @@ class SchoolFeeAccessPolicyService
         'cbt_access_enabled' => false,
         'cbt_min_payment_percent' => 100,
         'cbt_scope' => 'selected_period',
+        'installment_enabled' => false,
+        'installment_type' => 'two_installments_70_30',
+        'min_initial_installment_percent' => 70,
         'message' => 'Result access is currently unavailable because the required school fee payment has not been completed.',
         'cbt_message' => 'Access denied. Complete the required school fee payment before starting this exam.',
+        'installment_message' => 'This school requires a minimum initial payment of :percent% (:amount) for the term.',
+        'bank_charge_bearer' => 'parent',
+        'bank_charge_amount' => 200.0,
+        'platform_fee_bearer' => 'school',
+        'active_payment_gateway' => 'wema_alat',
     ];
 
     public function policyForSchool(int $schoolId): array
@@ -36,19 +44,29 @@ class SchoolFeeAccessPolicyService
         $cbtScope = $data['cbt_scope'] ?? ($current['cbt_scope'] ?? 'selected_period');
 
         $policy = array_merge($current, [
-            'enabled' => (bool) ($data['enabled'] ?? false),
-            'result_access_enabled' => (bool) ($data['result_access_enabled'] ?? true),
-            'result_min_payment_percent' => max(0, min(100, (float) ($data['result_min_payment_percent'] ?? 100))),
+            'enabled' => array_key_exists('enabled', $data) ? (bool) $data['enabled'] : ($current['enabled'] ?? false),
+            'result_access_enabled' => array_key_exists('result_access_enabled', $data) ? (bool) $data['result_access_enabled'] : ($current['result_access_enabled'] ?? true),
+            'result_min_payment_percent' => max(0, min(100, (float) ($data['result_min_payment_percent'] ?? ($current['result_min_payment_percent'] ?? 100)))),
             'result_scope' => in_array(($data['result_scope'] ?? 'selected_period'), ['selected_period', 'all_outstanding'], true)
                 ? $data['result_scope']
-                : 'selected_period',
-            'cbt_access_enabled' => (bool) ($data['cbt_access_enabled'] ?? ($current['cbt_access_enabled'] ?? false)),
+                : ($current['result_scope'] ?? 'selected_period'),
+            'cbt_access_enabled' => array_key_exists('cbt_access_enabled', $data) ? (bool) $data['cbt_access_enabled'] : ($current['cbt_access_enabled'] ?? false),
             'cbt_min_payment_percent' => max(0, min(100, (float) ($data['cbt_min_payment_percent'] ?? ($current['cbt_min_payment_percent'] ?? 100)))),
             'cbt_scope' => in_array($cbtScope, ['selected_period', 'all_outstanding'], true)
                 ? $cbtScope
                 : ($current['cbt_scope'] ?? 'selected_period'),
-            'message' => trim((string) ($data['message'] ?? self::DEFAULT_POLICY['message'])) ?: self::DEFAULT_POLICY['message'],
+            'installment_enabled' => array_key_exists('installment_enabled', $data) ? (bool) $data['installment_enabled'] : ($current['installment_enabled'] ?? false),
+            'installment_type' => in_array(($data['installment_type'] ?? ''), ['two_installments_70_30', 'two_installments_50_50', 'three_installments_40_30_30', 'full_only', 'custom'], true)
+                ? $data['installment_type']
+                : ($current['installment_type'] ?? 'two_installments_70_30'),
+            'min_initial_installment_percent' => max(1, min(100, (float) ($data['min_initial_installment_percent'] ?? ($current['min_initial_installment_percent'] ?? 70)))),
+            'message' => trim((string) ($data['message'] ?? ($current['message'] ?? self::DEFAULT_POLICY['message']))) ?: self::DEFAULT_POLICY['message'],
             'cbt_message' => trim((string) ($data['cbt_message'] ?? ($current['cbt_message'] ?? self::DEFAULT_POLICY['cbt_message']))) ?: self::DEFAULT_POLICY['cbt_message'],
+            'installment_message' => trim((string) ($data['installment_message'] ?? ($current['installment_message'] ?? self::DEFAULT_POLICY['installment_message']))) ?: self::DEFAULT_POLICY['installment_message'],
+            'bank_charge_bearer' => in_array(($data['bank_charge_bearer'] ?? ''), ['parent', 'school'], true) ? $data['bank_charge_bearer'] : ($current['bank_charge_bearer'] ?? 'parent'),
+            'bank_charge_amount' => max(0, (float) ($data['bank_charge_amount'] ?? ($current['bank_charge_amount'] ?? 200.0))),
+            'platform_fee_bearer' => in_array(($data['platform_fee_bearer'] ?? ''), ['parent', 'school'], true) ? $data['platform_fee_bearer'] : ($current['platform_fee_bearer'] ?? 'school'),
+            'active_payment_gateway' => in_array(($data['active_payment_gateway'] ?? ''), ['wema_alat', 'monnify', 'paystack'], true) ? $data['active_payment_gateway'] : ($current['active_payment_gateway'] ?? 'wema_alat'),
         ]);
 
         SchoolSetting::where('id', $schoolId)->update([
@@ -57,6 +75,61 @@ class SchoolFeeAccessPolicyService
         ]);
 
         return $policy;
+    }
+
+    public function calculateInstallmentPlan(int $schoolId, float $totalTermAmount, float $totalPaid, float $balance): array
+    {
+        $policy = $this->policyForSchool($schoolId);
+        $enabled = (bool) ($policy['installment_enabled'] ?? false);
+        $minPercent = (float) ($policy['min_initial_installment_percent'] ?? 70);
+        $type = (string) ($policy['installment_type'] ?? 'two_installments_70_30');
+
+        if ($type === 'two_installments_50_50') {
+            $minPercent = 50;
+        } elseif ($type === 'three_installments_40_30_30') {
+            $minPercent = 40;
+        } elseif ($type === 'full_only') {
+            $minPercent = 100;
+        }
+
+        $minInitialAmount = round(($minPercent / 100) * $totalTermAmount, 2);
+        $initialTarget = max(0, $minInitialAmount - $totalPaid);
+        $minPayableNow = min($balance, $initialTarget > 0 ? $initialTarget : 100);
+
+        $presets = [];
+        if ($balance > 0) {
+            $presets[] = [
+                'label' => 'Full Payment (100%)',
+                'percent' => 100,
+                'amount' => round($balance, 2),
+            ];
+
+            if ($enabled && $totalPaid < $minInitialAmount && $balance > $minInitialAmount) {
+                $presets[] = [
+                    'label' => "1st Installment ({$minPercent}%)",
+                    'percent' => $minPercent,
+                    'amount' => round($minInitialAmount - $totalPaid, 2),
+                ];
+            }
+
+            if ($enabled && $type === 'two_installments_70_30' && $totalPaid >= $minInitialAmount) {
+                $presets[] = [
+                    'label' => '2nd Installment (30% Balance)',
+                    'percent' => 30,
+                    'amount' => round($balance, 2),
+                ];
+            }
+        }
+
+        return [
+            'enabled' => $enabled,
+            'installment_type' => $type,
+            'min_initial_percent' => $minPercent,
+            'min_initial_amount' => $minInitialAmount,
+            'min_payable_now' => $minPayableNow,
+            'presets' => $presets,
+            'message' => str_replace([':percent', ':amount'], [(string) $minPercent, number_format($minInitialAmount, 2)], (string) ($policy['installment_message'] ?? '')),
+        ];
     }
 
     public function resultAccessStatus(int $schoolId, int $studentId, string $session, string $term): array

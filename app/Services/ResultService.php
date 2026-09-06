@@ -28,12 +28,27 @@ class ResultService
             'class_id' => $classId,
             'term'     => $term,
             'session'  => $session,
-        ])->with('class')->firstOrFail();
+        ])->with('class')->first();
+
+        if (!$average) {
+            $average = Average::where([
+                'user_id'  => $user->id,
+                'term'     => $term,
+                'session'  => $session,
+            ])->with('class')->first();
+            if ($average) {
+                $classId = $average->class_id;
+            }
+        }
+
+        if (!$average) {
+            throw new \Exception('No academic record found for this student for the requested term and session.');
+        }
 
         // -----------------------------
         // 2️⃣ FETCH CLASS & SUBJECTS
         // -----------------------------
-        $class = StudentClass::findOrFail($classId);
+        $class = StudentClass::find($classId) ?? StudentClass::where('school_id', $schoolId)->first();
 
         $subjects = Subject::where('school_id', $schoolId)
             ->where('class_id', $classId)
@@ -53,11 +68,16 @@ class ResultService
         }
 
         // 🔑 Fetch term results strictly for this student/class and session/term via Average
-        $termResult = $termModels[$term]::where('user_id', $user->id)
-            ->where('class_id', $classId)
-            ->where('average_id', $average->id)
+        $termResult = $termModels[$term]::where('average_id', $average->id)
             ->with('subject')
             ->get();
+
+        if ($termResult->isEmpty()) {
+            $termResult = $termModels[$term]::where('user_id', $user->id)
+                ->where('class_id', $classId)
+                ->with('subject')
+                ->get();
+        }
 
         // -----------------------------
         // 4️⃣ SCHOOL INFO & ASSETS

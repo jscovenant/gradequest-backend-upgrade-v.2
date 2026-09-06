@@ -39,7 +39,7 @@ class PlatformFeeService
                 return (int) round((float) $schoolSettingAmount);
             }
 
-            $policyAmount = DB::table('gradequest_billing_policies')
+            $policyAmount = DB::table('gradios_edu_billing_policies')
                 ->orderByDesc('id')
                 ->value('platform_fee_per_student');
 
@@ -48,12 +48,12 @@ class PlatformFeeService
             }
         }
 
-        return (int) config('services.paystack.platform_fee_naira', 1000); 
+        return (int) config('services.paystack.platform_fee_naira', 500); 
     }
 
     /**
      * Decide how much of the incoming installment (if any) should be
-     * routed to GradeQuest's main account as the one-time platform fee.
+     * routed to SchoolProfit's main account as the one-time platform fee.
      *
      * Returns 0 if the fee has already been collected — or is currently
      * being collected by another in-flight payment — for this student_fee.

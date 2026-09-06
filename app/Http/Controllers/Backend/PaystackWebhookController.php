@@ -95,6 +95,37 @@ class PaystackWebhookController extends Controller
             return response()->json(['status' => 'ok', 'type' => 'ai_credit_purchase']);
         }
 
+        if (\App\Models\GradiosEduInvoicePayment::where('reference', $reference)->exists()) {
+            if (($data['status'] ?? null) === 'success') {
+                $invPayment = \App\Models\GradiosEduInvoicePayment::where('reference', $reference)->first();
+                if ($invPayment && $invPayment->status !== 'successful') {
+                    $inv = \App\Models\GradiosEduTermInvoice::find($invPayment->invoice_id);
+                    if ($inv) {
+                        $invPayment->update([
+                            'status' => 'successful',
+                            'channel' => $data['channel'] ?? null,
+                            'card_type' => $data['authorization']['card_type'] ?? null,
+                            'last4' => $data['authorization']['last4'] ?? null,
+                            'paystack_id' => $data['id'] ?? null,
+                            'paystack_response' => $data,
+                            'paid_at' => now(),
+                        ]);
+                        app(\App\Services\SchoolBillingService::class)->applyOnlineInvoicePayment($inv, (float) $invPayment->amount, (int) $invPayment->user_id, $reference);
+                    }
+                }
+            }
+            return response()->json(['status' => 'ok', 'type' => 'invoice_payment']);
+        }
+
+        $purpose = (string) ($data['metadata']['purpose'] ?? '');
+        if ($purpose === 'wallet_topup' || isset($data['metadata']['amount_in_naira'])) {
+            if (($data['status'] ?? null) === 'success') {
+                app(\App\Http\Controllers\WalletController::class)->verifyFromWebhook($data);
+                return response()->json(['status' => 'ok', 'type' => 'wallet_topup']);
+            }
+            return response()->json(['status' => 'ok', 'type' => 'wallet_topup_failed']);
+        }
+
         Log::notice('Paystack charge webhook did not match a registered payment.', ['reference' => $reference]);
         return response()->json(['status' => 'unknown_payment']);
     }

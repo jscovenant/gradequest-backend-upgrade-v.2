@@ -15,6 +15,8 @@ class SalesRepresentative extends Model
 
     protected $casts = [
         'commission_rate' => 'decimal:2',
+        'term_1_commission_rate' => 'decimal:2',
+        'retention_commission_rate' => 'decimal:2',
         'core_commission_rate' => 'decimal:2',
         'premium_commission_rate' => 'decimal:2',
         'monthly_target_amount' => 'decimal:2',

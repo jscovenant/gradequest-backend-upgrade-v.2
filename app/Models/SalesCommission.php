@@ -13,7 +13,7 @@ class SalesCommission extends Model
     protected static function booted(): void
     {
         static::addGlobalScope('commissionable_revenue', function ($query) {
-            $query->whereIn('source', ['subscription', 'core_platform_fee']);
+            $query->whereIn('source', ['subscription', 'core_platform_fee', 'offline_invoice']);
         });
     }
 
@@ -23,6 +23,7 @@ class SalesCommission extends Model
         'commissionable_amount' => 'decimal:2',
         'commission_rate' => 'decimal:2',
         'amount' => 'decimal:2',
+        'term_number' => 'integer',
         'earned_at' => 'datetime',
         'eligible_at' => 'datetime',
         'approved_at' => 'datetime',
@@ -49,6 +50,16 @@ class SalesCommission extends Model
     public function subPayment(): BelongsTo
     {
         return $this->belongsTo(SubPayment::class);
+    }
+
+    public function invoice(): BelongsTo
+    {
+        return $this->belongsTo(GradiosEduTermInvoice::class, 'invoice_id');
+    }
+
+    public function invoicePayment(): BelongsTo
+    {
+        return $this->belongsTo(GradiosEduInvoicePayment::class, 'invoice_payment_id');
     }
 
     public function payment(): BelongsTo

@@ -31,14 +31,16 @@ return new class extends Migration
             }
         });
 
-        DB::table('platform_fee_charges as p')
-            ->join('student_fees as sf', 'sf.id', '=', 'p.student_fee_id')
-            ->update([
-                'p.school_id' => DB::raw('sf.school_id'),
-                'p.student_id' => DB::raw('sf.student_id'),
-                'p.session_id' => DB::raw('sf.session_id'),
-                'p.term_id' => DB::raw('sf.term_id'),
-            ]);
+        if (Schema::hasTable('student_fees') && Schema::hasColumn('student_fees', 'school_id') && DB::table('platform_fee_charges')->exists()) {
+            DB::table('platform_fee_charges as p')
+                ->join('student_fees as sf', 'sf.id', '=', 'p.student_fee_id')
+                ->update([
+                    'p.school_id' => DB::raw('sf.school_id'),
+                    'p.student_id' => DB::raw('sf.student_id'),
+                    'p.session_id' => DB::raw('sf.session_id'),
+                    'p.term_id' => DB::raw('sf.term_id'),
+                ]);
+        }
 
         $this->removeDuplicatePeriodClaims();
 

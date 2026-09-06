@@ -11,14 +11,14 @@
                 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
                     <tr>
                         <td style="background:#111827;color:#ffffff;padding:24px;">
-                            <h1 style="margin:0;font-size:22px;">Welcome to GradeQuest</h1>
+                            <h1 style="margin:0;font-size:22px;">Welcome to GradiosEdu</h1>
                             <p style="margin:8px 0 0;color:#cbd5e1;">Your platform staff account has been created.</p>
                         </td>
                     </tr>
                     <tr>
                         <td style="padding:24px;">
                             <p style="margin-top:0;">Hello {{ $user->firstname ?? 'Team member' }},</p>
-                            <p>You can now log in to your GradeQuest platform dashboard using the details below.</p>
+                            <p>You can now log in to your GradiosEdu platform dashboard using the details below.</p>
 
                             <table width="100%" cellpadding="0" cellspacing="0" style="margin:20px 0;border-collapse:collapse;">
                                 <tr>
@@ -43,7 +43,7 @@
                             <p>
                                 <a href="{{ $loginUrl }}" style="display:inline-block;background:#facc15;color:#111827;text-decoration:none;font-weight:bold;padding:12px 18px;border-radius:10px;">Open Dashboard</a>
                             </p>
-                            <p style="font-size:13px;color:#64748b;margin-bottom:0;">If you did not expect this account, please contact the GradeQuest CEO or platform owner.</p>
+                            <p style="font-size:13px;color:#64748b;margin-bottom:0;">If you did not expect this account, please contact the GradiosEdu CEO or platform owner.</p>
                         </td>
                     </tr>
                 </table>

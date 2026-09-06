@@ -29,7 +29,7 @@ class AiFeeCollectionController extends Controller
         $schoolId = (int) ($auth->school_id ?? 0);
         $featureKey = 'ai_fee_collection_assistant';
         $creditCost = $credits->costForFeature($featureKey);
-        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost);
+        $credits->assertCreditsAvailable($schoolId, $featureKey, $creditCost, $auth);
 
         try {
             $result = $assistant->analyze($schoolId, $data);
@@ -45,7 +45,7 @@ class AiFeeCollectionController extends Controller
                 'filters' => $data,
                 'total_balance' => data_get($result, 'analysis.summary.total_balance'),
                 'owing_parents' => data_get($result, 'analysis.summary.owing_parents'),
-            ]);
+            ], $auth);
         }
 
         $this->logAiUsage($request, 'success', $result['usage'] ?? [], [

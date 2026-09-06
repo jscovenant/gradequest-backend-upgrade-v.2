@@ -531,8 +531,8 @@ public function myChildren(Request $request)
         $rc = (int) ($resultsAgg->get($r->id)->results_count ?? 0);
 
         $photoUrl = $r->photo
-            ? (str_starts_with($r->photo, 'http') ? $r->photo : url('uploads/' . 'users'. ltrim($r->photo, '/')))
-            : url('img/profile.png');
+            ? (str_starts_with($r->photo, 'http') ? $r->photo : url('uploads/users/' . ltrim($r->photo, '/')))
+            : null;
 
         return [
             'id' => (int) $r->id,

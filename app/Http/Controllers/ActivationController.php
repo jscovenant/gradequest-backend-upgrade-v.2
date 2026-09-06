@@ -260,7 +260,7 @@ public function activateBonus()
     }
 
     return response()->json([
-        'message' => 'Welcome wallet credit added successfully. Use it within 30 days to subscribe to GradeQuestPlus.',
+        'message' => 'Welcome wallet credit added successfully. Use it within 30 days to subscribe to GradiosEduPlus.',
         'bonus_amount' => WelcomeWalletCreditService::AMOUNT,
         'expires_at' => $credit?->expires_at,
         'user' => $user->only(['name', 'email']),

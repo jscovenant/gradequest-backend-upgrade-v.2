@@ -6,7 +6,7 @@ use App\Models\Concerns\BelongsToSchool;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
-class GradequestInvoicePayment extends Model
+class GradiosEduInvoicePayment extends Model
 {
     use BelongsToSchool;
     use HasFactory;
@@ -21,6 +21,6 @@ class GradequestInvoicePayment extends Model
 
     public function invoice()
     {
-        return $this->belongsTo(GradequestTermInvoice::class, 'invoice_id');
+        return $this->belongsTo(GradiosEduTermInvoice::class, 'invoice_id');
     }
 }

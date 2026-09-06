@@ -11,7 +11,7 @@
                 <table width="100%" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden;">
                     <tr>
                         <td style="background:#0f172a;color:#ffffff;padding:24px;">
-                            <h1 style="margin:0;font-size:22px;">Welcome to GradeQuest</h1>
+                            <h1 style="margin:0;font-size:22px;">Welcome to GradiosEdu</h1>
                             <p style="margin:8px 0 0;color:#cbd5e1;">Your school admin account has been created for {{ $school->school_name }}.</p>
                         </td>
                     </tr>
@@ -44,7 +44,7 @@
                             </table>
 
                             <div style="margin:20px 0;padding:14px;border:1px solid #fde68a;background:#fffbeb;border-radius:12px;color:#78350f;">
-                                <strong>Welcome wallet credit:</strong> Complete onboarding to claim your &#8358;5,000 GradeQuestPlus wallet credit.
+                                <strong>Welcome wallet credit:</strong> Complete onboarding to claim your &#8358;5,000 GradiosEduPlus wallet credit.
                                 The credit is added only after activation and expires 30 days after it is claimed if it is not used.
                             </div>
 
@@ -52,7 +52,7 @@
                             <p>
                                 <a href="{{ $loginUrl }}" style="display:inline-block;background:#facc15;color:#111827;text-decoration:none;font-weight:bold;padding:12px 18px;border-radius:10px;">Open School Portal</a>
                             </p>
-                            <p style="font-size:13px;color:#64748b;margin-bottom:0;">If you did not expect this account, please contact the GradeQuest administrator.</p>
+                            <p style="font-size:13px;color:#64748b;margin-bottom:0;">If you did not expect this account, please contact the GradiosEdu administrator.</p>
                         </td>
                     </tr>
                 </table>

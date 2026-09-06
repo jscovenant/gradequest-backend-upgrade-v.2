@@ -140,9 +140,9 @@ class StudentExcelImportService
                 }
             }
 
-            $class = $this->resolveSetup($classes, $row['class'] ?? null);
-            $section = $this->resolveSetup($sections, $row['section'] ?? null);
-            $department = $this->resolveSetup($departments, $row['department'] ?? null);
+            $class = $this->resolveOrCreateClass($schoolId, $classes, $row['class'] ?? null);
+            $section = $this->resolveOrCreateSection($schoolId, $sections, $row['section'] ?? null);
+            $department = $this->resolveOrCreateDepartment($schoolId, $departments, $row['department'] ?? null);
 
             if (! $class) $rowErrors[] = 'Class was not found. Use class name or ID exactly as saved.';
             if (! $section) $rowErrors[] = 'Section was not found. Use section name or ID exactly as saved.';
@@ -310,15 +310,147 @@ class StudentExcelImportService
         return $mapped;
     }
 
-    private function resolveSetup(Collection $items, $value)
+    public static function provisionDefaultAcademicStructure(int $schoolId): void
     {
-        $value = trim((string) $value);
-        if ($value === '') {
-            return null;
+        if ($schoolId <= 0) return;
+
+        $juniorSection = Section::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'Junior']
+        );
+        $seniorSection = Section::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'Senior']
+        );
+
+        Department::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'General']
+        );
+        Department::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'Science']
+        );
+        Department::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'Arts']
+        );
+        Department::firstOrCreate(
+            ['school_id' => $schoolId, 'name' => 'Commercial']
+        );
+
+        $defaultClasses = [
+            ['name' => 'JSS 1', 'section_id' => $juniorSection->id],
+            ['name' => 'JSS 2', 'section_id' => $juniorSection->id],
+            ['name' => 'JSS 3', 'section_id' => $juniorSection->id],
+            ['name' => 'SSS 1', 'section_id' => $seniorSection->id],
+            ['name' => 'SSS 2', 'section_id' => $seniorSection->id],
+            ['name' => 'SSS 3', 'section_id' => $seniorSection->id],
+        ];
+
+        foreach ($defaultClasses as $cls) {
+            StudentClass::firstOrCreate(
+                ['school_id' => $schoolId, 'name' => $cls['name']],
+                ['section_id' => $cls['section_id']]
+            );
+        }
+    }
+
+    private function resolveOrCreateClass(int $schoolId, Collection &$classes, $value)
+    {
+        $val = trim((string) $value);
+        if ($val === '') {
+            $val = $classes->first()?->name ?? 'JSS 1';
         }
 
-        return $items->first(fn ($item) => (string) $item->id === $value)
-            ?: $items->first(fn ($item) => strtolower((string) $item->name) === strtolower($value));
+        // 1. Exact ID or name match
+        $found = $classes->first(fn ($item) => (string) $item->id === $val)
+            ?: $classes->first(fn ($item) => strtolower(trim((string) $item->name)) === strtolower($val));
+
+        if ($found) {
+            return $found;
+        }
+
+        // 2. Normalized alphanumeric match (e.g. "JSS 1" matches "JSS1", "J.S.S 1" matches "JSS 1")
+        $cleanVal = preg_replace('/[^a-z0-9]/', '', strtolower($val));
+        if ($cleanVal !== '') {
+            $found = $classes->first(fn ($item) => preg_replace('/[^a-z0-9]/', '', strtolower((string) $item->name)) === $cleanVal);
+            if ($found) {
+                return $found;
+            }
+        }
+
+        // 3. Auto-create the class for this school so user import succeeds smoothly
+        try {
+            $created = StudentClass::firstOrCreate(
+                ['school_id' => $schoolId, 'name' => $val]
+            );
+            $classes->push($created);
+            return $created;
+        } catch (\Throwable) {
+            return $classes->first();
+        }
+    }
+
+    private function resolveOrCreateSection(int $schoolId, Collection &$sections, $value)
+    {
+        $val = trim((string) $value);
+        if ($val === '') {
+            $val = $sections->first()?->name ?? 'Junior';
+        }
+
+        $found = $sections->first(fn ($item) => (string) $item->id === $val)
+            ?: $sections->first(fn ($item) => strtolower(trim((string) $item->name)) === strtolower($val));
+
+        if ($found) {
+            return $found;
+        }
+
+        $cleanVal = preg_replace('/[^a-z0-9]/', '', strtolower($val));
+        if ($cleanVal !== '') {
+            $found = $sections->first(fn ($item) => preg_replace('/[^a-z0-9]/', '', strtolower((string) $item->name)) === $cleanVal);
+            if ($found) {
+                return $found;
+            }
+        }
+
+        try {
+            $created = Section::firstOrCreate(
+                ['school_id' => $schoolId, 'name' => $val]
+            );
+            $sections->push($created);
+            return $created;
+        } catch (\Throwable) {
+            return $sections->first();
+        }
+    }
+
+    private function resolveOrCreateDepartment(int $schoolId, Collection &$departments, $value)
+    {
+        $val = trim((string) $value);
+        if ($val === '') {
+            $val = $departments->first()?->name ?? 'General';
+        }
+
+        $found = $departments->first(fn ($item) => (string) $item->id === $val)
+            ?: $departments->first(fn ($item) => strtolower(trim((string) $item->name)) === strtolower($val));
+
+        if ($found) {
+            return $found;
+        }
+
+        $cleanVal = preg_replace('/[^a-z0-9]/', '', strtolower($val));
+        if ($cleanVal !== '') {
+            $found = $departments->first(fn ($item) => preg_replace('/[^a-z0-9]/', '', strtolower((string) $item->name)) === $cleanVal);
+            if ($found) {
+                return $found;
+            }
+        }
+
+        try {
+            $created = Department::firstOrCreate(
+                ['school_id' => $schoolId, 'name' => $val]
+            );
+            $departments->push($created);
+            return $created;
+        } catch (\Throwable) {
+            return $departments->first();
+        }
     }
 
     private function normalizeGender($value): string

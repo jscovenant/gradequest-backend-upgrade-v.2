@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\GradequestTermInvoice;
+use App\Models\GradiosEduTermInvoice;
 use App\Models\SchoolBillingAuditLog;
 use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
@@ -70,14 +70,14 @@ class SchoolBillingController extends Controller
         $invoice = $this->billing->generateOfflineInvoice($schoolId, $sessionId, $termId, (int) $request->user()->id);
 
         return response()->json([
-            'message' => 'Offline GradeQuest invoice generated.',
+            'message' => 'Offline GradiosEdu invoice generated.',
             'invoice' => $invoice,
         ]);
     }
 
-    public function recordInvoicePayment(Request $request, GradequestTermInvoice $invoice)
+    public function recordInvoicePayment(Request $request, GradiosEduTermInvoice $invoice)
     {
-        abort_unless($this->isPlatformUser($request), 403, 'Only GradeQuest can record invoice payments.');
+        abort_unless($this->isPlatformUser($request), 403, 'Only GradiosEdu can record invoice payments.');
 
         $validated = $request->validate([
             'amount' => 'required|numeric|min:1',
@@ -108,7 +108,7 @@ class SchoolBillingController extends Controller
 
     public function invoices(Request $request)
     {
-        $query = GradequestTermInvoice::query()->latest();
+        $query = GradiosEduTermInvoice::query()->latest();
 
         if (! $this->isPlatformUser($request)) {
             $query->where('school_id', $request->user()->school_id);

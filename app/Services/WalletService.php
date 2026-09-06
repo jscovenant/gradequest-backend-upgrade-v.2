@@ -55,4 +55,53 @@ class WalletService
             ]);
         });
     }
+
+    public function creditSchoolWallet(
+        int $schoolId,
+        int $userId,
+        float $amount,
+        string $description,
+        string $referenceId
+    ): void {
+        DB::transaction(function () use ($schoolId, $userId, $amount, $description, $referenceId) {
+            // Idempotency guard: prevent duplicate credit
+            $exists = DB::table('wallet_transactions')
+                ->where('reference_id', $referenceId)
+                ->where('type', 'credit')
+                ->exists();
+
+            if ($exists) return;
+
+            $wallet = DB::table('wallets')
+                ->where('school_id', $schoolId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($wallet) {
+                DB::table('wallets')->where('id', $wallet->id)->update([
+                    'balance' => ((float) $wallet->balance) + $amount,
+                    'updated_at' => now(),
+                ]);
+            } else {
+                DB::table('wallets')->insert([
+                    'school_id' => $schoolId,
+                    'user_id' => $userId,
+                    'balance' => $amount,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            DB::table('wallet_transactions')->insert([
+                'user_id' => $userId,
+                'amount' => $amount,
+                'type' => 'credit',
+                'description' => $description,
+                'reference_id' => $referenceId,
+                'school_id' => $schoolId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        });
+    }
 }

@@ -6,7 +6,7 @@ use App\Models\SchoolDomain;
 use App\Models\SchoolSetting;
 use App\Models\Section;
 use App\Models\User;
-use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
@@ -15,7 +15,7 @@ use Tests\TestCase;
 
 class TenantIsolationTest extends TestCase
 {
-    use DatabaseTransactions;
+    use RefreshDatabase;
 
     public function test_legacy_result_endpoint_is_not_publicly_accessible(): void
     {

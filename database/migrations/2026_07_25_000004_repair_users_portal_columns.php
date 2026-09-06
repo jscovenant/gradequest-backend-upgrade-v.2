@@ -85,6 +85,10 @@ return new class extends Migration
 
     private function makeLegacyIdentityColumnsNullable(): void
     {
+        if (DB::getDriverName() !== 'mysql') {
+            return;
+        }
+
         foreach (['name', 'email', 'username'] as $column) {
             if (Schema::hasColumn('users', $column)) {
                 DB::statement("ALTER TABLE `users` MODIFY `{$column}` VARCHAR(255) NULL");

@@ -8,14 +8,11 @@ class CbtAccessService
 {
     public function ensureCanUse(User $user, string $mode = 'online'): void
     {
-        $feature = $mode === 'offline' ? 'cbt_offline' : 'cbt_online';
-
-        $gate = app(SubscriptionGate::class)->inspect($user, $feature);
-
-        abort_unless(
-            $gate['allowed'] ?? false,
-            (int) ($gate['status'] ?? 403),
-            $gate['message'] ?? 'CBT is not available in your current package.'
-        );
+        if (strtolower((string) $user->role) === 'student') {
+            $clearance = app(SchoolBillingService::class)->studentAcademicClearanceStatus((int) $user->school_id, (int) $user->id);
+            if (!$clearance['allowed']) {
+                abort(403, 'CBT Exam Access Locked: Term fee clearance is required for this student. Please contact the school administration.');
+            }
+        }
     }
 }

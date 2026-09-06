@@ -58,7 +58,7 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
+      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
       <h1>{{ $subjectLine }}</h1>
     </div>
 
@@ -67,7 +67,7 @@
     </div>
 
     <div class="email-footer">
-      &copy; {{ date('Y') }} GradeQuest. All rights reserved.<br>
+      &copy; {{ date('Y') }} GradiosEdu. All rights reserved.<br>
       <a href="#">Privacy Policy</a> | <a href="#">Contact Support</a>
     </div>
   </div>

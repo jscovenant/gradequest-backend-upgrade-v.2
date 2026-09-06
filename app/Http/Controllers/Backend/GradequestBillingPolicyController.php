@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\GradequestBillingPolicy;
+use App\Models\GradiosEduBillingPolicy;
 use App\Models\SchoolBillingAuditLog;
 use App\Models\SchoolBillingPeriod;
 use App\Models\SchoolBillingTemporaryAccess;
@@ -47,6 +47,7 @@ class GradequestBillingPolicyController extends Controller
             'offline_grace_days' => 'required|integer|min:0|max:90',
             'offline_school_block_enabled' => 'required|boolean',
             'platform_fee_per_student' => 'required|numeric|min:0|max:10000000',
+            'support_whatsapp' => 'nullable|string|max:50',
             'whatsapp_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
             'legacy_plus_ai_credits' => 'required|integer|min:0|max:10000000',
             'ai_result_comment_credit_cost' => 'required|integer|min:1|max:1000000',
@@ -57,9 +58,19 @@ class GradequestBillingPolicyController extends Controller
             'ai_fee_collection_credit_cost' => 'required|integer|min:1|max:1000000',
             'ai_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
             'legacy_subscription_honor_enabled' => 'required|boolean',
-            'per_student_billing_starts_at' => 'nullable|date',
             'temporary_access_min_days' => 'required|integer|min:1|max:30',
             'temporary_access_max_days' => 'required|integer|min:1|max:90',
+            'promo_enabled' => 'nullable|boolean',
+            'promo_title' => 'nullable|string|max:255',
+            'promo_description' => 'nullable|string',
+            'promo_target_plan' => 'nullable|string|max:100',
+            'promo_min_students' => 'nullable|integer|min:0',
+            'promo_bonus_days' => 'nullable|integer|min:1|max:3650',
+            'promo_starts_at' => 'nullable|date',
+            'promo_ends_at' => 'nullable|date',
+            'promo_max_claims' => 'nullable|integer|min:1',
+            'sales_partner_term_1_commission_rate' => 'nullable|numeric|min:0|max:100',
+            'sales_partner_retention_commission_rate' => 'nullable|numeric|min:0|max:100',
         ]);
 
         if ($validated['temporary_access_max_days'] < $validated['temporary_access_min_days']) {
@@ -262,9 +273,9 @@ class GradequestBillingPolicyController extends Controller
         ]);
     }
 
-    private function policy(): GradequestBillingPolicy
+    private function policy(): GradiosEduBillingPolicy
     {
-        return GradequestBillingPolicy::firstOrCreate([], [
+        return GradiosEduBillingPolicy::firstOrCreate([], [
             'online_grace_days' => 14,
             'online_minimum_coverage_percent' => 70,
             'online_whole_school_block_enabled' => true,
@@ -285,6 +296,16 @@ class GradequestBillingPolicyController extends Controller
             'per_student_billing_starts_at' => now(),
             'temporary_access_min_days' => 3,
             'temporary_access_max_days' => 7,
+            'promo_enabled' => false,
+            'promo_title' => 'Buy 1 Year, Get +1 Year Free Promo',
+            'promo_description' => 'Subscribe to GradiosEdu Plus for 1 year with at least 100 students and get an additional year 100% free.',
+            'promo_target_plan' => 'GradiosEdu Plus',
+            'promo_min_students' => 100,
+            'promo_bonus_days' => 365,
+            'promo_starts_at' => now(),
+            'promo_ends_at' => now()->addMonths(2),
+            'promo_max_claims' => 50,
+            'promo_claims_count' => 0,
         ]);
     }
 
@@ -308,6 +329,10 @@ class GradequestBillingPolicyController extends Controller
 
         abort_unless($user && $user->isSuperAdminUser(), 403);
     }
+}
+
+if (!class_exists('App\Http\Controllers\Backend\GradiosEduBillingPolicyController', false)) {
+    class_alias(GradequestBillingPolicyController::class, 'App\Http\Controllers\Backend\GradiosEduBillingPolicyController');
 }
 
 

@@ -28,6 +28,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'api/*',
         ]);
 
+        $middleware->redirectGuestsTo(fn (\Illuminate\Http\Request $request) => $request->is('api/*') ? null : '/login');
+
         $middleware->append(ResolveSchoolFromDomain::class);
 
 
@@ -48,9 +50,17 @@ return Application::configure(basePath: dirname(__DIR__))
             'school.billing.clearance' => EnsureSchoolBillingClearance::class,
             'superadmin.access' => EnsureSuperAdminAccess::class,
             'teacher.active' => EnsureTeacherIsActive::class,
+            'platform.maintenance' => \App\Http\Middleware\CheckPlatformMaintenance::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        $exceptions->render(function (\Illuminate\Auth\AuthenticationException $e, \Illuminate\Http\Request $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json([
+                    'message' => 'Unauthenticated.'
+                ], 401);
+            }
+            return redirect()->guest('/login');
+        });
     })
     ->create();

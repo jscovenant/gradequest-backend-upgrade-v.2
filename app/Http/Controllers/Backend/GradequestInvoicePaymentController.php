@@ -3,8 +3,8 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\GradequestInvoicePayment;
-use App\Models\GradequestTermInvoice;
+use App\Models\GradiosEduInvoicePayment;
+use App\Models\GradiosEduTermInvoice;
 use App\Models\SchoolSetting;
 use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
@@ -12,33 +12,33 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
-class GradequestInvoicePaymentController extends Controller
+class GradiosEduInvoicePaymentController extends Controller
 {
     public function __construct(private SchoolBillingService $billing)
     {
     }
 
-    public function show(Request $request, GradequestTermInvoice $invoice)
+    public function show(Request $request, GradiosEduTermInvoice $invoice)
     {
         $this->authorizeInvoice($request, $invoice);
 
         return response()->json([
             'invoice' => $invoice->fresh(),
             'school' => SchoolSetting::find($invoice->school_id),
-            'payments' => GradequestInvoicePayment::where('invoice_id', $invoice->id)
+            'payments' => GradiosEduInvoicePayment::where('invoice_id', $invoice->id)
                 ->latest()
                 ->get(),
         ]);
     }
 
-    public function initialize(Request $request, GradequestTermInvoice $invoice)
+    public function initialize(Request $request, GradiosEduTermInvoice $invoice)
     {
         $this->authorizeInvoice($request, $invoice);
 
         $invoice = $invoice->fresh();
 
         if ($invoice->billing_mode !== 'offline') {
-            return response()->json(['message' => 'Only offline GradeQuest invoices can be paid here.'], 422);
+            return response()->json(['message' => 'Only offline GradiosEdu invoices can be paid here.'], 422);
         }
 
         if ((float) $invoice->balance <= 0) {
@@ -53,12 +53,19 @@ class GradequestInvoicePaymentController extends Controller
         $user = $request->user();
         $reference = 'gq_invoice_' . Str::uuid()->toString();
 
+        $origin = $request->input('callback_url')
+            ?: $request->header('origin')
+            ?: ($request->header('referer') ? rtrim(parse_url($request->header('referer'), PHP_URL_SCHEME) . '://' . parse_url($request->header('referer'), PHP_URL_HOST), '/') : null)
+            ?: rtrim((string) (config('app.frontend_url') ?: 'https://gradequest.com.ng'), '/');
+
+        $callbackUrl = rtrim($origin, '/') . '/billing/invoice-payment/' . $invoice->id . '?reference=' . $reference;
+
         $response = Http::withToken(config('services.paystack.secret'))
             ->post('https://api.paystack.co/transaction/initialize', [
                 'reference' => $reference,
                 'email' => $user->email,
                 'amount' => (int) round($amount * 100),
-                'callback_url' => rtrim((string) config('app.frontend_url'), '/') . '/billing/invoice-payment/' . $invoice->id . '?reference=' . $reference,
+                'callback_url' => $callbackUrl,
                 'metadata' => [
                     'source' => 'gradequest_invoice_payment',
                     'school_id' => $invoice->school_id,
@@ -73,7 +80,7 @@ class GradequestInvoicePaymentController extends Controller
             ], 422);
         }
 
-        GradequestInvoicePayment::create([
+        GradiosEduInvoicePayment::create([
             'school_id' => $invoice->school_id,
             'invoice_id' => $invoice->id,
             'user_id' => $user->id,
@@ -91,8 +98,8 @@ class GradequestInvoicePaymentController extends Controller
 
     public function verify(Request $request, string $reference)
     {
-        $payment = GradequestInvoicePayment::where('reference', $reference)->firstOrFail();
-        $invoice = GradequestTermInvoice::findOrFail($payment->invoice_id);
+        $payment = GradiosEduInvoicePayment::where('reference', $reference)->firstOrFail();
+        $invoice = GradiosEduTermInvoice::findOrFail($payment->invoice_id);
         $this->authorizeInvoice($request, $invoice);
 
         if ($payment->status === 'successful') {
@@ -122,7 +129,7 @@ class GradequestInvoicePaymentController extends Controller
         }
 
         DB::transaction(function () use ($payment, $invoice, $data, $request, $reference) {
-            $locked = GradequestInvoicePayment::whereKey($payment->id)->lockForUpdate()->firstOrFail();
+            $locked = GradiosEduInvoicePayment::whereKey($payment->id)->lockForUpdate()->firstOrFail();
 
             if ($locked->status === 'successful') {
                 return;
@@ -148,7 +155,7 @@ class GradequestInvoicePaymentController extends Controller
         ]);
     }
 
-    private function authorizeInvoice(Request $request, GradequestTermInvoice $invoice): void
+    private function authorizeInvoice(Request $request, GradiosEduTermInvoice $invoice): void
     {
         $user = $request->user();
 

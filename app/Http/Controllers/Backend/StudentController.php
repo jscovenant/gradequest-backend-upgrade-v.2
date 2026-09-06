@@ -549,34 +549,73 @@ if (strtolower((string) $request->input('role')) === 'student') {
             return response()->json(['message' => 'Student not found.'], 404);
         }
 
-        // Get latest session for this student
         $latestSession = Average::where('user_id', $id)
             ->orderBy('session', 'desc')
             ->value('session');
-    
+
         if (!$latestSession) {
-            return response()->json([
-                'averages' => [],
-                'session' => null
-            ]);
+            $latestSession = AcademicSession::where('school_id', $auth->school_id)
+                ->where('is_current', 1)
+                ->value('name') ?? AcademicSession::where('school_id', $auth->school_id)->orderByDesc('id')->value('name');
         }
-    
-        // Get averages for that session across all terms
-        $averages = Average::where('user_id', $id)
-            ->where('session', $latestSession)
-            ->orderByRaw("FIELD(term, 'First Term', 'Second Term', 'Third Term')")
-            ->get(['term', 'total_average']);
-    
-        $chartData = $averages->map(function ($avg) {
-            return [
-                'term' => $avg->term,
-                'total_average' => (float) $avg->total_average,
-            ];
-        });
-    
+
+        $averagesData = collect();
+
+        if ($latestSession) {
+            $avgRecords = Average::where('user_id', $id)
+                ->where('session', $latestSession)
+                ->orderByRaw("FIELD(term, 'First Term', 'Second Term', 'Third Term')")
+                ->get();
+
+            if ($avgRecords->isNotEmpty()) {
+                $averagesData = $avgRecords->map(function ($avg) {
+                    return [
+                        'term' => $avg->term,
+                        'total_average' => round((float) $avg->total_average, 1),
+                        'position' => $avg->position ?? null,
+                    ];
+                });
+            }
+        }
+
+        // Fallback to StudentResultV2 if Average table hasn't been aggregated
+        if ($averagesData->isEmpty()) {
+            $terms = DB::table('terms')
+                ->where('school_id', $auth->school_id)
+                ->orderBy('id')
+                ->get(['id', 'name']);
+
+            $results = StudentResultV2::where('user_id', $id)->get();
+            if ($results->isNotEmpty()) {
+                $grouped = $results->groupBy('term_id');
+                foreach ($terms as $term) {
+                    if (isset($grouped[$term->id])) {
+                        $termScores = $grouped[$term->id];
+                        $avg = $termScores->avg('total');
+                        if ($avg !== null) {
+                            $averagesData->push([
+                                'term' => $term->name,
+                                'total_average' => round((float) $avg, 1),
+                                'subjects_count' => $termScores->count(),
+                            ]);
+                        }
+                    }
+                }
+            }
+        }
+
+        $scoresList = $averagesData->pluck('total_average')->filter(fn($v) => is_numeric($v))->values();
+        $cumulativeAvg = $scoresList->isNotEmpty() ? round($scoresList->avg(), 1) : 0;
+        $highestAvg = $scoresList->isNotEmpty() ? $scoresList->max() : 0;
+        $lowestAvg = $scoresList->isNotEmpty() ? $scoresList->min() : 0;
+
         return response()->json([
             'session' => $latestSession,
-            'averages' => $chartData,
+            'averages' => $averagesData->values(),
+            'cumulative_average' => $cumulativeAvg,
+            'highest_average' => $highestAvg,
+            'lowest_average' => $lowestAvg,
+            'terms_count' => $averagesData->count(),
         ]);
     }
     
@@ -952,10 +991,10 @@ public function promoteStudents(Request $request)
             'school_id' => 'required|integer|in:' . $auth->school_id,
             'affective' => 'nullable|array',
             'affective.*.id' => 'required|integer',
-            'affective.*.rate' => 'required|integer|min:1|max:4',
+            'affective.*.rate' => 'required|integer|min:1|max:5',
             'psychomotor' => 'nullable|array',
             'psychomotor.*.id' => 'required|integer',
-            'psychomotor.*.rate' => 'required|integer|min:1|max:4',
+            'psychomotor.*.rate' => 'required|integer|min:1|max:5',
         ]);
 
         $studentExists = User::forSchool($auth->school_id)
@@ -999,51 +1038,42 @@ public function promoteStudents(Request $request)
     }
 
   
-/**
+    /**
      * Decrypt and return the student's default password
-     *
-     
      */
-  public function decryptPassword(Request $request)
-{
-    $request->validate([
-        'user_id' => 'required|integer|exists:users,id',
-    ]);
-
-    $auth = Auth::user();
-
-    $student = User::forSchool($auth->school_id)
-        ->withRole('student')
-        ->findOrFail($request->user_id);
-
-    if (!$student->default_password) {
-        return response()->json([
-            'success' => false,
-            'message' => 'No default password found for this student',
-        ], 404);
-    }
-
-    try {
-        $decryptedPassword = $student->default_password;
-
-        return response()->json([
-            'success' => true,
-            'message' => 'Password decrypted successfully',
-            'decrypted_password' => $decryptedPassword,
-        ], 200);
-
-    } catch (\Illuminate\Contracts\Encryption\DecryptException $e) {
-        Log::error('Password decryption failed', [
-            'user_id' => $student->id,
-            'error' => $e->getMessage()
+    public function decryptPassword(Request $request)
+    {
+        $request->validate([
+            'user_id' => 'required|integer|exists:users,id',
         ]);
 
+        $auth = Auth::user();
+
+        $student = User::forSchool($auth->school_id)
+            ->withRole('student')
+            ->findOrFail($request->user_id);
+
+        $decryptedPassword = null;
+        try {
+            $decryptedPassword = $student->default_password;
+        } catch (\Throwable $e) {
+            Log::warning('Password decryption failed for student ' . $student->id . ': ' . $e->getMessage());
+        }
+
+        if ($decryptedPassword) {
+            return response()->json([
+                'success' => true,
+                'message' => 'Password decrypted successfully',
+                'decrypted_password' => $decryptedPassword,
+            ], 200);
+        }
+
         return response()->json([
             'success' => false,
-            'message' => 'Failed to decrypt password. The password may be corrupted.',
-        ], 500);
+            'message' => 'The default password cannot be decrypted because it was encrypted with an older security key or has been updated. You can set a new password in Edit mode.',
+            'can_reset' => true,
+        ], 200);
     }
-}
 
 
 

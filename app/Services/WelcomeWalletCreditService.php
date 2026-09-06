@@ -12,7 +12,7 @@ class WelcomeWalletCreditService
 {
     public const AMOUNT = 5000;
     public const EXPIRY_DAYS = 30;
-    public const DESCRIPTION = 'Welcome wallet credit for GradeQuestPlus subscription';
+    public const DESCRIPTION = 'Welcome wallet credit for SchoolProfitPlus subscription';
 
     public function grantToAdmin(User $admin): ?WalletTransaction
     {

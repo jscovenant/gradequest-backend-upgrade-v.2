@@ -599,7 +599,7 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
       $aiCredits = app(SubscriptionAiCreditService::class);
       $creditCost = $aiCredits->costForFeature('ai_result_comment_generator');
-      $creditUsage = $aiCredits->assertCreditsAvailable((int) $authUser->school_id, 'ai_result_comment_generator', $creditCost);
+      $creditUsage = $aiCredits->assertCreditsAvailable((int) $authUser->school_id, 'ai_result_comment_generator', $creditCost, $authUser);
 
       $payload = $request->validate([
           'summary' => ['nullable', 'array'],
@@ -626,7 +626,7 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
           $creditUsage = $aiCredits->consumeCredits((int) $authUser->school_id, 'ai_result_comment_generator', $creditCost, 'ai-result-comment:' . $batch . ':' . $student . ':' . now()->format('YmdHis'), [
               'batch_id' => $batch,
               'student_id' => $student,
-          ]);
+          ], $authUser);
 
           $this->logAiResultCommentUsage($request, 'completed', $result['usage'] ?? [], [
               'batch_id' => $batch,
@@ -807,12 +807,65 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                 // Parse meta_json for additional fields
                 $meta = json_decode($sr->meta_json ?? '{}', true);
 
-                return response()->json([
-                    'source' => 'v2',
-                    'result_status' => $batch->status,
-                    'user' => $student,
-                    'user_photo_base64' => $photoBase64,
-                    'average' => [
+                // Check if an Average record exists with fresher data from recent updates
+                $avgModel = \App\Models\Average::where([
+                    'user_id' => $student->id,
+                    'school_id' => $request->school_id,
+                    'class_id' => $class->id,
+                    'session' => (string) $request->session,
+                    'term' => (string) $request->term,
+                ])->first();
+
+                if ($avgModel) {
+                    $averageData = [
+                        'id' => $avgModel->id,
+                        'user_id' => $student->id,
+                        'class_id' => $class->id,
+                        'term' => (string) $request->term,
+                        'session' => (string) $request->session,
+                        'total_average' => $avgModel->total_average ?: ($sr->total_average ?? '0'),
+                        'total_grade' => $avgModel->total_grade ?: ($sr->total_grade ?? 'N/A'),
+                        'position' => $avgModel->position ?: ($sr->position ?? 'N/A'),
+                        'class_size' => $avgModel->class_size ?: ($sr->class_size ?? '0'),
+                        'no_present' => $avgModel->no_present ?: ($meta['no_present'] ?? '0'),
+                        'no_absent' => $avgModel->no_absent ?: ($meta['no_absent'] ?? '0'),
+                        'school_open' => $avgModel->school_open ?: ($meta['school_open'] ?? '0'),
+                        'class_teacher_comment' => $avgModel->class_teacher_comment ?: ($sr->class_teacher_comment ?? ''),
+                        'principal_comment' => $avgModel->principal_comment ?: ($sr->principal_comment ?? ''),
+                        'general_remark' => $avgModel->general_remark ?: ($sr->general_remark ?? ''),
+                        'resumption_date' => $avgModel->resumption_date ?: ($meta['resumption_date'] ?? null),
+                    ];
+
+                    $termModelClass = match ((string) $request->term) {
+                        'First Term' => \App\Models\FirstTermResult::class,
+                        'Second Term' => \App\Models\SecondTermResult::class,
+                        'Third Term' => \App\Models\ThirdTermResult::class,
+                        default => null,
+                    };
+
+                    if ($termModelClass) {
+                        $freshTermResults = $termModelClass::where('average_id', $avgModel->id)->with('subject')->get();
+                        if ($freshTermResults->isNotEmpty()) {
+                            $subjects = $freshTermResults->map(function ($r) {
+                                return [
+                                    'id' => $r->id,
+                                    'student_result_id' => $r->average_id,
+                                    'subject_id' => $r->subject_id,
+                                    'subject_name' => optional($r->subject)->name ?? ('Subject #' . $r->subject_id),
+                                    'ca' => $r->ca,
+                                    'exam' => $r->exam,
+                                    'total' => $r->total,
+                                    'grade' => $r->grade,
+                                    'remark' => $r->remark,
+                                    'firstterm' => $r->firstterm,
+                                    'secondterm' => $r->secondterm,
+                                    'average' => $r->average,
+                                ];
+                            });
+                        }
+                    }
+                } else {
+                    $averageData = [
                         'id' => $sr->id,
                         'user_id' => $sr->user_id,
                         'class_id' => $class->id,
@@ -829,7 +882,15 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                         'principal_comment' => $sr->principal_comment ?? '',
                         'general_remark' => $sr->general_remark ?? '',
                         'resumption_date' => $meta['resumption_date'] ?? null,
-                    ],
+                    ];
+                }
+
+                return response()->json([
+                    'source' => 'v2',
+                    'result_status' => $batch->status,
+                    'user' => $student,
+                    'user_photo_base64' => $photoBase64,
+                    'average' => $averageData,
                     'term_result' => $subjects,
                     'class_name' => $class->name,
                     'class_section_id' => $class->section_id,

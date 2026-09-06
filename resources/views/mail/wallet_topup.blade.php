@@ -69,7 +69,7 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
+      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
       <h1>Wallet Top-up Confirmation</h1>
     </div>
 
@@ -84,14 +84,14 @@
         <li><strong>Date:</strong> {{ isset($payment->created_at) ? \Carbon\Carbon::parse($payment->created_at)->format('d M, Y h:i A') : 'N/A' }}</li>
       </ul>
 
-      <p>Your wallet balance has been updated accordingly. You can now use your credits to perform transactions on your GradeQuest account.</p>
+      <p>Your wallet balance has been updated accordingly. You can now use your credits to perform transactions on your GradiosEdu account.</p>
 
-      <p>Thank you for your trust in <strong>GradeQuest</strong>!</p>
+      <p>Thank you for your trust in <strong>GradiosEdu</strong>!</p>
       <p>— The Support Team</p>
     </div>
 
     <div class="email-footer">
-      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradeQuest</a>. All rights reserved.</p>
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradiosEdu</a>. All rights reserved.</p>
     </div>
   </div>
 </body>

@@ -21,7 +21,7 @@ class SupportTicketNotifier
     {
         if ($sender->isSuperAdminUser()) {
             $recipient = $ticket->creator?->email;
-            $intro = 'GradeQuest Support has replied to your ticket.';
+            $intro = 'SchoolProfit Support has replied to your ticket.';
         } else {
             $recipients = $ticket->assignee?->email
                 ? [$ticket->assignee->email]
@@ -57,13 +57,13 @@ class SupportTicketNotifier
         $safeIntro = e($intro);
         $safeMessage = $message ? nl2br(e($message)) : '';
         $html = "<div style=\"font-family:Arial,sans-serif;color:#172033;line-height:1.6\">"
-            . "<h2 style=\"color:#4f46e5\">GradeQuest Support</h2><p>{$safeIntro}</p>"
+            . "<h2 style=\"color:#4f46e5\">SchoolProfit Support</h2><p>{$safeIntro}</p>"
             . "<p><strong>Ticket:</strong> " . e($ticket->ticket_number) . "<br>"
             . "<strong>School:</strong> " . e($schoolName) . "<br>"
             . "<strong>Subject:</strong> " . e($ticket->subject) . "</p>"
             . ($safeMessage ? "<div style=\"background:#f8fafc;border-left:4px solid #4f46e5;padding:12px\">{$safeMessage}</div>" : '')
             . "<p><a href=\"" . e($url) . "\" style=\"display:inline-block;background:#4f46e5;color:#fff;padding:10px 16px;text-decoration:none;border-radius:6px\">Open ticket</a></p>"
-            . '<p style="color:#64748b;font-size:12px">Reply inside GradeQuest so the full conversation remains attached to the ticket.</p></div>';
+            . '<p style="color:#64748b;font-size:12px">Reply inside SchoolProfit so the full conversation remains attached to the ticket.</p></div>';
 
         try {
             Mail::html($html, function ($mail) use ($recipients, $subject) {

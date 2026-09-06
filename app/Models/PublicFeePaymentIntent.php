@@ -16,6 +16,7 @@ class PublicFeePaymentIntent extends Model
         'platform_fee' => 'decimal:2',
         'allocations' => 'array',
         'paystack_response' => 'array',
+        'monnify_response' => 'array',
         'paid_at' => 'datetime',
     ];
 

@@ -69,7 +69,7 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
+      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
       <h1>Payment Confirmation</h1>
     </div>
 
@@ -99,7 +99,7 @@
     </div>
 
     <div class="email-footer">
-      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradeQuest</a>. All rights reserved.</p>
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradiosEdu</a>. All rights reserved.</p>
     </div>
   </div>
 </body>

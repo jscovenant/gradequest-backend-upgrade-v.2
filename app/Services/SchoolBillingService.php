@@ -3,9 +3,9 @@
 namespace App\Services;
 
 use App\Models\AcademicSession;
-use App\Models\GradequestBillingPolicy;
-use App\Models\GradequestInvoicePayment;
-use App\Models\GradequestTermInvoice;
+use App\Models\SchoolProfitBillingPolicy;
+use App\Models\SchoolProfitInvoicePayment;
+use App\Models\SchoolProfitTermInvoice;
 use App\Models\Payment;
 use App\Models\SchoolBankAccount;
 use App\Models\SchoolSetting;
@@ -15,18 +15,21 @@ use App\Models\SchoolBillingSetting;
 use App\Models\SchoolBillingTemporaryAccess;
 use App\Models\SubPayment;
 use App\Models\Subscription;
+use App\Models\StudentClass;
 use App\Models\StudentBillingEntitlement;
 use App\Models\StudentFee;
 use App\Models\Term;
 use App\Models\User;
+use App\Services\WalletService;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class SchoolBillingService
 {
-    public function policy(): GradequestBillingPolicy
+    public function policy(): SchoolProfitBillingPolicy
     {
-        return GradequestBillingPolicy::firstOrCreate([], [
+        return SchoolProfitBillingPolicy::firstOrCreate([], [
             'online_grace_days' => 14,
             'online_minimum_coverage_percent' => 70,
             'online_whole_school_block_enabled' => true,
@@ -63,14 +66,25 @@ class SchoolBillingService
 
     public function currentPeriod(int $schoolId): array
     {
-        $session = AcademicSession::where('school_id', $schoolId)
+        $hasSchoolId = Schema::hasColumn('academic_sessions', 'school_id');
+
+        $session = AcademicSession::query()
+            ->when($hasSchoolId, fn ($q) => $q->where('school_id', $schoolId))
             ->where('is_current', 1)
             ->orderByDesc('id')
             ->first();
 
         if (! $session) {
-            $session = AcademicSession::where('school_id', $schoolId)
+            $session = AcademicSession::query()
+                ->when($hasSchoolId, fn ($q) => $q->where('school_id', $schoolId))
                 ->where('status', 'Active')
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if (! $session) {
+            $session = AcademicSession::query()
+                ->when($hasSchoolId, fn ($q) => $q->where('school_id', $schoolId))
                 ->orderByDesc('id')
                 ->first();
         }
@@ -107,39 +121,13 @@ class SchoolBillingService
             ];
         }
 
-        $outstandingInvoices = GradequestTermInvoice::where('school_id', $schoolId)
-            ->whereIn('status', ['issued', 'partial', 'overdue'])
-            ->where('balance', '>', 0)
-            ->count();
-
-        [$session, $term] = $this->currentPeriod($schoolId);
-
-        $uncoveredQuery = StudentBillingEntitlement::where('school_id', $schoolId)
-            ->whereIn('status', ['unpaid', 'grace']);
-
-        $unpaidEntitlements = (clone $uncoveredQuery)->count();
-        $transitionInvoice = null;
-
-        if ($settings->payment_mode === 'online' && $targetMode === 'offline' && $unpaidEntitlements > 0) {
-            $transitionInvoice = $this->generateOnlineToOfflineTransitionInvoice($schoolId, $actorId);
-            $outstandingInvoices = GradequestTermInvoice::where('school_id', $schoolId)
-                ->whereIn('status', ['issued', 'partial', 'overdue'])
-                ->where('balance', '>', 0)
-                ->count();
-        }
-
-        $canSwitch = $outstandingInvoices === 0 && $unpaidEntitlements === 0;
-
+        // Pay-As-You-Go Architecture: Seamless switching between Online & Offline
         return [
-            'can_switch' => $canSwitch,
-            'outstanding_invoices' => $outstandingInvoices,
-            'unpaid_entitlements' => $unpaidEntitlements,
-            'transition_invoice' => $transitionInvoice,
-            'message' => $canSwitch
-                ? 'Payment mode can be changed.'
-                : ($transitionInvoice
-                    ? 'A transition invoice has been created. Please settle it before changing payment mode.'
-                    : 'Please settle all outstanding fees or debt before changing payment mode.'),
+            'can_switch' => true,
+            'outstanding_invoices' => 0,
+            'unpaid_entitlements' => 0,
+            'transition_invoice' => null,
+            'message' => 'Payment mode can be changed seamlessly.',
         ];
     }
 
@@ -151,10 +139,10 @@ class SchoolBillingService
             return;
         }
 
-        GradequestTermInvoice::where('school_id', $schoolId)
+        SchoolProfitTermInvoice::where('school_id', $schoolId)
             ->whereIn('status', ['issued', 'partial', 'overdue', 'paid'])
             ->get()
-            ->each(fn (GradequestTermInvoice $invoice) => $this->syncInvoiceWithSubscriptionPayments($invoice));
+            ->each(fn (SchoolProfitTermInvoice $invoice) => $this->syncInvoiceWithSubscriptionPayments($invoice));
     }
 
     protected function syncCurrentPeriodEntitlementsWithSubscriptionPayments(int $schoolId): void
@@ -260,7 +248,7 @@ class SchoolBillingService
         $onlineAccount->forceFill(['online_payment_enabled' => true])->save();
     }
 
-    public function generateOfflineInvoice(int $schoolId, int $sessionId, int $termId, ?int $actorId = null): GradequestTermInvoice
+    public function generateOfflineInvoice(int $schoolId, int $sessionId, int $termId, ?int $actorId = null): SchoolProfitTermInvoice
     {
         $legacy = $this->legacySubscriptionProtection($schoolId);
         if ($legacy['active']) {
@@ -277,7 +265,7 @@ class SchoolBillingService
 
             $amountDue = $students->count() * (float) $billingProfile['price_per_student'];
 
-            $invoice = GradequestTermInvoice::firstOrNew([
+            $invoice = SchoolProfitTermInvoice::firstOrNew([
                 'school_id' => $schoolId,
                 'session_id' => $sessionId,
                 'term_id' => $termId,
@@ -335,7 +323,7 @@ class SchoolBillingService
         });
     }
 
-    public function generateOnlineToOfflineTransitionInvoice(int $schoolId, ?int $actorId = null): ?GradequestTermInvoice
+    public function generateOnlineToOfflineTransitionInvoice(int $schoolId, ?int $actorId = null): ?SchoolProfitTermInvoice
     {
         [$session, $term] = $this->currentPeriod($schoolId);
 
@@ -356,7 +344,7 @@ class SchoolBillingService
             $pricePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
             $amountDue = $uncovered->count() * $pricePerStudent;
 
-            $invoice = GradequestTermInvoice::firstOrNew([
+            $invoice = SchoolProfitTermInvoice::firstOrNew([
                 'school_id' => $schoolId,
                 'session_id' => $session->id,
                 'term_id' => $term->id,
@@ -402,10 +390,10 @@ class SchoolBillingService
         });
     }
 
-    public function recordOfflineInvoicePayment(GradequestTermInvoice $invoice, float $amount, ?int $actorId = null, ?string $reason = null): GradequestTermInvoice
+    public function recordOfflineInvoicePayment(SchoolProfitTermInvoice $invoice, float $amount, ?int $actorId = null, ?string $reason = null): SchoolProfitTermInvoice
     {
         return DB::transaction(function () use ($invoice, $amount, $actorId, $reason) {
-            $invoice = GradequestTermInvoice::lockForUpdate()->findOrFail($invoice->id);
+            $invoice = SchoolProfitTermInvoice::lockForUpdate()->findOrFail($invoice->id);
             $before = $invoice->toArray();
 
             $paid = min((float) $invoice->amount_due, (float) $invoice->amount_paid + $amount);
@@ -420,14 +408,20 @@ class SchoolBillingService
         $this->allocateInvoicePayment($invoice->fresh());
         $this->audit($invoice->school_id, $actorId, 'offline_invoice_payment_recorded', $invoice->fresh(), $before, $invoice->fresh()->toArray(), $reason);
 
+        try {
+            app(SalesCommissionService::class)->recordTermInvoiceCommission($invoice->fresh(), (float) $amount);
+        } catch (\Throwable $e) {
+            // Commission logging should not break billing transaction
+        }
+
             return $invoice->fresh();
         });
     }
 
-    public function applyOnlineInvoicePayment(GradequestTermInvoice $invoice, float $amount, ?int $actorId = null, ?string $reference = null): GradequestTermInvoice
+    public function applyOnlineInvoicePayment(SchoolProfitTermInvoice $invoice, float $amount, ?int $actorId = null, ?string $reference = null): SchoolProfitTermInvoice
     {
         return DB::transaction(function () use ($invoice, $amount, $actorId, $reference) {
-            $invoice = GradequestTermInvoice::lockForUpdate()->findOrFail($invoice->id);
+            $invoice = SchoolProfitTermInvoice::lockForUpdate()->findOrFail($invoice->id);
             $before = $invoice->toArray();
 
             $paid = min((float) $invoice->amount_due, (float) $invoice->amount_paid + $amount);
@@ -441,6 +435,13 @@ class SchoolBillingService
 
             $this->allocateInvoicePayment($invoice->fresh());
             $this->audit($invoice->school_id, $actorId, 'online_invoice_payment_confirmed', $invoice->fresh(), $before, $invoice->fresh()->toArray(), $reference);
+
+            try {
+                $payment = SchoolProfitInvoicePayment::where('reference', $reference)->first();
+                app(SalesCommissionService::class)->recordTermInvoiceCommission($invoice->fresh(), (float) $amount, $payment);
+            } catch (\Throwable $e) {
+                // Commission logging should not break billing transaction
+            }
 
             return $invoice->fresh();
         });
@@ -477,58 +478,28 @@ class SchoolBillingService
 
     public function resultEntryStatus(int $schoolId, int $studentId, string $sessionName, string $termName): array
     {
-        $settings = $this->settingsForSchool($schoolId);
-        $legacy = $this->legacySubscriptionProtection($schoolId);
-
-        if ($legacy['active']) {
-            return [
-                'allowed' => true,
-                'status' => 'legacy_subscription_honored',
-                'payment_mode' => $settings->payment_mode,
-                'legacy_subscription' => $legacy,
-                'message' => $legacy['message'],
-            ];
-        }
-
-        if ($this->activeTemporaryAccess($schoolId, 'student_academic')) {
-            return [
-                'allowed' => true,
-                'status' => 'temporary_access',
-                'payment_mode' => $settings->payment_mode,
-                'message' => 'Temporary access is active for student academic actions.',
-            ];
-        }
-
-        $schoolClearance = $this->schoolCrudClearanceStatus($schoolId);
-
-        if (! $schoolClearance['allowed']) {
-            return [
-                'allowed' => false,
-                'status' => 'school_billing_outstanding',
-                'payment_mode' => $settings->payment_mode,
-                'school_clearance' => $schoolClearance,
-                'message' => 'Access denied. Please settle all outstanding fees for the current or previous academic periods to continue.',
-            ];
-        }
-
         $session = AcademicSession::where('school_id', $schoolId)->where('name', $sessionName)->first();
         $term = Term::where('school_id', $schoolId)->where('name', $termName)->first();
 
-        if (! $session || ! $term) {
-            return ['allowed' => false, 'status' => 'period_not_found', 'message' => 'Billing period could not be resolved for this result.'];
+        if ($session && $term) {
+            $entitlement = $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
+            $isCleared = in_array($entitlement->status, ['paid', 'override'], true);
+            $fee = $this->pricePerStudentForSchool($schoolId);
+
+            return [
+                'allowed' => $isCleared,
+                'status' => $isCleared ? 'cleared' : 'payment_required',
+                'fee_amount' => $fee,
+                'message' => $isCleared
+                    ? 'Student is cleared for score entry and report cards.'
+                    : "Result Entry Locked: Student fee clearance (₦" . number_format($fee, 2) . ") is required for this term. Please clear student from wallet or collect tuition online.",
+            ];
         }
 
-        $entitlement = $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
-        $allowed = in_array($entitlement->status, ['paid', 'override'], true);
-
         return [
-            'allowed' => $allowed,
-            'status' => $entitlement->status,
-            'payment_mode' => $settings->payment_mode,
-            'entitlement_id' => $entitlement->id,
-            'message' => $allowed
-                ? 'Student is cleared for result entry.'
-                : 'Access denied. Please settle the outstanding fee for this student and academic period to continue.',
+            'allowed' => true,
+            'status' => 'cleared',
+            'message' => 'Student result entry is cleared.',
         ];
     }
 
@@ -702,7 +673,7 @@ class SchoolBillingService
         return $flags;
     }
 
-    protected function periodGraceUntil(int $schoolId, AcademicSession $session, Term $term, string $paymentMode, GradequestBillingPolicy $policy)
+    protected function periodGraceUntil(int $schoolId, AcademicSession $session, Term $term, string $paymentMode, SchoolProfitBillingPolicy $policy)
     {
         $days = $paymentMode === 'online'
             ? (int) $policy->online_grace_days
@@ -765,7 +736,7 @@ class SchoolBillingService
         $this->syncOpenInvoicesForSchool($schoolId);
         $this->syncCurrentPeriodEntitlementsWithSubscriptionPayments($schoolId);
 
-        GradequestTermInvoice::query()
+        SchoolProfitTermInvoice::query()
             ->where('school_id', $schoolId)
             ->whereIn('status', ['issued', 'partial'])
             ->where('balance', '>', 0)
@@ -773,7 +744,7 @@ class SchoolBillingService
             ->whereDate('due_date', '<', now()->toDateString())
             ->update(['status' => 'overdue']);
 
-        $blockedInvoices = GradequestTermInvoice::query()
+        $blockedInvoices = SchoolProfitTermInvoice::query()
             ->where('school_id', $schoolId)
             ->whereIn('status', ['issued', 'partial', 'overdue'])
             ->where('balance', '>', 0)
@@ -872,11 +843,15 @@ class SchoolBillingService
             ];
         }
 
-        $allowed = ! (bool) $policy->offline_school_block_enabled || ($blockedInvoices === 0 && $blockedEntitlements === 0);
+        $shouldBlockOffline = (bool) $policy->offline_school_block_enabled
+            && $graceExpired
+            && ($blockedInvoices > 0 || $blockedEntitlements > 0);
+
+        $allowed = ! $shouldBlockOffline;
 
         return [
             'allowed' => $allowed,
-            'status' => $allowed ? 'clear' : 'blocked',
+            'status' => $allowed ? ($graceExpired ? 'clear' : 'grace_period_active') : 'blocked',
             'payment_mode' => 'offline',
             'blocked_invoices' => $blockedInvoices,
             'blocked_entitlements' => $blockedEntitlements,
@@ -891,7 +866,7 @@ class SchoolBillingService
                 'grace_expired' => $graceExpired,
             ],
             'message' => $allowed
-                ? 'Billing is clear.'
+                ? ($graceExpired ? 'Billing is clear.' : 'School operations are allowed under active grace period.')
                 : 'Access denied. Please settle all outstanding fees or debt before continuing.',
         ];
     }
@@ -1020,7 +995,7 @@ $unpaid = StudentBillingEntitlement::query()
         'student_classes.name as class_name',
     ]);
     
-        $invoice = GradequestTermInvoice::where([
+        $invoice = SchoolProfitTermInvoice::where([
             'school_id' => $schoolId,
             'session_id' => $session->id,
             'term_id' => $term->id,
@@ -1057,9 +1032,9 @@ $unpaid = StudentBillingEntitlement::query()
         ];
     }
 
-    protected function transitionInvoiceForSchool(int $schoolId): ?GradequestTermInvoice
+    protected function transitionInvoiceForSchool(int $schoolId): ?SchoolProfitTermInvoice
     {
-        return GradequestTermInvoice::where('school_id', $schoolId)
+        return SchoolProfitTermInvoice::where('school_id', $schoolId)
             ->where('invoice_type', 'online_to_offline_transition')
             ->whereIn('status', ['issued', 'partial', 'overdue'])
             ->where('balance', '>', 0)
@@ -1154,7 +1129,7 @@ $unpaid = StudentBillingEntitlement::query()
 
     protected function currentPeriodInvoicePaymentAmount(int $schoolId, int $sessionId, int $termId): float
     {
-        $invoices = GradequestTermInvoice::query()
+        $invoices = SchoolProfitTermInvoice::query()
             ->where('school_id', $schoolId)
             ->where('session_id', $sessionId)
             ->where('term_id', $termId)
@@ -1164,8 +1139,8 @@ $unpaid = StudentBillingEntitlement::query()
             return 0.0;
         }
 
-        return (float) $invoices->sum(function (GradequestTermInvoice $invoice) {
-            $paid = GradequestInvoicePayment::query()
+        return (float) $invoices->sum(function (SchoolProfitTermInvoice $invoice) {
+            $paid = SchoolProfitInvoicePayment::query()
                 ->where('invoice_id', $invoice->id)
                 ->where('status', 'successful')
                 ->sum('amount');
@@ -1174,7 +1149,7 @@ $unpaid = StudentBillingEntitlement::query()
         });
     }
 
-    protected function allocateInvoicePayment(GradequestTermInvoice $invoice): void
+    protected function allocateInvoicePayment(SchoolProfitTermInvoice $invoice): void
     {
         $pricePerStudent = $this->pricePerStudentForSchool($invoice->school_id);
         $coveredCount = (int) floor(((float) $invoice->amount_paid) / max(1, (float) $pricePerStudent));
@@ -1240,7 +1215,7 @@ $unpaid = StudentBillingEntitlement::query()
         }
     }
 
-    protected function syncInvoiceWithSubscriptionPayments(GradequestTermInvoice $invoice): GradequestTermInvoice
+    protected function syncInvoiceWithSubscriptionPayments(SchoolProfitTermInvoice $invoice): SchoolProfitTermInvoice
     {
         if (($invoice->invoice_type ?? 'term_invoice') !== 'term_invoice') {
             return $invoice->fresh();
@@ -1263,59 +1238,14 @@ $unpaid = StudentBillingEntitlement::query()
         return $invoice->fresh();
     }
 
-    protected function legacySubscriptionProtection(int $schoolId): array
-    {
-        $policy = $this->policy();
-        $cutover = $policy->per_student_billing_starts_at;
-        $subscription = $this->activeSubscriptionForSchool($schoolId);
-        $owner = $this->ownerForSchool($schoolId);
-
-        if ($subscription && $owner && $subscription->ends_at && $subscription->ends_at->gt(now()) && $this->isRevenueCoveringSubscription($subscription)) {
-            return $this->subscriptionRevenueCoveragePayload($subscription, 'plus_subscription_active');
-        }
-
-        if (! (bool) $policy->legacy_subscription_honor_enabled || ! $cutover) {
-            return ['active' => false];
-        }
-
-        if (! $subscription || ! $owner || ! $subscription->ends_at || $subscription->ends_at->lte(now())) {
-            return ['active' => false];
-        }
-
-        $startedBeforeCutover = $subscription->starts_at
-            ? $subscription->starts_at->lt($cutover)
-            : $subscription->created_at?->lt($cutover);
-
-        if (! $startedBeforeCutover) {
-            return ['active' => false];
-        }
-
-        $hasLegacyPayment = SubPayment::query()
-            ->where('user_id', $owner->id)
-            ->whereIn('status', ['successful', 'success', 'paid', 'active'])
-            ->where('created_at', '<', $cutover)
-            ->exists();
-
-        if (! $hasLegacyPayment) {
-            return ['active' => false];
-        }
-
-        return [
-            'active' => true,
-            'status' => 'legacy_subscription_honored',
-            'subscription_id' => $subscription->id,
-            'plan_id' => $subscription->subscription_plan_id,
-            'plan_name' => $subscription->plan?->name,
-            'starts_at' => $subscription->starts_at?->toDateTimeString(),
-            'ends_at' => $subscription->ends_at?->toDateTimeString(),
-            'cutover_at' => $cutover->toDateTimeString(),
-            'message' => 'Existing subscription is honored until expiry. New per-student billing starts from the next renewal.',
-        ];
-    }
-
     public function activeSubscriptionRevenueCoverage(int $schoolId): array
     {
         return $this->legacySubscriptionProtection($schoolId);
+    }
+
+    protected function legacySubscriptionProtection(int $schoolId): array
+    {
+        return ['active' => false];
     }
 
     protected function isRevenueCoveringSubscription(Subscription $subscription): bool
@@ -1347,12 +1277,12 @@ $unpaid = StudentBillingEntitlement::query()
 
     protected function deferOpenLegacyInvoices(int $schoolId, array $legacy): void
     {
-        GradequestTermInvoice::query()
+        SchoolProfitTermInvoice::query()
             ->where('school_id', $schoolId)
             ->where('invoice_type', 'term_invoice')
             ->whereIn('status', ['issued', 'partial', 'overdue'])
             ->get()
-            ->each(function (GradequestTermInvoice $invoice) use ($legacy) {
+            ->each(function (SchoolProfitTermInvoice $invoice) use ($legacy) {
                 $meta = $invoice->meta ?: [];
                 $meta['legacy_subscription_protection'] = $legacy;
                 $meta['deferred_reason'] = 'Existing subscription is honored until expiry.';
@@ -1395,76 +1325,355 @@ $unpaid = StudentBillingEntitlement::query()
             ->get(['id', 'firstname', 'surname', 'reg_no', 'level_id']);
     }
 
-    protected function platformFeeAmount(): int
+    public function platformFeeAmount(): int
     {
         return (int) $this->policy()->platform_fee_per_student;
     }
 
     public function pricePerStudentForSchool(int $schoolId): float
     {
-        $subscription = $this->activeSubscriptionForSchool($schoolId);
-        $plan = $subscription?->plan;
+        return (float) $this->platformFeeAmount();
+    }
 
-        if ($subscription && $this->isRevenueCoveringSubscription($subscription)) {
-            return 0;
+    public function clearStudentFromWallet(int $schoolId, int $studentId, int $sessionId, int $termId, ?int $actorId = null): array
+    {
+        $fee = (float) $this->pricePerStudentForSchool($schoolId);
+        $student = User::where('school_id', $schoolId)->findOrFail($studentId);
+        $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
+        $term = Term::where('school_id', $schoolId)->findOrFail($termId);
+
+        $referenceId = 'clear_std_' . $studentId . '_s' . $sessionId . '_t' . $termId . '_' . Str::random(6);
+        $description = "Student Term Clearance (₦" . number_format($fee, 2) . "): {$student->firstname} {$student->surname} ({$student->reg_no}) - {$session->name} ({$term->name})";
+
+        app(WalletService::class)->debitSchoolWalletOrFail(
+            $schoolId,
+            $fee,
+            $actorId ?? (int) $student->id,
+            $description,
+            $referenceId
+        );
+
+        $entitlement = $this->ensureEntitlement($schoolId, $studentId, $sessionId, $termId);
+        $entitlement->update([
+            'status' => 'paid',
+            'source' => 'wallet',
+            'covered_at' => now(),
+            'grace_until' => null,
+            'meta' => array_merge($entitlement->meta ?: [], [
+                'cleared_via' => 'wallet',
+                'fee_amount' => $fee,
+                'cleared_by' => $actorId,
+                'cleared_at' => now()->toIso8601String(),
+                'reference_id' => $referenceId,
+            ]),
+        ]);
+
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+
+        return [
+            'success' => true,
+            'message' => "Student {$student->firstname} {$student->surname} successfully cleared for {$session->name} {$term->name}.",
+            'entitlement' => $entitlement->fresh(),
+            'wallet_balance' => (float) ($wallet?->balance ?? 0),
+            'fee_paid' => $fee,
+        ];
+    }
+
+    public function clearClassFromWallet(int $schoolId, int $classId, int $sessionId, int $termId, ?int $actorId = null): array
+    {
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
+        $term = Term::where('school_id', $schoolId)->findOrFail($termId);
+        $class = StudentClass::where('school_id', $schoolId)->findOrFail($classId);
+
+        $students = User::where('school_id', $schoolId)
+            ->where('level_id', $classId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->get();
+
+        $unpaidStudents = [];
+        foreach ($students as $student) {
+            $entitlement = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $termId);
+            if (!in_array($entitlement->status, ['paid', 'override'], true)) {
+                $unpaidStudents[] = $student;
+            }
         }
 
-        return (float) ($plan?->price_per_student ?? $plan?->price ?? $this->platformFeeAmount());
+        $count = count($unpaidStudents);
+        if ($count === 0) {
+            return [
+                'success' => true,
+                'message' => "All students in {$class->name} are already cleared for {$session->name} {$term->name}.",
+                'cleared_count' => 0,
+                'total_fee' => 0,
+                'wallet_balance' => (float) (DB::table('wallets')->where('school_id', $schoolId)->value('balance') ?? 0),
+            ];
+        }
+
+        $totalFee = $count * $feePerStudent;
+        $referenceId = 'clear_cls_' . $classId . '_s' . $sessionId . '_t' . $termId . '_' . Str::random(6);
+        $description = "Class Bulk Clearance ({$count} students @ ₦" . number_format($feePerStudent, 2) . "): {$class->name} - {$session->name} ({$term->name})";
+
+        app(WalletService::class)->debitSchoolWalletOrFail(
+            $schoolId,
+            $totalFee,
+            $actorId ?? 0,
+            $description,
+            $referenceId
+        );
+
+        foreach ($unpaidStudents as $student) {
+            $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $termId);
+            $ent->update([
+                'status' => 'paid',
+                'source' => 'wallet',
+                'covered_at' => now(),
+                'grace_until' => null,
+                'meta' => array_merge($ent->meta ?: [], [
+                    'cleared_via' => 'wallet_class_bulk',
+                    'fee_amount' => $feePerStudent,
+                    'class_id' => $classId,
+                    'cleared_by' => $actorId,
+                    'cleared_at' => now()->toIso8601String(),
+                    'reference_id' => $referenceId,
+                ]),
+            ]);
+        }
+
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+
+        return [
+            'success' => true,
+            'message' => "Successfully cleared {$count} students in {$class->name} for {$session->name} {$term->name}.",
+            'cleared_count' => $count,
+            'total_fee' => $totalFee,
+            'fee_per_student' => $feePerStudent,
+            'wallet_balance' => (float) ($wallet?->balance ?? 0),
+        ];
+    }
+
+    public function clearSchoolTermFromWallet(int $schoolId, int $sessionId, int $termId, ?int $actorId = null): array
+    {
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
+        $term = Term::where('school_id', $schoolId)->findOrFail($termId);
+        $school = SchoolSetting::findOrFail($schoolId);
+
+        $students = User::where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->get();
+
+        $unpaidStudents = [];
+        foreach ($students as $student) {
+            $entitlement = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $termId);
+            if (!in_array($entitlement->status, ['paid', 'override'], true)) {
+                $unpaidStudents[] = $student;
+            }
+        }
+
+        $count = count($unpaidStudents);
+        if ($count === 0) {
+            return [
+                'success' => true,
+                'message' => "All active students in {$school->school_name} are already cleared for {$session->name} {$term->name}.",
+                'cleared_count' => 0,
+                'total_fee' => 0,
+                'wallet_balance' => (float) (DB::table('wallets')->where('school_id', $schoolId)->value('balance') ?? 0),
+            ];
+        }
+
+        $totalFee = $count * $feePerStudent;
+        $referenceId = 'clear_sch_t_' . $sessionId . '_t' . $termId . '_' . Str::random(6);
+        $description = "Whole-School Term Clearance ({$count} students @ ₦" . number_format($feePerStudent, 2) . "): {$session->name} ({$term->name})";
+
+        app(WalletService::class)->debitSchoolWalletOrFail(
+            $schoolId,
+            $totalFee,
+            $actorId ?? 0,
+            $description,
+            $referenceId
+        );
+
+        foreach ($unpaidStudents as $student) {
+            $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $termId);
+            $ent->update([
+                'status' => 'paid',
+                'source' => 'wallet',
+                'covered_at' => now(),
+                'grace_until' => null,
+                'meta' => array_merge($ent->meta ?: [], [
+                    'cleared_via' => 'wallet_school_term_bulk',
+                    'fee_amount' => $feePerStudent,
+                    'cleared_by' => $actorId,
+                    'cleared_at' => now()->toIso8601String(),
+                    'reference_id' => $referenceId,
+                ]),
+            ]);
+        }
+
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+
+        return [
+            'success' => true,
+            'message' => "Successfully cleared {$count} students for {$session->name} {$term->name}.",
+            'cleared_count' => $count,
+            'total_fee' => $totalFee,
+            'fee_per_student' => $feePerStudent,
+            'wallet_balance' => (float) ($wallet?->balance ?? 0),
+        ];
+    }
+
+    public function clearSchoolSessionFromWallet(int $schoolId, int $sessionId, ?int $actorId = null): array
+    {
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
+        $school = SchoolSetting::findOrFail($schoolId);
+
+        $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
+        if ($terms->isEmpty()) {
+            throw new \RuntimeException('No academic terms found for this session.');
+        }
+
+        $students = User::where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->get();
+
+        $unpaidSlots = [];
+        foreach ($terms as $term) {
+            foreach ($students as $student) {
+                $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $term->id);
+                if (!in_array($ent->status, ['paid', 'override'], true)) {
+                    $unpaidSlots[] = ['student' => $student, 'term' => $term, 'entitlement' => $ent];
+                }
+            }
+        }
+
+        $slotCount = count($unpaidSlots);
+        if ($slotCount === 0) {
+            return [
+                'success' => true,
+                'message' => "All active students in {$school->school_name} are already cleared for all terms in {$session->name}.",
+                'cleared_slots' => 0,
+                'total_fee' => 0,
+                'terms_count' => $terms->count(),
+                'wallet_balance' => (float) (DB::table('wallets')->where('school_id', $schoolId)->value('balance') ?? 0),
+            ];
+        }
+
+        $totalFee = $slotCount * $feePerStudent;
+        $referenceId = 'clear_sch_s_' . $sessionId . '_' . Str::random(6);
+        $termNames = $terms->pluck('name')->join(', ');
+        $description = "Full Academic Session Clearance ({$slotCount} term-slots @ ₦" . number_format($feePerStudent, 2) . "): {$session->name} ({$termNames})";
+
+        app(WalletService::class)->debitSchoolWalletOrFail(
+            $schoolId,
+            $totalFee,
+            $actorId ?? 0,
+            $description,
+            $referenceId
+        );
+
+        foreach ($unpaidSlots as $slot) {
+            $ent = $slot['entitlement'];
+            $ent->update([
+                'status' => 'paid',
+                'source' => 'wallet',
+                'covered_at' => now(),
+                'grace_until' => null,
+                'meta' => array_merge($ent->meta ?: [], [
+                    'cleared_via' => 'wallet_school_session_bulk',
+                    'fee_amount' => $feePerStudent,
+                    'cleared_by' => $actorId,
+                    'cleared_at' => now()->toIso8601String(),
+                    'reference_id' => $referenceId,
+                ]),
+            ]);
+        }
+
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+
+        return [
+            'success' => true,
+            'message' => "Successfully cleared {$slotCount} student term-slots across all {$terms->count()} terms in {$session->name}.",
+            'cleared_slots' => $slotCount,
+            'total_fee' => $totalFee,
+            'terms_count' => $terms->count(),
+            'fee_per_student' => $feePerStudent,
+            'wallet_balance' => (float) ($wallet?->balance ?? 0),
+        ];
+    }
+
+    public function clearanceSummary(int $schoolId, ?int $sessionId = null, ?int $termId = null): array
+    {
+        [$currentSession, $currentTerm] = $this->currentPeriod($schoolId);
+        $sessionId = $sessionId ?: $currentSession?->id;
+        $termId = $termId ?: $currentTerm?->id;
+
+        $totalStudents = $this->activeStudents($schoolId)->count();
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+        $walletBalance = (float) ($wallet?->balance ?? 0);
+
+        $clearedCount = 0;
+        $pendingCount = $totalStudents;
+
+        if ($sessionId && $termId) {
+            $clearedCount = StudentBillingEntitlement::where('school_id', $schoolId)
+                ->where('session_id', $sessionId)
+                ->where('term_id', $termId)
+                ->whereIn('status', ['paid', 'override'])
+                ->count();
+
+            $pendingCount = max(0, $totalStudents - $clearedCount);
+        }
+
+        $termsCount = Term::where('school_id', $schoolId)->whereNull('archived_at')->count();
+
+        return [
+            'total_students' => $totalStudents,
+            'cleared_count' => $clearedCount,
+            'pending_count' => $pendingCount,
+            'terms_count' => $termsCount,
+            'fee_per_student' => $feePerStudent,
+            'term_clearance_fee' => $pendingCount * $feePerStudent,
+            'session_clearance_fee' => $totalStudents * max(1, $termsCount) * $feePerStudent,
+            'wallet_balance' => $walletBalance,
+            'session_id' => $sessionId,
+            'term_id' => $termId,
+        ];
     }
 
     public function billingProfile(int $schoolId): array
     {
-        $subscription = $this->activeSubscriptionForSchool($schoolId);
-        $plan = $subscription?->plan;
         $settings = $this->settingsForSchool($schoolId);
         $activeStudentCount = $this->activeStudents($schoolId)->count();
-        $pricePerStudent = $plan
-            ? (float) ($plan->price_per_student ?? $plan->price ?? 0)
-            : (float) ($settings->platform_fee_per_student ?: $this->platformFeeAmount());
-        $studentLimit = $plan?->max_students === null ? null : (int) $plan->max_students;
+        $pricePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
         $revenueModel = $settings->payment_mode === 'online'
             ? 'online_transaction_fee'
             : 'offline_term_invoice';
-        $subscriptionCoverage = $subscription && $this->isRevenueCoveringSubscription($subscription)
-            ? $this->subscriptionRevenueCoveragePayload($subscription, 'plus_subscription_active')
-            : null;
-
-        if ($subscriptionCoverage) {
-            $pricePerStudent = 0;
-            $revenueModel = 'subscription_covered';
-        }
 
         return [
-            'package' => $plan ? [
-                'id' => $plan->id,
-                'name' => $plan->name,
-                'billing_interval' => $plan->billing_interval ?? 'term',
-                'duration_in_days' => (int) ($plan->duration_in_days ?? 0),
-                'features' => $plan->features ?? [],
-                'access_model' => 'subscription_package',
-            ] : [
+            'package' => [
                 'id' => null,
-                'name' => 'Core',
+                'name' => 'SchoolProfit Free Core',
                 'billing_interval' => 'term',
                 'duration_in_days' => 0,
                 'features' => $this->coreFeatures(),
-                'access_model' => $revenueModel,
+                'access_model' => 'pay_as_you_go',
             ],
-            'subscription' => $subscription ? [
-                'id' => $subscription->id,
-                'status' => $subscription->status,
-                'starts_at' => $subscription->starts_at,
-                'ends_at' => $subscription->ends_at,
-            ] : null,
+            'subscription' => null,
             'price_per_student' => $pricePerStudent,
             'active_student_count' => $activeStudentCount,
             'billable_student_count' => $activeStudentCount,
-            'student_limit' => $studentLimit,
-            'student_limit_label' => $studentLimit === 0 ? 'Unlimited' : $studentLimit,
+            'student_limit' => null,
             'current_invoice_amount' => $activeStudentCount * $pricePerStudent,
+            'next_billing_estimate_amount' => $activeStudentCount * $pricePerStudent,
             'revenue_model' => $revenueModel,
             'payment_mode' => $settings->payment_mode,
-            'subscription_revenue_coverage' => $subscriptionCoverage,
+            'subscription_coverage' => null,
         ];
     }
 

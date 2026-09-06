@@ -94,7 +94,7 @@ class ResultTemplateSettingController extends Controller
 
             if (! ($access['allowed'] ?? false)) {
                 return response()->json([
-                    'message' => $access['message'] ?? 'Upgrade to GradeQuestPlus to use the custom report-card designer.',
+                    'message' => $access['message'] ?? 'Upgrade to GradiosEduPlus to use the custom report-card designer.',
                     'reason' => $access['reason'] ?? 'feature_not_available',
                 ], (int) ($access['status'] ?? 403));
             }

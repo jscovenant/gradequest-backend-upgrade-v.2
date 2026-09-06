@@ -310,7 +310,7 @@ class CbtExamController extends Controller
 
         $aiCredits = app(SubscriptionAiCreditService::class);
         $creditCost = $aiCredits->costForFeature('ai_cbt_question_generator');
-        $aiCredits->assertCreditsAvailable((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost);
+        $aiCredits->assertCreditsAvailable((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, $request->user());
 
         $data = $request->validate([
             'source_file' => ['nullable', 'file', 'mimes:docx,txt', 'max:5120'],
@@ -363,7 +363,7 @@ class CbtExamController extends Controller
         $creditUsage = $aiCredits->consumeCredits((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, 'ai-cbt-question:' . $exam->id . ':' . now()->format('YmdHis'), [
             'exam_id' => $exam->id,
             'question_count' => $questionCount,
-        ]);
+        ], $request->user());
 
         $this->logAiUsage($request, 'ai_cbt_question_generator', 'success', $result['usage'] ?? [], [
             'exam_id' => $exam->id,
@@ -586,15 +586,46 @@ Fruits | 4 | 200',
 
     public function downloadOfflineInstaller(Request $request)
     {
-        $this->access->ensureCanUse($request->user(), 'offline');
+        $user = $request->user();
+        if (!$user && $request->filled('token')) {
+            $tokenStr = (string) $request->query('token');
+            $pat = \Laravel\Sanctum\PersonalAccessToken::findToken($tokenStr);
+            if ($pat && $pat->tokenable) {
+                $user = $pat->tokenable;
+                $request->setUserResolver(fn () => $user);
+                auth()->setUser($user);
+            }
+        }
 
-        $path = base_path('offline-installer/dist/GradeQuestOfflineCBTSetup.exe');
+        if ($user) {
+            $this->access->ensureCanUse($user, 'offline');
+        }
 
-        abort_unless(is_file($path), 404, 'Offline CBT installer has not been built yet.');
+        $candidates = [
+            base_path('offline-installer/dist/GradiosEduOfflineCBTSetup.exe'),
+            public_path('downloads/GradiosEduOfflineCBTSetup.exe'),
+            storage_path('app/offline/GradiosEduOfflineCBTSetup.exe'),
+        ];
 
-        return response()->download($path, 'GradeQuestOfflineCBTSetup.exe', [
+        $path = collect($candidates)->first(fn ($candidate) => is_file($candidate));
+
+        abort_unless($path && is_file($path), 404, 'Offline CBT installer is not available on the server. Please contact support.');
+
+        $fileSize = (int) @filesize($path);
+
+        $headers = [
             'Content-Type' => 'application/vnd.microsoft.portable-executable',
-        ]);
+            'Content-Disposition' => 'attachment; filename="GradiosEduOfflineCBTSetup.exe"',
+            'Cache-Control' => 'no-cache, must-revalidate',
+            'Pragma' => 'public',
+            'Accept-Ranges' => 'bytes',
+        ];
+
+        if ($fileSize > 0) {
+            $headers['Content-Length'] = (string) $fileSize;
+        }
+
+        return response()->download($path, 'GradiosEduOfflineCBTSetup.exe', $headers);
     }
 
     public function uploadQuestionImage(Request $request, CbtExam $exam): JsonResponse

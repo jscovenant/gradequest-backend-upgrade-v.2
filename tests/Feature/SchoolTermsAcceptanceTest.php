@@ -40,7 +40,7 @@ class SchoolTermsAcceptanceTest extends TestCase
             'bonus_given' => false,
         ]);
 
-        AcademicSession::create(['school_id' => $school->id, 'name' => '2026/2027', 'status' => 'Active']);
+        AcademicSession::create(['name' => '2026/2027', 'status' => 'Active']);
         foreach (['First Term', 'Second Term', 'Third Term'] as $name) {
             Term::create(['school_id' => $school->id, 'name' => $name, 'status' => 'Inactive']);
         }

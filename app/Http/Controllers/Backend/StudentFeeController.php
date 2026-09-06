@@ -13,12 +13,24 @@ use App\Models\AcademicSession;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 
 class StudentFeeController extends Controller
 {
-    
+    public function index(Request $request)
+    {
+        $schoolId = (int) Auth::user()->school_id;
 
+        $fees = StudentFee::with(['student', 'feeType', 'term', 'academicSession'])
+            ->when(Schema::hasColumn('student_fees', 'school_id'), fn ($q) => $q->where('school_id', $schoolId))
+            ->when($request->query('student_id'), fn ($q, $id) => $q->where('student_id', $id))
+            ->when($request->query('term_id'), fn ($q, $id) => $q->where('term_id', $id))
+            ->when($request->query('session_id'), fn ($q, $id) => $q->where('session_id', $id))
+            ->latest()
+            ->paginate($request->integer('per_page', 15));
 
+        return response()->json($fees);
+    }
 
 public function MyFee(Request $request)
 {

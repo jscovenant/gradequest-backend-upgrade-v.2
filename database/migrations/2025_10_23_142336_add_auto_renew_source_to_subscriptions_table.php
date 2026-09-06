@@ -12,7 +12,9 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('subscriptions', function (Blueprint $table) {
-         $table->string('auto_renew_source')->default('paystack')->after('auto_renew');
+            if (! Schema::hasColumn('subscriptions', 'auto_renew_source')) {
+                $table->string('auto_renew_source')->default('paystack')->after('auto_renew');
+            }
         });
     }
 

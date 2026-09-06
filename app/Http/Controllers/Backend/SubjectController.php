@@ -10,6 +10,7 @@ use App\Services\AcademicSetupArchiveService;
 use App\Services\Results\SubjectService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Schema;
 
 class SubjectController extends Controller
 {
@@ -23,7 +24,7 @@ class SubjectController extends Controller
         }
 
         $subjects = Subject::query()
-            ->where('school_id', $schoolId)
+            ->when(Schema::hasColumn('subjects', 'school_id'), fn ($query) => $query->where('school_id', $schoolId))
             ->when($request->boolean('archived'), fn ($query) => $query->whereNotNull('archived_at'))
             ->when(! $request->boolean('archived') && ! $request->boolean('include_archived'), fn ($query) => $query->whereNull('archived_at'))
             ->when($this->isGeneralDepartment($departmentId), function ($query) {
@@ -52,7 +53,8 @@ class SubjectController extends Controller
     {
         $schoolId = Auth::user()->school_id;
 
-        $sections = Section::where('school_id', $schoolId)
+        $sections = Section::query()
+            ->when(Schema::hasColumn('sections', 'school_id'), fn ($q) => $q->where('school_id', $schoolId))
             ->whereNull('archived_at')
             ->get();
 

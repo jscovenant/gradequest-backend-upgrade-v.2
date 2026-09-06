@@ -65,6 +65,9 @@ class SalesPayoutController extends Controller
     {
         $data = $request->validate([
             'default_commission_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'default_term_1_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'default_retention_rate' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'max_commission_terms' => ['nullable', 'integer', 'min:1', 'max:12'],
             'minimum_payout_amount' => ['nullable', 'numeric', 'min:0'],
             'monthly_payout_day' => ['nullable', 'integer', 'min:1', 'max:28'],
             'commission_waiting_days' => ['nullable', 'integer', 'min:0', 'max:90'],
@@ -73,6 +76,10 @@ class SalesPayoutController extends Controller
             'large_commission_review_threshold' => ['nullable', 'numeric', 'min:0'],
             'currency' => ['nullable', Rule::in(['NGN'])],
         ]);
+
+        if (array_key_exists('default_term_1_rate', $data)) {
+            $data['default_commission_rate'] = $data['default_term_1_rate'];
+        }
 
         $policy = SalesPayoutPolicy::current();
         $policy->update($data);

@@ -183,8 +183,24 @@ class SettingController extends Controller
             return null;
         }
 
-        return $user->school_id
+        $setting = $user->school_id
             ? SchoolSetting::find($user->school_id)
             : SchoolSetting::where('user_id', $user->id)->first();
+
+        if (!$setting && $user->school_id) {
+            $setting = SchoolSetting::create([
+                'id' => $user->school_id,
+                'user_id' => $user->id,
+                'school_name' => $user->name ?? ('School #' . $user->school_id),
+                'address' => 'N/A',
+                'phone' => $user->phone ?? 'N/A',
+                'email' => $user->email ?? null,
+                'primary_color' => '#0d6efd',
+                'secondary_color' => '#ffc107',
+                'background_color' => '#ffffff',
+            ]);
+        }
+
+        return $setting;
     }
 }

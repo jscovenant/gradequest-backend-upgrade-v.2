@@ -99,7 +99,7 @@ class CbtSyncFailureNotification extends Notification
             ->line("**Entity:** {$this->item->entity_type} #{$this->item->entity_id}")
             ->action('View Sync Dashboard', url('/admin/cbt/sync-status'))
             ->line('You can retry failed items from the CBT Sync dashboard.')
-            ->salutation('— GradeQuest');
+            ->salutation('— GradiosEdu');
     }
 
     public function toDatabase(object $notifiable): array

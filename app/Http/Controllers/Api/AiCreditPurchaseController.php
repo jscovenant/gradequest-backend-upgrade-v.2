@@ -4,7 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\AiCreditPurchase;
-use App\Models\GradequestBillingPolicy;
+use App\Models\GradiosEduBillingPolicy;
 use App\Models\Wallet;
 use App\Models\WalletTransaction;
 use App\Services\SubscriptionAiCreditService;
@@ -22,7 +22,8 @@ class AiCreditPurchaseController extends Controller
 
     public function quote(Request $request): JsonResponse
     {
-        $this->assertSchoolAdmin($request);
+        $user = $request->user();
+        $isAdmin = in_array(strtolower((string) ($user?->role ?? '')), ['admin', 'super-admin', 'principal'], true);
         $quantity = max(1, (int) $request->query('quantity', 1));
         $unitPrice = $this->unitPrice();
 
@@ -31,7 +32,8 @@ class AiCreditPurchaseController extends Controller
             'quantity' => $quantity,
             'total_amount' => round($quantity * $unitPrice, 2),
             'currency' => 'NGN',
-            'wallet_balance' => (float) (Wallet::where('user_id', $request->user()->id)->value('balance') ?? 0),
+            'can_purchase' => $isAdmin,
+            'wallet_balance' => $isAdmin ? (float) (Wallet::where('user_id', $user->id)->value('balance') ?? 0) : 0,
         ]);
     }
 
@@ -198,12 +200,13 @@ class AiCreditPurchaseController extends Controller
     }
     private function unitPrice(): float
     {
-        return (float) (GradequestBillingPolicy::query()->value('ai_credit_unit_price') ?? 25);
+        return (float) (GradiosEduBillingPolicy::query()->value('ai_credit_unit_price') ?? 25);
     }
 
     private function assertSchoolAdmin(Request $request): void
     {
-        abort_unless(strtolower((string) $request->user()?->role) === 'admin', 403, 'Only the school administrator can purchase AI credits.');
+        $role = strtolower((string) ($request->user()?->role ?? ''));
+        abort_unless(in_array($role, ['admin', 'super-admin', 'principal'], true), 403, 'Only the school administrator can purchase AI credits.');
     }
 }
 

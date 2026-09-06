@@ -60,21 +60,21 @@
 <body>
     <div class="email-container">
         <div class="email-header">
-            <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
+            <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
             <div>Email Verification</div>
         </div>
         <div class="email-body">
             <p>Hi {{ $user->name ?? 'User' }},</p>
-            <p>Thank you for registering with <strong>GradeQuest</strong>!</p>
+            <p>Thank you for registering with <strong>GradiosEdu</strong>!</p>
             <p>Please verify your email address using the code below:</p>
             <div class="verification-code">
                 {{ $user->email_verification_code }}
             </div>
             <p>This code will expire in 30 minutes. If you didn't request this, please ignore the email.</p>
-            <p>Best regards,<br><strong>GradeQuest Team</strong></p>
+            <p>Best regards,<br><strong>GradiosEdu Team</strong></p>
         </div>
         <div class="email-footer">
-            © {{ date('Y') }} GradeQuest. All rights reserved.
+            © {{ date('Y') }} GradiosEdu. All rights reserved.
             <br>
             <a href="#">Privacy Policy</a> | <a href="#">Contact Support</a>
         </div>

@@ -79,7 +79,7 @@ class SchoolDomainService
             throw ValidationException::withMessages(['domain' => 'Verify domain ownership before activation.']);
         }
 
-        if (! $this->routingPointsToGradeQuest($domain->domain)) {
+        if (! $this->routingPointsToSchoolProfit($domain->domain)) {
             $message = 'Domain routing is not ready. Add the required CNAME record and try again.';
             $domain->forceFill(['last_checked_at' => now(), 'last_error' => $message])->save();
             throw ValidationException::withMessages(['domain' => $message]);
@@ -102,7 +102,7 @@ class SchoolDomainService
 
     public function checkHealth(SchoolDomain $domain): bool
     {
-        $healthy = $this->routingPointsToGradeQuest($domain->domain);
+        $healthy = $this->routingPointsToSchoolProfit($domain->domain);
 
         if ($healthy) {
             $domain->forceFill([
@@ -118,7 +118,7 @@ class SchoolDomainService
         $threshold = max(1, (int) config('domains.health_failure_threshold', 3));
         $attributes = [
             'last_checked_at' => now(),
-            'last_error' => 'The domain no longer points to GradeQuest.',
+            'last_error' => 'The domain no longer points to SchoolProfit.',
             'consecutive_health_failures' => $failures,
         ];
 
@@ -154,7 +154,7 @@ class SchoolDomainService
         return trim((string) config('domains.verification_prefix'), '.') . '.' . $domain->domain;
     }
 
-    protected function routingPointsToGradeQuest(string $domain): bool
+    protected function routingPointsToSchoolProfit(string $domain): bool
     {
         $target = strtolower(trim((string) config('domains.cname_target'), '. '));
         $records = $this->dnsRecords($domain, DNS_CNAME | DNS_A | DNS_AAAA);

@@ -76,7 +76,7 @@ class ParentContactValidationController extends Controller
         $sent = $whatsApp->sendToParent(
             $schoolId,
             $normalized,
-            "*GradeQuest WhatsApp Verification*\n\nHello {$name}, your verification code for {$schoolName} is *{$code}*. It expires in 10 minutes."
+            "*GradiosEdu WhatsApp Verification*\n\nHello {$name}, your verification code for {$schoolName} is *{$code}*. It expires in 10 minutes."
         );
 
         if (! $sent) {

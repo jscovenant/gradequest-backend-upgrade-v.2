@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\GradequestBillingPolicy;
+use App\Models\GradiosEduBillingPolicy;
 use App\Models\SchoolSetting;
 use App\Models\Wallet;
 use App\Models\WalletTransaction;
@@ -167,7 +167,7 @@ class WhatsappCreditPurchaseController extends Controller
 
     private function unitPrice(): float
     {
-        return (float) (GradequestBillingPolicy::query()->value('whatsapp_credit_unit_price') ?? 10);
+        return (float) (GradiosEduBillingPolicy::query()->value('whatsapp_credit_unit_price') ?? 10);
     }
 
     private function assertSchoolAdmin(Request $request): void

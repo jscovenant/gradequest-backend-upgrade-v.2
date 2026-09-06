@@ -26,7 +26,7 @@ class SchoolAdminLoginMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your GradeQuest School Admin Login Details',
+            subject: 'Your SchoolProfit School Admin Login Details',
         );
     }
 

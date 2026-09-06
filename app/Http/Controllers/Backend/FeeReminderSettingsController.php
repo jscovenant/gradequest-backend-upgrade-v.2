@@ -12,16 +12,16 @@ class FeeReminderSettingsController extends Controller
     public function show()
     {
         $schoolId = (int)(Auth::user()->school_id ?? 0);
+        $s = $this->getOrCreateSetting($schoolId);
 
-        $s = SchoolSetting::firstOrCreate(['id' => $schoolId], []);
         return response()->json([
-            'fee_reminders_enabled' => (bool)$s->fee_reminders_enabled,
-            'interval_days' => (int)$s->fee_reminder_interval_days,
-            'max_count' => (int)$s->fee_reminder_max_count,
-            'send_email' => (bool)$s->fee_reminder_send_email,
-            'send_whatsapp' => (bool)$s->fee_reminder_send_whatsapp,
-            'quiet_hours_start' => $s->fee_reminder_quiet_hours_start,
-            'quiet_hours_end' => $s->fee_reminder_quiet_hours_end,
+            'fee_reminders_enabled' => (bool)($s?->fee_reminders_enabled ?? false),
+            'interval_days' => (int)($s?->fee_reminder_interval_days ?? 7),
+            'max_count' => (int)($s?->fee_reminder_max_count ?? 3),
+            'send_email' => (bool)($s?->fee_reminder_send_email ?? true),
+            'send_whatsapp' => (bool)($s?->fee_reminder_send_whatsapp ?? false),
+            'quiet_hours_start' => $s?->fee_reminder_quiet_hours_start,
+            'quiet_hours_end' => $s?->fee_reminder_quiet_hours_end,
         ]);
     }
 
@@ -53,7 +53,11 @@ class FeeReminderSettingsController extends Controller
             ], 422);
         }
 
-        $s = SchoolSetting::firstOrCreate(['id' => $schoolId], []);
+        $s = $this->getOrCreateSetting($schoolId);
+
+        if (!$s) {
+            return response()->json(['message' => 'School settings not found.'], 404);
+        }
 
         if ($data['fee_reminders_enabled'] && $data['send_whatsapp'] && ! (bool) $s->whatsapp_enabled) {
             return response()->json([
@@ -72,5 +76,30 @@ class FeeReminderSettingsController extends Controller
         $s->save();
 
         return response()->json(['message' => 'Fee reminder settings updated.']);
+    }
+
+    private function getOrCreateSetting(int $schoolId): ?SchoolSetting
+    {
+        if (!$schoolId) {
+            return null;
+        }
+
+        $s = SchoolSetting::find($schoolId);
+        if (!$s) {
+            $user = Auth::user();
+            $s = SchoolSetting::create([
+                'id' => $schoolId,
+                'user_id' => $user->id,
+                'school_name' => $user->name ?? ('School #' . $schoolId),
+                'address' => 'N/A',
+                'phone' => $user->phone ?? 'N/A',
+                'email' => $user->email ?? null,
+                'primary_color' => '#0d6efd',
+                'secondary_color' => '#ffc107',
+                'background_color' => '#ffffff',
+            ]);
+        }
+
+        return $s;
     }
 }

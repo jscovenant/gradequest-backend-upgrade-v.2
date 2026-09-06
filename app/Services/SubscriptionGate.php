@@ -5,11 +5,13 @@ namespace App\Services;
 use App\Models\FeatureUsage;
 use App\Models\SchoolBankAccount;
 use App\Models\SchoolBillingSetting;
+use App\Models\SchoolBillingTemporaryAccess;
 use App\Models\Subscription;
 use App\Models\SubscriptionPlanFeature;
 use App\Models\User;
 use Carbon\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class SubscriptionGate
@@ -39,52 +41,81 @@ class SubscriptionGate
             return $this->deny('school_owner_missing', 'School subscription owner was not found.', 403);
         }
 
-        if ($this->isCoreFeature($featureKey) && $this->schoolHasOnlineCoreAccess((int) $owner->school_id)) {
+        $activeTemp = SchoolBillingTemporaryAccess::withoutGlobalScopes()
+            ->where('school_id', $owner->school_id)
+            ->where('status', 'active')
+            ->where(function ($query) {
+                $query->whereNull('starts_at')->orWhere('starts_at', '<=', now());
+            })
+            ->where('ends_at', '>', now())
+            ->latest('ends_at')
+            ->first();
+
+        if ($activeTemp) {
+            $scope = $activeTemp->scope;
+            $isAllowedByScope = ($scope === 'all')
+                || ($scope === 'school_crud' && in_array($featureKey, [
+                    'student_management', 'teacher_management', 'parent_management', 'bursar_management',
+                    'settings_management', 'fee_management', 'online_payment', 'attendance_management', 'staff_attendance'
+                ], true))
+                || ($scope === 'student_academic' && in_array($featureKey, [
+                    'result_management', 'attendance_management', 'cbt_online', 'cbt_offline',
+                    'ai_cbt_question_generator', 'ai_result_comment_generator', 'ai_lesson_plan_generator'
+                ], true));
+
+            if ($isAllowedByScope) {
+                return $this->allow($owner, null, [
+                    'feature_key' => $this->normalizeFeatureKey($featureKey),
+                    'feature_name' => 'Temporary Access (' . ucfirst(str_replace('_', ' ', $scope)) . ')',
+                    'is_enabled' => true,
+                    'access_model' => 'temporary_access_grant',
+                ], null);
+            }
+        }
+
+        if ($this->isCoreFeature($featureKey)) {
             return $this->allow($owner, null, [
                 'feature_key' => $this->normalizeFeatureKey($featureKey),
-                'feature_name' => 'GradeQuest Core',
+                'feature_name' => 'SchoolProfit Core (Free)',
                 'is_enabled' => true,
-                'access_model' => 'online_transaction_fee',
+                'access_model' => 'free_core',
             ], null);
         }
 
-        $subscription = $this->activeSubscriptionFor($owner);
-
-        if (! $subscription) {
-            return $this->deny(
-                'no_active_subscription',
-                'No active subscription found. Set up online payments for Core access or subscribe to unlock this feature.',
-                402
-            );
+        // WhatsApp Messaging Add-on
+        if (in_array($featureKey, ['whatsapp_notifications', 'whatsapp_messaging'], true)) {
+            return $this->allow($owner, null, [
+                'feature_key' => $this->normalizeFeatureKey($featureKey),
+                'feature_name' => 'WhatsApp Notifications',
+                'is_enabled' => true,
+                'access_model' => 'addon_credit_bundle',
+            ], null);
         }
 
-        if ($subscription->ends_at && Carbon::parse($subscription->ends_at)->isPast()) {
-            if ($this->isCoreFeature($featureKey) && $this->schoolHasOnlineCoreAccess((int) $owner->school_id)) {
-                return $this->allow($owner, null, [
-                    'feature_key' => $this->normalizeFeatureKey($featureKey),
-                    'feature_name' => 'GradeQuest Core',
-                    'is_enabled' => true,
-                    'access_model' => 'online_transaction_fee',
-                ], null);
-            }
-
-            return $this->deny('subscription_expired', 'Your subscription has expired. Please renew to continue.', 402);
+        // AI Tools Add-on
+        if (in_array($featureKey, [
+            'ai_cbt_question_generator',
+            'ai_result_comment_generator',
+            'ai_lesson_plan_generator',
+            'ai_scheme_work_generator',
+            'ai_lesson_note_generator',
+            'ai_fee_collection_assistant'
+        ], true)) {
+            return $this->allow($owner, null, [
+                'feature_key' => $this->normalizeFeatureKey($featureKey),
+                'feature_name' => 'AI Generation Tools',
+                'is_enabled' => true,
+                'access_model' => 'addon_ai_credits',
+            ], null);
         }
 
-        $plan = $subscription->plan;
-
-        if (! $plan) {
-            return $this->deny('plan_missing', 'Subscription plan was not found.', 402);
-        }
-
-        if ($this->requiresGradeQuestPlus($featureKey) && ! $this->isGradeQuestPlusPlan((string) $plan->name)) {
-            return $this->deny(
-                'gradequest_plus_required',
-                'This feature is available only on the GradeQuest Plus package. Please upgrade to continue.',
-                403,
-                ['feature_key' => $featureKey, 'required_plan' => 'GradeQuest Plus']
-            );
-        }
+        // All other standard school management features are 100% Free
+        return $this->allow($owner, null, [
+            'feature_key' => $this->normalizeFeatureKey($featureKey),
+            'feature_name' => 'SchoolProfit Feature',
+            'is_enabled' => true,
+            'access_model' => 'free_core',
+        ], null);
 
         $feature = $this->featureConfig($subscription, $featureKey);
 
@@ -288,19 +319,46 @@ class SubscriptionGate
         return trim($key, '_');
     }
 
-    private function requiresGradeQuestPlus(string $featureKey): bool
+    private function requiresSchoolProfitPlus(string $featureKey): bool
     {
         return in_array($this->normalizeFeatureKey($featureKey), [
+            'cbt_online',
+            'cbt_offline',
+            'hostel_management',
+            'transport_management',
             'whatsapp_notifications',
+            'ai_cbt_question_generator',
+            'ai_result_comment_generator',
+            'ai_lesson_plan_generator',
+            'ai_scheme_work_generator',
+            'ai_lesson_note_generator',
+            'ai_fee_collection_assistant',
         ], true);
     }
 
-    private function isGradeQuestPlusPlan(string $planName): bool
+    private function isSchoolProfitPlusPlan(string $planName): bool
     {
-        return in_array($this->normalizeFeatureKey($planName), [
+        $normalized = $this->normalizeFeatureKey($planName);
+
+        if (
+            str_contains($normalized, 'plus') ||
+            str_contains($normalized, 'prime') ||
+            str_contains($normalized, 'growth') ||
+            str_contains($normalized, 'starter') ||
+            str_contains($normalized, 'enterprise')
+        ) {
+            return true;
+        }
+
+        return in_array($normalized, [
             'gradequest_plus',
             'gradequestplus',
             'legacy_plus',
+            'gradequest_plus_starter',
+            'gradequest_plus_growth',
+            'gradequest_plus_prime',
+            'gradequest_enterprise',
+            'enterprise',
         ], true);
     }
 
@@ -324,16 +382,33 @@ class SubscriptionGate
             ->where('school_id', $schoolId)
             ->first();
 
+        // Check if school has an active connected bank account with Paystack subaccount or online enabled
+        $hasActiveBankAccount = SchoolBankAccount::query()
+            ->where('school_id', $schoolId)
+            ->where('is_active', true)
+            ->where(function ($query) {
+                $query->where('online_payment_enabled', true)
+                    ->orWhereNotNull('paystack_subaccount_code');
+            })
+            ->exists();
+
+        if ($hasActiveBankAccount) {
+            // Auto-sync SchoolBillingSetting to online mode if not already configured
+            if (! $settings || $settings->payment_mode !== 'online') {
+                SchoolBillingSetting::updateOrCreate(
+                    ['school_id' => $schoolId],
+                    ['payment_mode' => 'online']
+                );
+            }
+
+            return true;
+        }
+
         if (! $settings || $settings->payment_mode !== 'online') {
             return false;
         }
 
-        return SchoolBankAccount::query()
-            ->where('school_id', $schoolId)
-            ->where('is_active', true)
-            ->where('online_payment_enabled', true)
-            ->whereNotNull('paystack_subaccount_code')
-            ->exists();
+        return $hasActiveBankAccount;
     }
 
     private function inspectLimit(

@@ -14,20 +14,29 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote')->hourly();
 
 
-// Run every day at 7am (change as you like)
-Schedule::job(new ProcessAutoFeeInvoicesJob())
-    ->everyFifteenMinutes()
-    ->name('automatic-fee-reminders')
-    ->withoutOverlapping();
+
 
 Schedule::command('subscriptions:send-reminders')
-    ->everyMinute();
+    ->dailyAt('06:00')
+    ->name('subscriptions-send-reminders')
+    ->withoutOverlapping();
 
-Schedule::command('subscriptions:auto-renew-wallet')->everyMinute();
+Schedule::command('subscriptions:auto-renew-wallet')
+    ->hourly()
+    ->name('subscriptions-auto-renew-wallet')
+    ->withoutOverlapping();
 
+Schedule::command('results:scan-incomplete')
+    ->hourly()
+    ->name('results-scan-incomplete')
+    ->withoutOverlapping()
+    ->runInBackground();
 
-Schedule::command('results:scan-incomplete')->everyMinute();
-Schedule::command('results:scan-anomalies')->everyMinute();
+Schedule::command('results:scan-anomalies')
+    ->dailyAt('01:00')
+    ->name('results-scan-anomalies')
+    ->withoutOverlapping()
+    ->runInBackground();
 
 Schedule::call(function (SchoolDomainService $domains) {
     SchoolDomain::query()

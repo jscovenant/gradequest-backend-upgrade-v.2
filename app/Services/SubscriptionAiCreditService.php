@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use App\Models\AiCreditTransaction;
-use App\Models\GradequestBillingPolicy;
+use App\Models\SchoolProfitBillingPolicy;
 use App\Models\Subscription;
 use App\Models\SubscriptionAiUsage;
 use App\Models\User;
@@ -13,7 +13,7 @@ use Illuminate\Validation\ValidationException;
 
 class SubscriptionAiCreditService
 {
-    public function getActiveSchoolSubscription(int $schoolId): Subscription
+    public function getActiveSchoolSubscription(int $schoolId): ?Subscription
     {
         $admin = User::query()
             ->where('school_id', $schoolId)
@@ -21,10 +21,10 @@ class SubscriptionAiCreditService
             ->first();
 
         if (! $admin) {
-            throw ValidationException::withMessages(['school' => 'No admin found for this school.']);
+            return null;
         }
 
-        $subscription = Subscription::query()
+        return Subscription::query()
             ->with('plan')
             ->where('user_id', $admin->id)
             ->where('status', 'active')
@@ -33,25 +33,44 @@ class SubscriptionAiCreditService
             })
             ->latest('id')
             ->first();
-
-        if (! $subscription) {
-            throw ValidationException::withMessages(['subscription' => 'No active subscription found for this school.']);
-        }
-
-        if (! $subscription->plan) {
-            throw ValidationException::withMessages(['subscription_plan' => 'Subscription plan not found.']);
-        }
-
-        return $subscription;
     }
 
     public function getOrCreateCurrentCycleUsage(int $schoolId): SubscriptionAiUsage
     {
         $subscription = $this->getActiveSchoolSubscription($schoolId);
-        [$cycleStart, $cycleEnd] = $this->resolveCycleDates($subscription);
 
-        return DB::transaction(function () use ($subscription, $schoolId, $cycleStart, $cycleEnd) {
-            return $this->getOrCreateUsageForSubscription($subscription, $schoolId, $cycleStart, $cycleEnd);
+        if ($subscription) {
+            [$cycleStart, $cycleEnd] = $this->resolveCycleDates($subscription);
+            return DB::transaction(function () use ($subscription, $schoolId, $cycleStart, $cycleEnd) {
+                return $this->getOrCreateUsageForSubscription($subscription, $schoolId, $cycleStart, $cycleEnd);
+            });
+        }
+
+        // Free Core Pay-As-You-Go: school-level AI usage record
+        return DB::transaction(function () use ($schoolId) {
+            $usage = SubscriptionAiUsage::query()
+                ->where('school_id', $schoolId)
+                ->latest('id')
+                ->first();
+
+            if ($usage) {
+                return $usage;
+            }
+
+            $admin = User::query()
+                ->where('school_id', $schoolId)
+                ->where('role', 'Admin')
+                ->first();
+
+            return SubscriptionAiUsage::query()->create([
+                'subscription_id' => null,
+                'school_id' => $schoolId,
+                'user_id' => $admin?->id ?: 0,
+                'cycle_start' => now()->startOfYear()->toDateString(),
+                'cycle_end' => now()->addYear()->endOfYear()->toDateString(),
+                'allocated_credits' => 50, // Starter complimentary credits for new schools
+                'used_credits' => 0,
+            ]);
         });
     }
 
@@ -105,25 +124,40 @@ class SubscriptionAiCreditService
         };
     }
 
-    public function assertCreditsAvailable(int $schoolId, string $featureKey, ?int $cost = null): SubscriptionAiUsage
+    public function assertCreditsAvailable(int $schoolId, string $featureKey, ?int $cost = null, ?User $user = null): SubscriptionAiUsage
     {
         $usage = $this->getOrCreateCurrentCycleUsage($schoolId);
         $cost = $cost ?? $this->costForFeature($featureKey);
 
         if ($usage->remainingCredits() < $cost) {
             throw ValidationException::withMessages([
-                'ai_credit' => 'Insufficient AI credits. Please contact the school administrator to renew or purchase more AI credits.',
+                'ai_credit' => 'Insufficient school AI credits. Please top up AI credits in Settings -> AI Credits to continue generating.',
             ]);
+        }
+
+        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+            $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
+                ->where('school_id', $schoolId)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if ($allocation) {
+                if (! $allocation->hasSufficientCredits($cost)) {
+                    throw ValidationException::withMessages([
+                        'ai_credit' => "You have insufficient allocated AI credits (Remaining: {$allocation->remainingCredits()} credits, Required: {$cost} credits). Please contact your school administrator to allocate more credits.",
+                    ]);
+                }
+            }
         }
 
         return $usage;
     }
 
-    public function consumeCredits(int $schoolId, string $featureKey, ?int $cost = null, ?string $reference = null, array $metadata = []): SubscriptionAiUsage
+    public function consumeCredits(int $schoolId, string $featureKey, ?int $cost = null, ?string $reference = null, array $metadata = [], ?User $user = null): SubscriptionAiUsage
     {
         $cost = $cost ?? $this->costForFeature($featureKey);
 
-        return DB::transaction(function () use ($schoolId, $featureKey, $cost, $reference, $metadata) {
+        return DB::transaction(function () use ($schoolId, $featureKey, $cost, $reference, $metadata, $user) {
             if ($reference && AiCreditTransaction::query()->where('reference', $reference)->exists()) {
                 return $this->getOrCreateCurrentCycleUsage($schoolId);
             }
@@ -133,8 +167,25 @@ class SubscriptionAiCreditService
 
             if ($usage->remainingCredits() < $cost) {
                 throw ValidationException::withMessages([
-                    'ai_credit' => 'Insufficient AI credits. Please contact the school administrator to renew or purchase more AI credits.',
+                    'ai_credit' => 'Insufficient school AI credits. Please top up your school AI credits to continue.',
                 ]);
+            }
+
+            if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+                $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
+                    ->where('school_id', $schoolId)
+                    ->where('user_id', $user->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($allocation) {
+                    if (! $allocation->hasSufficientCredits($cost)) {
+                        throw ValidationException::withMessages([
+                            'ai_credit' => "You have insufficient allocated AI credits (Remaining: {$allocation->remainingCredits()} credits, Required: {$cost} credits).",
+                        ]);
+                    }
+                    $allocation->increment('used_credits', $cost);
+                }
             }
 
             $usage->update(['used_credits' => (int) $usage->used_credits + $cost]);
@@ -142,15 +193,118 @@ class SubscriptionAiCreditService
             AiCreditTransaction::query()->create([
                 'school_id' => $schoolId,
                 'subscription_ai_usage_id' => $usage->id,
+                'user_id' => $user?->id,
                 'feature_key' => $featureKey,
                 'type' => 'consumption',
                 'credits' => -$cost,
                 'reference' => $reference ?: 'ai-consume:' . bin2hex(random_bytes(16)),
-                'metadata' => $metadata,
+                'metadata' => array_merge($metadata, [
+                    'user_id' => $user?->id,
+                    'user_role' => $user?->role,
+                ]),
             ]);
 
             return $usage->fresh();
         });
+    }
+
+    public function getStaffAllocations(int $schoolId): array
+    {
+        $staffMembers = User::query()
+            ->where('school_id', $schoolId)
+            ->whereIn('role', ['Teacher', 'teacher', 'Staff', 'staff', 'Principal', 'principal', 'Admin', 'admin'])
+            ->get();
+
+        $allocations = \App\Models\SchoolStaffAiCreditAllocation::query()
+            ->where('school_id', $schoolId)
+            ->get()
+            ->keyBy('user_id');
+
+        $result = [];
+        $totalAllocatedToStaff = 0;
+        $totalUsedByStaff = 0;
+
+        foreach ($staffMembers as $staff) {
+            $alloc = $allocations->get($staff->id);
+            $allocated = (int) ($alloc->allocated_credits ?? 0);
+            $used = (int) ($alloc->used_credits ?? 0);
+            $isUnlimited = (bool) ($alloc->is_unlimited ?? false);
+            $remaining = $isUnlimited ? 999999 : max(0, $allocated - $used);
+
+            $totalAllocatedToStaff += $allocated;
+            $totalUsedByStaff += $used;
+
+            $result[] = [
+                'user_id' => $staff->id,
+                'name' => $staff->name,
+                'email' => $staff->email,
+                'role' => $staff->role,
+                'username' => $staff->username,
+                'has_allocation' => $alloc !== null,
+                'allocated_credits' => $allocated,
+                'used_credits' => $used,
+                'remaining_credits' => $remaining,
+                'is_unlimited' => $isUnlimited,
+                'notes' => $alloc?->notes,
+                'last_updated_at' => optional($alloc?->updated_at)->toDateTimeString(),
+            ];
+        }
+
+        usort($result, fn ($a, $b) => strcasecmp((string) $a['name'], (string) $b['name']));
+
+        return [
+            'staff' => $result,
+            'summary' => [
+                'total_staff_count' => count($result),
+                'allocated_staff_count' => $allocations->count(),
+                'total_credits_allocated' => $totalAllocatedToStaff,
+                'total_credits_used_by_staff' => $totalUsedByStaff,
+            ],
+        ];
+    }
+
+    public function allocateStaffCredits(int $schoolId, int $userId, int $credits, int $allocatedBy, bool $isUnlimited = false, ?string $notes = null): \App\Models\SchoolStaffAiCreditAllocation
+    {
+        return DB::transaction(function () use ($schoolId, $userId, $credits, $allocatedBy, $isUnlimited, $notes) {
+            $user = User::query()->where('school_id', $schoolId)->findOrFail($userId);
+
+            $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
+                ->firstOrNew([
+                    'school_id' => $schoolId,
+                    'user_id' => $user->id,
+                ]);
+
+            $allocation->allocated_credits = max(0, $credits);
+            $allocation->is_unlimited = $isUnlimited;
+            $allocation->allocated_by = $allocatedBy;
+            $allocation->notes = $notes;
+            $allocation->save();
+
+            return $allocation->fresh(['user']);
+        });
+    }
+
+    public function bulkAllocateStaffCredits(int $schoolId, array $userIds, int $credits, int $allocatedBy, bool $isUnlimited = false): int
+    {
+        return DB::transaction(function () use ($schoolId, $userIds, $credits, $allocatedBy, $isUnlimited) {
+            $count = 0;
+            $users = User::query()->where('school_id', $schoolId)->whereIn('id', $userIds)->get();
+
+            foreach ($users as $user) {
+                $this->allocateStaffCredits($schoolId, $user->id, $credits, $allocatedBy, $isUnlimited);
+                $count++;
+            }
+
+            return $count;
+        });
+    }
+
+    public function revokeStaffAllocation(int $schoolId, int $userId): bool
+    {
+        return (bool) \App\Models\SchoolStaffAiCreditAllocation::query()
+            ->where('school_id', $schoolId)
+            ->where('user_id', $userId)
+            ->delete();
     }
 
     public function addPurchasedCredits(int $schoolId, int $quantity, ?string $reference = null): SubscriptionAiUsage
@@ -177,22 +331,46 @@ class SubscriptionAiCreditService
             return $usage->fresh();
         });
     }
-    public function getCreditSummary(int $schoolId): array
+
+    public function getCreditSummary(int $schoolId, ?User $user = null): array
     {
         $usage = $this->getOrCreateCurrentCycleUsage($schoolId);
         $policy = $this->policy();
+
+        $userAllocation = null;
+        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+            $alloc = \App\Models\SchoolStaffAiCreditAllocation::query()
+                ->where('school_id', $schoolId)
+                ->where('user_id', $user->id)
+                ->first();
+
+            if ($alloc) {
+                $userAllocation = [
+                    'allocated_credits' => (int) $alloc->allocated_credits,
+                    'used_credits' => (int) $alloc->used_credits,
+                    'remaining_credits' => $alloc->remainingCredits(),
+                    'is_unlimited' => (bool) $alloc->is_unlimited,
+                ];
+            }
+        }
+
+        $packageName = (string) ($usage->subscription?->plan?->name ?? 'SchoolProfit Free Core');
+        $isPlusActive = true;
 
         return [
             'allocated_credits' => (int) $usage->allocated_credits,
             'used_credits' => (int) $usage->used_credits,
             'remaining_credits' => $usage->remainingCredits(),
-            'cycle_start' => optional($usage->cycle_start)->toDateString(),
-            'cycle_end' => optional($usage->cycle_end)->toDateString(),
-            'wallet_valid_from' => optional($usage->cycle_start)->toDateString(),
-            'access_valid_until' => optional($usage->cycle_end)->toDateString(),
+            'user_allocation' => $userAllocation,
+            'is_plus_active' => $isPlusActive,
+            'is_plus_package' => true,
+            'cycle_start' => optional($usage->cycle_start)->toDateString() ?: now()->startOfYear()->toDateString(),
+            'cycle_end' => optional($usage->cycle_end)->toDateString() ?: now()->addYear()->toDateString(),
+            'wallet_valid_from' => optional($usage->cycle_start)->toDateString() ?: now()->startOfYear()->toDateString(),
+            'access_valid_until' => optional($usage->cycle_end)->toDateString() ?: now()->addYear()->toDateString(),
             'credits_given_with_current_plan' => (int) $usage->allocated_credits,
-            'current_package' => $usage->subscription?->plan?->name,
-            'subscription_id' => (int) $usage->subscription_id,
+            'current_package' => 'SchoolProfit Free Core (Pay-As-You-Go)',
+            'subscription_id' => (int) ($usage->subscription_id ?? 0),
             'ai_result_comment_credit_cost' => (int) $policy->ai_result_comment_credit_cost,
             'ai_cbt_question_credit_cost' => (int) $policy->ai_cbt_question_credit_cost,
             'ai_lesson_plan_credit_cost' => (int) $policy->ai_lesson_plan_credit_cost,
@@ -240,13 +418,26 @@ class SubscriptionAiCreditService
             'user_id' => $subscription->user_id,
             'cycle_start' => $start,
             'cycle_end' => $end,
-            'allocated_credits' => $this->policy()->legacy_plus_ai_credits,
+            'allocated_credits' => $this->allocatedCreditsForPlan($subscription->plan),
             'used_credits' => 0,
         ]);
     }
-    private function policy(): GradequestBillingPolicy
+
+    public function allocatedCreditsForPlan(?\App\Models\SubscriptionPlan $plan): int
     {
-        return GradequestBillingPolicy::query()->firstOrCreate([], [
+        $planName = strtolower(trim((string) ($plan?->name ?? '')));
+        if (str_contains($planName, 'prime')) {
+            return 1000;
+        }
+        if (str_contains($planName, 'growth')) {
+            return 300;
+        }
+        return (int) ($this->policy()->legacy_plus_ai_credits ?: 100);
+    }
+
+    private function policy(): SchoolProfitBillingPolicy
+    {
+        return SchoolProfitBillingPolicy::query()->firstOrCreate([], [
             'online_grace_days' => 14,
             'online_minimum_coverage_percent' => 70,
             'online_whole_school_block_enabled' => true,
@@ -279,10 +470,3 @@ class SubscriptionAiCreditService
         return [$startsAt->startOfDay(), $endsAt->endOfDay()];
     }
 }
-
-
-
-
-
-
-

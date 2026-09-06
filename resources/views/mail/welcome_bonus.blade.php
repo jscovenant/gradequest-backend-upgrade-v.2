@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Welcome to GradeQuest - &#8358;5,000 Wallet Credit Added</title>
+  <title>Welcome to GradiosEdu - &#8358;5,000 Wallet Credit Added</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -62,22 +62,22 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradeQuest Logo">
-      <h1>Welcome to GradeQuest 🎓</h1>
+      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
+      <h1>Welcome to GradiosEdu 🎓</h1>
     </div>
 
     <div class="email-body">
       <p>Hello <strong>{{ $user->name ?? ($user->firstname . ' ' . $user->surname ?? 'User') }}</strong>,</p>
 
-      <p>Welcome to <strong>GradeQuest</strong>! 🎉</p>
+      <p>Welcome to <strong>GradiosEdu</strong>! 🎉</p>
 
       <p>
         We’re excited to have you join our community. As a token of appreciation,
-        we’ve credited your wallet with a <strong>&#8358;5,000 GradeQuestPlus wallet credit</strong> to help you get started.
+        we’ve credited your wallet with a <strong>&#8358;5,000 GradiosEduPlus wallet credit</strong> to help you get started.
       </p>
 
       <p>
-        You can use this credit to subscribe to GradeQuestPlus. The credit expires 30 days after activation if it is not used.
+        You can use this credit to subscribe to GradiosEduPlus. The credit expires 30 days after activation if it is not used.
       </p>
 
       <p>
@@ -90,14 +90,14 @@
       </p>
 
       <p>
-        Thank you for choosing <strong>GradeQuest</strong> — where learning meets innovation!
+        Thank you for choosing <strong>GradiosEdu</strong> — where learning meets innovation!
       </p>
 
-      <p>— The GradeQuest Team</p>
+      <p>— The GradiosEdu Team</p>
     </div>
 
     <div class="email-footer">
-      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradeQuest</a>. All rights reserved.</p>
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradiosEdu</a>. All rights reserved.</p>
     </div>
   </div>
 </body>
