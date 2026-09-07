@@ -25,38 +25,11 @@ class PlatformFeeService
                 return 0;
             }
 
-            // Check school active edition tier
-            $schoolSetting = DB::table('school_settings')->where('id', $schoolId)->first();
-            $tier = $schoolSetting->active_edition_tier ?? 'standard_cbt';
-
-            $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
-            $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
-            $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
-
-            if ($tier === 'basic_result' && $basicPrice > 0) {
-                return (int) round($basicPrice);
-            }
-
-            $amount = (int) round($this->billing->pricePerStudentForSchool($schoolId));
-
-            if ($amount > 0) {
-                return $amount;
-            }
-
-            $schoolSettingAmount = DB::table('school_billing_settings')
-                ->where('school_id', $schoolId)
-                ->value('platform_fee_per_student');
-
-            if ((float) $schoolSettingAmount > 0) {
-                return (int) round((float) $schoolSettingAmount);
-            }
-
-            if ($cbtPrice > 0) {
-                return (int) round($cbtPrice);
-            }
+            return (int) round($this->billing->pricePerStudentForSchool($schoolId));
         }
 
-        return (int) config('services.paystack.platform_fee_naira', 500); 
+        $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
+        return (int) round($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
     }
 
     /**

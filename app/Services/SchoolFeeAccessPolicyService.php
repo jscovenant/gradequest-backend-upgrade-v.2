@@ -35,16 +35,15 @@ class SchoolFeeAccessPolicyService
         $raw = $school?->fee_access_policy;
         $policy = is_array($raw) ? $raw : (json_decode((string) $raw, true) ?: []);
 
-        $merged = array_merge(self::DEFAULT_POLICY, $policy);
-
-        // Retrieve dynamic platform policy tier prices
         $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
         $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
         $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
         $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
         $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
 
-        $activeTier = $merged['active_edition_tier'] ?? ($school->active_edition_tier ?? 'standard_cbt');
+        $activeTier = $policy['active_edition_tier'] ?? ($school?->active_edition_tier ?: 'standard_cbt');
+
+        $merged = array_merge(self::DEFAULT_POLICY, $policy);
         $merged['active_edition_tier'] = $activeTier;
 
         $activePlatformFee = match ($activeTier) {
@@ -67,19 +66,17 @@ class SchoolFeeAccessPolicyService
     {
         $current = $this->policyForSchool($schoolId);
 
-        $cbtScope = $data['cbt_scope'] ?? ($current['cbt_scope'] ?? 'selected_period');
-
         $policy = array_merge($current, [
             'enabled' => array_key_exists('enabled', $data) ? (bool) $data['enabled'] : ($current['enabled'] ?? false),
             'result_access_enabled' => array_key_exists('result_access_enabled', $data) ? (bool) $data['result_access_enabled'] : ($current['result_access_enabled'] ?? true),
             'result_min_payment_percent' => max(0, min(100, (float) ($data['result_min_payment_percent'] ?? ($current['result_min_payment_percent'] ?? 100)))),
-            'result_scope' => in_array(($data['result_scope'] ?? 'selected_period'), ['selected_period', 'all_outstanding'], true)
+            'result_scope' => in_array(($data['result_scope'] ?? ''), ['selected_period', 'all_outstanding'], true)
                 ? $data['result_scope']
                 : ($current['result_scope'] ?? 'selected_period'),
             'cbt_access_enabled' => array_key_exists('cbt_access_enabled', $data) ? (bool) $data['cbt_access_enabled'] : ($current['cbt_access_enabled'] ?? false),
             'cbt_min_payment_percent' => max(0, min(100, (float) ($data['cbt_min_payment_percent'] ?? ($current['cbt_min_payment_percent'] ?? 100)))),
-            'cbt_scope' => in_array($cbtScope, ['selected_period', 'all_outstanding'], true)
-                ? $cbtScope
+            'cbt_scope' => in_array(($data['cbt_scope'] ?? ''), ['selected_period', 'all_outstanding'], true)
+                ? $data['cbt_scope']
                 : ($current['cbt_scope'] ?? 'selected_period'),
             'installment_enabled' => array_key_exists('installment_enabled', $data) ? (bool) $data['installment_enabled'] : ($current['installment_enabled'] ?? false),
             'installment_type' => in_array(($data['installment_type'] ?? ''), ['two_installments_70_30', 'two_installments_50_50', 'three_installments_40_30_30', 'full_only', 'custom'], true)

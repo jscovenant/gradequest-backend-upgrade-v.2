@@ -1327,12 +1327,28 @@ $unpaid = StudentBillingEntitlement::query()
 
     public function platformFeeAmount(): int
     {
-        return (int) $this->policy()->platform_fee_per_student;
+        return (int) round($this->policy()->standard_cbt_tier_price_per_student ?? ($this->policy()->platform_fee_per_student ?? 500.00));
     }
 
     public function pricePerStudentForSchool(int $schoolId): float
     {
-        return (float) $this->platformFeeAmount();
+        $school = SchoolSetting::find($schoolId);
+        $rawPolicy = $school?->fee_access_policy;
+        $policyArray = is_array($rawPolicy) ? $rawPolicy : (json_decode((string) $rawPolicy, true) ?: []);
+
+        $tier = $policyArray['active_edition_tier'] ?? ($school?->active_edition_tier ?: 'standard_cbt');
+
+        $globalPolicy = $this->policy();
+        $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
+        $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
+        $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
+        $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
+
+        return match ($tier) {
+            'basic_result' => $basicPrice,
+            'annual_full_session' => round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2),
+            default => $cbtPrice,
+        };
     }
 
     public function clearStudentFromWallet(int $schoolId, int $studentId, int $sessionId, int $termId, ?int $actorId = null): array

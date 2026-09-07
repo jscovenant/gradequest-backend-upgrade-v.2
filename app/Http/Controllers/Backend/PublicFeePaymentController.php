@@ -912,6 +912,7 @@ class PublicFeePaymentController extends Controller
         );
 
         $policy = $this->feeAccessPolicyService->policyForSchool((int) $admin->school_id);
+        $activePlatformFee = (float) ($policy['platform_fee_amount'] ?? $this->platformFeeService->feeAmountNaira($currentTermFee));
 
         return [
             'school' => $this->schoolPayload($admin),
@@ -927,7 +928,8 @@ class PublicFeePaymentController extends Controller
                 'bank_charge_bearer' => $policy['bank_charge_bearer'] ?? 'parent',
                 'bank_charge_amount' => (float) ($policy['bank_charge_amount'] ?? 200.0),
                 'platform_fee_bearer' => $policy['platform_fee_bearer'] ?? 'school',
-                'platform_fee_amount' => 500.0,
+                'platform_fee_amount' => $activePlatformFee,
+                'active_edition_tier' => $policy['active_edition_tier'] ?? 'standard_cbt',
                 'active_gateway' => $policy['active_payment_gateway'] ?? 'wema_alat',
             ],
             'fees' => $fees->map(fn (StudentFee $fee) => [
