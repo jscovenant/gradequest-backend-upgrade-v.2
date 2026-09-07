@@ -44,5 +44,9 @@ class GradequestBillingPolicy extends Model
         'promo_claims_count' => 'integer',
         'sales_partner_term_1_commission_rate' => 'decimal:2',
         'sales_partner_retention_commission_rate' => 'decimal:2',
+        'basic_tier_price_per_student' => 'decimal:2',
+        'standard_cbt_tier_price_per_student' => 'decimal:2',
+        'annual_full_session_multiplier' => 'decimal:2',
+        'annual_session_discount_percent' => 'decimal:2',
     ];
 }

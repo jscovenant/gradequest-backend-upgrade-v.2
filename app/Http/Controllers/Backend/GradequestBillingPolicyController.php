@@ -71,6 +71,10 @@ class GradequestBillingPolicyController extends Controller
             'promo_max_claims' => 'nullable|integer|min:1',
             'sales_partner_term_1_commission_rate' => 'nullable|numeric|min:0|max:100',
             'sales_partner_retention_commission_rate' => 'nullable|numeric|min:0|max:100',
+            'basic_tier_price_per_student' => 'nullable|numeric|min:0|max:1000000',
+            'standard_cbt_tier_price_per_student' => 'nullable|numeric|min:0|max:1000000',
+            'annual_full_session_multiplier' => 'nullable|numeric|min:1|max:12',
+            'annual_session_discount_percent' => 'nullable|numeric|min:0|max:100',
         ]);
 
         if ($validated['temporary_access_max_days'] < $validated['temporary_access_min_days']) {
@@ -282,7 +286,11 @@ class GradequestBillingPolicyController extends Controller
             'online_student_level_block_enabled' => true,
             'offline_grace_days' => 7,
             'offline_school_block_enabled' => true,
-            'platform_fee_per_student' => 1000,
+            'platform_fee_per_student' => 500,
+            'basic_tier_price_per_student' => 300,
+            'standard_cbt_tier_price_per_student' => 500,
+            'annual_full_session_multiplier' => 3.00,
+            'annual_session_discount_percent' => 0.00,
             'whatsapp_credit_unit_price' => 10,
             'legacy_plus_ai_credits' => 100,
             'ai_result_comment_credit_cost' => 1,

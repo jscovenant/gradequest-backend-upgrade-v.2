@@ -25,6 +25,7 @@ class SchoolFeeAccessPolicyService
         'bank_charge_bearer' => 'parent',
         'bank_charge_amount' => 200.0,
         'platform_fee_bearer' => 'school',
+        'active_edition_tier' => 'standard_cbt',
         'active_payment_gateway' => 'wema_alat',
     ];
 
@@ -34,7 +35,32 @@ class SchoolFeeAccessPolicyService
         $raw = $school?->fee_access_policy;
         $policy = is_array($raw) ? $raw : (json_decode((string) $raw, true) ?: []);
 
-        return array_merge(self::DEFAULT_POLICY, $policy);
+        $merged = array_merge(self::DEFAULT_POLICY, $policy);
+
+        // Retrieve dynamic platform policy tier prices
+        $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
+        $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
+        $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
+        $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
+        $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
+
+        $activeTier = $merged['active_edition_tier'] ?? ($school->active_edition_tier ?? 'standard_cbt');
+        $merged['active_edition_tier'] = $activeTier;
+
+        $activePlatformFee = match ($activeTier) {
+            'basic_result' => $basicPrice,
+            'annual_full_session' => round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2),
+            default => $cbtPrice,
+        };
+
+        $merged['basic_tier_price'] = $basicPrice;
+        $merged['standard_cbt_tier_price'] = $cbtPrice;
+        $merged['annual_full_session_price'] = round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2);
+        $merged['annual_session_multiplier'] = $annualMultiplier;
+        $merged['annual_session_discount_percent'] = $annualDiscount;
+        $merged['platform_fee_amount'] = $activePlatformFee;
+
+        return $merged;
     }
 
     public function updatePolicy(int $schoolId, array $data): array
@@ -66,15 +92,34 @@ class SchoolFeeAccessPolicyService
             'bank_charge_bearer' => in_array(($data['bank_charge_bearer'] ?? ''), ['parent', 'school'], true) ? $data['bank_charge_bearer'] : ($current['bank_charge_bearer'] ?? 'parent'),
             'bank_charge_amount' => max(0, (float) ($data['bank_charge_amount'] ?? ($current['bank_charge_amount'] ?? 200.0))),
             'platform_fee_bearer' => in_array(($data['platform_fee_bearer'] ?? ''), ['parent', 'school'], true) ? $data['platform_fee_bearer'] : ($current['platform_fee_bearer'] ?? 'school'),
+            'active_edition_tier' => in_array(($data['active_edition_tier'] ?? ''), ['basic_result', 'standard_cbt', 'annual_full_session'], true) ? $data['active_edition_tier'] : ($current['active_edition_tier'] ?? 'standard_cbt'),
             'active_payment_gateway' => in_array(($data['active_payment_gateway'] ?? ''), ['wema_alat', 'monnify', 'paystack'], true) ? $data['active_payment_gateway'] : ($current['active_payment_gateway'] ?? 'wema_alat'),
         ]);
 
-        SchoolSetting::where('id', $schoolId)->update([
+        $updateColumns = [
             'fee_access_policy' => json_encode($policy),
             'updated_at' => now(),
-        ]);
+        ];
 
-        return $policy;
+        if (! empty($policy['active_edition_tier'])) {
+            $updateColumns['active_edition_tier'] = $policy['active_edition_tier'];
+        }
+        if (! empty($policy['bank_charge_bearer'])) {
+            $updateColumns['bank_charge_bearer'] = $policy['bank_charge_bearer'];
+        }
+        if (isset($policy['bank_charge_amount'])) {
+            $updateColumns['bank_charge_amount'] = $policy['bank_charge_amount'];
+        }
+        if (! empty($policy['platform_fee_bearer'])) {
+            $updateColumns['platform_fee_bearer'] = $policy['platform_fee_bearer'];
+        }
+        if (! empty($policy['active_payment_gateway'])) {
+            $updateColumns['active_payment_gateway'] = $policy['active_payment_gateway'];
+        }
+
+        SchoolSetting::where('id', $schoolId)->update($updateColumns);
+
+        return $this->policyForSchool($schoolId);
     }
 
     public function calculateInstallmentPlan(int $schoolId, float $totalTermAmount, float $totalPaid, float $balance): array

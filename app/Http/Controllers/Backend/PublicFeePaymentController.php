@@ -140,7 +140,7 @@ class PublicFeePaymentController extends Controller
                 'bank_charge_bearer' => $this->feeAccessPolicyService->policyForSchool($admin->school_id)['bank_charge_bearer'] ?? 'parent',
                 'bank_charge_amount' => (float) ($this->feeAccessPolicyService->policyForSchool($admin->school_id)['bank_charge_amount'] ?? 200.0),
                 'platform_fee_bearer' => $this->feeAccessPolicyService->policyForSchool($admin->school_id)['platform_fee_bearer'] ?? 'school',
-                'platform_fee_amount' => 500.0,
+                'platform_fee_amount' => (float) ($this->feeAccessPolicyService->policyForSchool($admin->school_id)['platform_fee_amount'] ?? 500.0),
                 'active_gateway' => $this->feeAccessPolicyService->policyForSchool($admin->school_id)['active_payment_gateway'] ?? 'wema_alat',
             ],
             ], 422);

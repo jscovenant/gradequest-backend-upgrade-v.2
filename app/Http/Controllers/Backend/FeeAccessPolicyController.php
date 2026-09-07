@@ -39,6 +39,7 @@ class FeeAccessPolicyController extends Controller
             'bank_charge_bearer' => ['sometimes', 'string', 'in:parent,school'],
             'bank_charge_amount' => ['sometimes', 'numeric', 'min:0', 'max:10000'],
             'platform_fee_bearer' => ['sometimes', 'string', 'in:parent,school'],
+            'active_edition_tier' => ['sometimes', 'string', 'in:basic_result,standard_cbt,annual_full_session'],
             'active_payment_gateway' => ['sometimes', 'string', 'in:wema_alat,monnify,paystack'],
         ]);
 

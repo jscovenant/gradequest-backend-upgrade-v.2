@@ -25,6 +25,18 @@ class PlatformFeeService
                 return 0;
             }
 
+            // Check school active edition tier
+            $schoolSetting = DB::table('school_settings')->where('id', $schoolId)->first();
+            $tier = $schoolSetting->active_edition_tier ?? 'standard_cbt';
+
+            $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
+            $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
+            $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
+
+            if ($tier === 'basic_result' && $basicPrice > 0) {
+                return (int) round($basicPrice);
+            }
+
             $amount = (int) round($this->billing->pricePerStudentForSchool($schoolId));
 
             if ($amount > 0) {
@@ -39,12 +51,8 @@ class PlatformFeeService
                 return (int) round((float) $schoolSettingAmount);
             }
 
-            $policyAmount = DB::table('gradios_edu_billing_policies')
-                ->orderByDesc('id')
-                ->value('platform_fee_per_student');
-
-            if ((float) $policyAmount > 0) {
-                return (int) round((float) $policyAmount);
+            if ($cbtPrice > 0) {
+                return (int) round($cbtPrice);
             }
         }
 
