@@ -12,6 +12,7 @@ use App\Services\CbtAccessService;
 use App\Services\SchoolFeeAccessPolicyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 class CbtStudentExamController extends Controller
@@ -170,7 +171,48 @@ class CbtStudentExamController extends Controller
         $this->ensureOwnAttempt($request, $attempt);
         abort_unless($attempt->status === 'in_progress', 422, 'This CBT attempt has already been submitted.');
 
-        $attempt = DB::transaction(function () use ($attempt) {
+        $answersBundle = $request->input('answers_bundle');
+
+        $attempt = DB::transaction(function () use ($attempt, $answersBundle) {
+            if (is_array($answersBundle) && ! empty($answersBundle)) {
+                $examQuestions = CbtQuestion::with('options')
+                    ->where('exam_id', $attempt->exam_id)
+                    ->get()
+                    ->keyBy('id');
+
+                foreach ($answersBundle as $item) {
+                    $questionId = (int) ($item['question_id'] ?? 0);
+                    $question = $examQuestions->get($questionId);
+                    if (! $question) {
+                        continue;
+                    }
+
+                    $selectedOptionIds = is_array($item['selected_option_ids'] ?? null) ? $item['selected_option_ids'] : [];
+                    $answerText = $item['answer_text'] ?? null;
+                    $hasAnswerContent = count($selectedOptionIds) > 0 || trim((string) $answerText) !== '';
+
+                    if (! $hasAnswerContent) {
+                        continue;
+                    }
+
+                    $score = $this->scoreQuestion($question, $selectedOptionIds, $answerText);
+
+                    CbtAnswer::updateOrCreate(
+                        [
+                            'attempt_id' => $attempt->id,
+                            'question_id' => $question->id,
+                        ],
+                        [
+                            'selected_option_ids' => $selectedOptionIds,
+                            'answer_text' => $answerText,
+                            'is_correct' => $score['is_correct'],
+                            'score' => $score['score'],
+                            'answered_at' => now(),
+                        ]
+                    );
+                }
+            }
+
             $attempt->update([
                 'status' => $attempt->expires_at && $attempt->expires_at->isPast() ? 'auto_submitted' : 'submitted',
                 'submitted_at' => now(),
@@ -258,30 +300,50 @@ class CbtStudentExamController extends Controller
 
     private function studentExamPayload(CbtExam $exam): array
     {
-        $exam->load([
-            'subject:id,name',
-            'class:id,name',
-            'term:id,name',
-            'academicSession:id,name',
-            'questionGroups.questions.options',
-            'questions.options',
-        ]);
+        $cachedStructure = Cache::remember("cbt_exam_blocks_{$exam->id}", now()->addHours(6), function () use ($exam) {
+            $exam->load([
+                'subject:id,name',
+                'class:id,name',
+                'term:id,name',
+                'academicSession:id,name',
+                'questionGroups.questions.options',
+                'questions.options',
+            ]);
 
-        $blocks = $this->studentQuestionBlocks($exam);
+            return [
+                'id' => $exam->id,
+                'title' => $exam->title,
+                'exam_code' => $exam->exam_code,
+                'duration_minutes' => (int) $exam->duration_minutes,
+                'general_instructions' => $exam->general_instructions,
+                'subject' => $exam->subject,
+                'class' => $exam->class,
+                'term' => $exam->term,
+                'academic_session' => $exam->academicSession,
+                'raw_blocks' => $this->rawQuestionBlocks($exam),
+                'total_marks' => (float) $exam->questions()->sum('marks'),
+            ];
+        });
+
+        $blocks = $this->buildStudentBlocks(
+            $cachedStructure['raw_blocks'] ?? [],
+            (bool) $exam->shuffle_questions,
+            (bool) $exam->shuffle_options
+        );
 
         return [
-            'id' => $exam->id,
-            'title' => $exam->title,
-            'exam_code' => $exam->exam_code,
-            'duration_minutes' => (int) $exam->duration_minutes,
-            'general_instructions' => $exam->general_instructions,
-            'subject' => $exam->subject,
-            'class' => $exam->class,
-            'term' => $exam->term,
-            'academic_session' => $exam->academicSession,
+            'id' => $cachedStructure['id'],
+            'title' => $cachedStructure['title'],
+            'exam_code' => $cachedStructure['exam_code'],
+            'duration_minutes' => $cachedStructure['duration_minutes'],
+            'general_instructions' => $cachedStructure['general_instructions'],
+            'subject' => $cachedStructure['subject'],
+            'class' => $cachedStructure['class'],
+            'term' => $cachedStructure['term'],
+            'academic_session' => $cachedStructure['academic_session'],
             'question_blocks' => $blocks,
             'total_questions' => collect($blocks)->sum(fn ($block) => count($block['questions'] ?? [])),
-            'total_marks' => (float) $exam->questions()->sum('marks'),
+            'total_marks' => $cachedStructure['total_marks'],
         ];
     }
 
@@ -299,7 +361,7 @@ class CbtStudentExamController extends Controller
         ];
     }
 
-    private function studentQuestionBlocks(CbtExam $exam): array
+    private function rawQuestionBlocks(CbtExam $exam): array
     {
         $groupedQuestionIds = $exam->questionGroups
             ->flatMap(fn ($group) => $group->questions->pluck('id'))
@@ -310,18 +372,42 @@ class CbtStudentExamController extends Controller
 
         $exam->questions
             ->whereNotIn('id', $groupedQuestionIds)
-            ->each(function (CbtQuestion $question) use ($blocks, $exam) {
+            ->each(function (CbtQuestion $question) use ($blocks) {
                 $blocks->push([
                     'type' => 'question',
                     'sort_order' => (int) $question->sort_order,
-                    'questions' => [$this->studentQuestionPayload($question, (bool) $exam->shuffle_options)],
+                    'questions' => [
+                        [
+                            'id' => $question->id,
+                            'question_type' => $question->question_type,
+                            'question_text' => $question->question_text,
+                            'instructions' => $question->instructions,
+                            'marks' => (float) $question->marks,
+                            'raw_options' => $question->options->map(fn ($opt) => [
+                                'id' => $opt->id,
+                                'label' => $opt->label,
+                                'option_text' => $opt->option_text,
+                            ])->values()->all(),
+                        ],
+                    ],
                 ]);
             });
 
-        $exam->questionGroups->each(function ($group) use ($blocks, $exam) {
+        $exam->questionGroups->each(function ($group) use ($blocks) {
             $questions = $group->questions
                 ->sortBy('sort_order')
-                ->map(fn (CbtQuestion $question) => $this->studentQuestionPayload($question, (bool) $exam->shuffle_options))
+                ->map(fn (CbtQuestion $question) => [
+                    'id' => $question->id,
+                    'question_type' => $question->question_type,
+                    'question_text' => $question->question_text,
+                    'instructions' => $question->instructions,
+                    'marks' => (float) $question->marks,
+                    'raw_options' => $question->options->map(fn ($opt) => [
+                        'id' => $opt->id,
+                        'label' => $opt->label,
+                        'option_text' => $opt->option_text,
+                    ])->values()->all(),
+                ])
                 ->values()
                 ->all();
 
@@ -341,44 +427,44 @@ class CbtStudentExamController extends Controller
             ]);
         });
 
-        $blocks = $blocks->sortBy('sort_order')->values();
-
-        if ($exam->shuffle_questions) {
-            $blocks = $blocks->shuffle()->values();
-        }
-
-        return $blocks->all();
+        return $blocks->sortBy('sort_order')->values()->all();
     }
 
-    private function studentQuestionPayload(CbtQuestion $question, bool $shuffleOptions): array
+    private function buildStudentBlocks(array $rawBlocks, bool $shuffleQuestions, bool $shuffleOptions): array
     {
-        $options = $question->options
-            ->map(fn ($option) => [
-                'id' => $option->id,
-                'label' => $option->label,
-                'option_text' => $option->option_text,
-            ]);
+        $blocks = collect($rawBlocks)->map(function ($block) use ($shuffleOptions) {
+            $questions = collect($block['questions'] ?? [])->map(function ($q) use ($shuffleOptions) {
+                $options = collect($q['raw_options'] ?? []);
+                if ($shuffleOptions) {
+                    $options = $options->shuffle();
+                }
 
-        if ($shuffleOptions) {
-            $options = $options->shuffle()->values();
+                $mappedOptions = $options->values()->map(fn ($opt, int $idx) => [
+                    'id' => $opt['id'],
+                    'label' => chr(65 + $idx),
+                    'option_text' => $opt['option_text'],
+                ])->all();
+
+                return [
+                    'id' => $q['id'],
+                    'question_type' => $q['question_type'],
+                    'question_text' => $q['question_text'],
+                    'instructions' => $q['instructions'],
+                    'marks' => (float) $q['marks'],
+                    'options' => $mappedOptions,
+                ];
+            })->all();
+
+            $block['questions'] = $questions;
+            unset($block['raw_blocks']);
+            return $block;
+        });
+
+        if ($shuffleQuestions) {
+            $blocks = $blocks->shuffle();
         }
 
-        $options = $options
-            ->values()
-            ->map(fn ($option, int $index) => [
-                'id' => $option['id'],
-                'label' => chr(65 + $index),
-                'option_text' => $option['option_text'],
-            ]);
-
-        return [
-            'id' => $question->id,
-            'question_type' => $question->question_type,
-            'question_text' => $question->question_text,
-            'instructions' => $question->instructions,
-            'marks' => (float) $question->marks,
-            'options' => $options->all(),
-        ];
+        return $blocks->values()->all();
     }
 
     private function scoreQuestion(CbtQuestion $question, array $selectedOptionIds, ?string $answerText): array

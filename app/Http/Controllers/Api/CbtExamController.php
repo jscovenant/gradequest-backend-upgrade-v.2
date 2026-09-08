@@ -15,6 +15,7 @@ use App\Services\CbtAccessService;
 use App\Services\SubscriptionAiCreditService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -121,6 +122,8 @@ class CbtExamController extends Controller
             $this->syncSchedule($exam, $schedule);
         });
 
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
+
         return response()->json([
             'message' => 'CBT exam updated.',
             'exam' => $exam->fresh(['subject', 'class', 'section', 'department', 'term', 'academicSession', 'schedules']),
@@ -132,6 +135,7 @@ class CbtExamController extends Controller
         $this->ensureSameSchool($request, $exam);
         abort_if($exam->attempts()->exists(), 422, 'This CBT exam already has student attempts. Archive it instead.');
 
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
         $exam->delete();
 
         return response()->json(['message' => 'CBT exam deleted.']);
@@ -150,6 +154,8 @@ class CbtExamController extends Controller
             'total_marks' => (float) $exam->questions()->sum('marks'),
         ]);
 
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
+
         return response()->json([
             'message' => 'CBT exam published.',
             'exam' => $exam->fresh(),
@@ -160,6 +166,7 @@ class CbtExamController extends Controller
     {
         $this->ensureSameSchool($request, $exam);
         $exam->update(['status' => 'closed']);
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT exam closed.',
@@ -179,6 +186,8 @@ class CbtExamController extends Controller
             'status' => 'draft',
             'published_at' => null,
         ]);
+
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT exam reopened for editing.',
@@ -201,6 +210,7 @@ class CbtExamController extends Controller
         $data = array_filter($data, fn ($value) => $value !== null);
 
         $section = $exam->sections()->create($data);
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT section added.',
@@ -228,6 +238,7 @@ class CbtExamController extends Controller
         }
 
         $group = $exam->questionGroups()->create($data);
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json([
             'message' => 'Question instruction group added.',
@@ -261,6 +272,8 @@ class CbtExamController extends Controller
             return $question->fresh('options');
         });
 
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
+
         return response()->json([
             'message' => 'CBT question added.',
             'question' => $question,
@@ -291,6 +304,8 @@ class CbtExamController extends Controller
                 'message' => 'Please fix the question file before importing.',
             ]), 422);
         }
+
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json($result, $request->boolean('preview') ? 200 : 201);
     }
@@ -406,6 +421,7 @@ class CbtExamController extends Controller
 
         return trim(implode("\n\n", array_filter($parts)));
     }
+
     public function importAiQuestions(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
@@ -420,6 +436,7 @@ class CbtExamController extends Controller
         ]);
 
         $imported = $this->importAiDraft($exam, $data['draft']);
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json([
             'message' => "{$imported} AI question(s) imported into this exam.",
@@ -669,6 +686,8 @@ Fruits | 4 | 200',
             $exam->update(['total_marks' => (float) $exam->questions()->sum('marks')]);
         });
 
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
+
         return response()->json([
             'message' => 'CBT question updated.',
             'question' => $question->fresh('options'),
@@ -685,6 +704,8 @@ Fruits | 4 | 200',
 
         $question->delete();
         $exam->update(['total_marks' => (float) $exam->questions()->sum('marks')]);
+
+        Cache::forget("cbt_exam_blocks_{$exam->id}");
 
         return response()->json(['message' => 'CBT question deleted.']);
     }
