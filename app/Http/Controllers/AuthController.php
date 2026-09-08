@@ -259,6 +259,47 @@ public function register(Request $request)
         $school->user_id = $user->id;
         $school->save();
 
+        // Link to Sales Representative if referral code or invitation token was provided
+        try {
+            $referralCode = trim((string) ($request->referral_code ?? $request->sales_code ?? $request->ref ?? ''));
+            $invitationToken = trim((string) ($request->invitation ?? $request->token ?? ''));
+
+            if ($invitationToken) {
+                $referralService = app(\App\Services\SalesReferralService::class);
+                $assignment = $referralService->resolveRegistrationToken($invitationToken, true);
+                if ($assignment) {
+                    $assignment->update([
+                        'school_id' => $school->id,
+                        'admin_user_id' => $user->id,
+                        'stage' => 'converted',
+                        'converted_at' => now(),
+                    ]);
+                    $assignment->representative?->update(['last_school_registered_at' => now()]);
+                }
+            } elseif ($referralCode) {
+                $rep = \App\Models\SalesRepresentative::where('code', $referralCode)
+                    ->where('status', 'active')
+                    ->first();
+                if ($rep) {
+                    \App\Models\SalesRepAssignment::create([
+                        'sales_representative_id' => $rep->id,
+                        'school_id' => $school->id,
+                        'admin_user_id' => $user->id,
+                        'prospect_school_name' => $school->school_name,
+                        'contact_name' => trim($user->firstname . ' ' . $user->surname),
+                        'contact_email' => $user->email,
+                        'contact_phone' => $user->phone,
+                        'source' => 'referral_code',
+                        'stage' => 'converted',
+                        'converted_at' => now(),
+                    ]);
+                    $rep->update(['last_school_registered_at' => now()]);
+                }
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('Failed to link sales representative on registration: ' . $e->getMessage());
+        }
+
         try {
             \App\Services\Students\StudentExcelImportService::provisionDefaultAcademicStructure($school->id);
         } catch (\Throwable $e) {
