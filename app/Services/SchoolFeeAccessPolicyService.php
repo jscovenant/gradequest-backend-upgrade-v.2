@@ -40,6 +40,7 @@ class SchoolFeeAccessPolicyService
         $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
         $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
         $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
+        $defaultBankCharge = (float) ($globalPolicy->default_bank_charge_amount ?? 200.00);
 
         $activeTier = $policy['active_edition_tier'] ?? ($school?->active_edition_tier ?: 'standard_cbt');
 
@@ -58,6 +59,8 @@ class SchoolFeeAccessPolicyService
         $merged['annual_session_multiplier'] = $annualMultiplier;
         $merged['annual_session_discount_percent'] = $annualDiscount;
         $merged['platform_fee_amount'] = $activePlatformFee;
+        $merged['bank_charge_amount'] = $defaultBankCharge;
+        $merged['default_bank_charge_amount'] = $defaultBankCharge;
 
         return $merged;
     }
@@ -65,6 +68,8 @@ class SchoolFeeAccessPolicyService
     public function updatePolicy(int $schoolId, array $data): array
     {
         $current = $this->policyForSchool($schoolId);
+        $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
+        $defaultBankCharge = (float) ($globalPolicy->default_bank_charge_amount ?? 200.00);
 
         $policy = array_merge($current, [
             'enabled' => array_key_exists('enabled', $data) ? (bool) $data['enabled'] : ($current['enabled'] ?? false),
@@ -87,7 +92,7 @@ class SchoolFeeAccessPolicyService
             'cbt_message' => trim((string) ($data['cbt_message'] ?? ($current['cbt_message'] ?? self::DEFAULT_POLICY['cbt_message']))) ?: self::DEFAULT_POLICY['cbt_message'],
             'installment_message' => trim((string) ($data['installment_message'] ?? ($current['installment_message'] ?? self::DEFAULT_POLICY['installment_message']))) ?: self::DEFAULT_POLICY['installment_message'],
             'bank_charge_bearer' => in_array(($data['bank_charge_bearer'] ?? ''), ['parent', 'school'], true) ? $data['bank_charge_bearer'] : ($current['bank_charge_bearer'] ?? 'parent'),
-            'bank_charge_amount' => max(0, (float) ($data['bank_charge_amount'] ?? ($current['bank_charge_amount'] ?? 200.0))),
+            'bank_charge_amount' => $defaultBankCharge,
             'platform_fee_bearer' => in_array(($data['platform_fee_bearer'] ?? ''), ['parent', 'school'], true) ? $data['platform_fee_bearer'] : ($current['platform_fee_bearer'] ?? 'school'),
             'active_edition_tier' => in_array(($data['active_edition_tier'] ?? ''), ['basic_result', 'standard_cbt', 'annual_full_session'], true) ? $data['active_edition_tier'] : ($current['active_edition_tier'] ?? 'standard_cbt'),
             'active_payment_gateway' => in_array(($data['active_payment_gateway'] ?? ''), ['wema_alat', 'monnify', 'paystack'], true) ? $data['active_payment_gateway'] : ($current['active_payment_gateway'] ?? 'wema_alat'),
@@ -104,9 +109,7 @@ class SchoolFeeAccessPolicyService
         if (! empty($policy['bank_charge_bearer'])) {
             $updateColumns['bank_charge_bearer'] = $policy['bank_charge_bearer'];
         }
-        if (isset($policy['bank_charge_amount'])) {
-            $updateColumns['bank_charge_amount'] = $policy['bank_charge_amount'];
-        }
+        $updateColumns['bank_charge_amount'] = $defaultBankCharge;
         if (! empty($policy['platform_fee_bearer'])) {
             $updateColumns['platform_fee_bearer'] = $policy['platform_fee_bearer'];
         }

@@ -48,5 +48,8 @@ class GradequestBillingPolicy extends Model
         'standard_cbt_tier_price_per_student' => 'decimal:2',
         'annual_full_session_multiplier' => 'decimal:2',
         'annual_session_discount_percent' => 'decimal:2',
+        'default_bank_charge_amount' => 'decimal:2',
+        'promo_target_tier' => 'string',
+        'promo_discount_percent' => 'decimal:2',
     ];
 }

@@ -1330,6 +1330,52 @@ $unpaid = StudentBillingEntitlement::query()
         return (int) round($this->policy()->standard_cbt_tier_price_per_student ?? ($this->policy()->platform_fee_per_student ?? 500.00));
     }
 
+    public function promoCoverageForSchool(int $schoolId): ?array
+    {
+        $globalPolicy = $this->policy();
+        if (! ($globalPolicy->promo_enabled ?? false)) {
+            return null;
+        }
+
+        if ($globalPolicy->promo_starts_at && now()->lt($globalPolicy->promo_starts_at)) {
+            return null;
+        }
+        if ($globalPolicy->promo_ends_at && now()->gt($globalPolicy->promo_ends_at)) {
+            return null;
+        }
+
+        if ($globalPolicy->promo_max_claims && ($globalPolicy->promo_claims_count ?? 0) >= $globalPolicy->promo_max_claims) {
+            return null;
+        }
+
+        $school = SchoolSetting::find($schoolId);
+        $rawPolicy = $school?->fee_access_policy;
+        $policyArray = is_array($rawPolicy) ? $rawPolicy : (json_decode((string) $rawPolicy, true) ?: []);
+        $tier = $policyArray['active_edition_tier'] ?? ($school?->active_edition_tier ?: 'standard_cbt');
+
+        $targetTier = (string) ($globalPolicy->promo_target_tier ?? 'all');
+        if ($targetTier !== 'all' && $targetTier !== $tier) {
+            return null;
+        }
+
+        $minStudents = (int) ($globalPolicy->promo_min_students ?? 0);
+        $studentCount = $this->activeStudents($schoolId)->count();
+        if ($minStudents > 0 && $studentCount < $minStudents) {
+            return null;
+        }
+
+        $discountPercent = (float) ($globalPolicy->promo_discount_percent ?? 100.00);
+
+        return [
+            'active' => true,
+            'title' => $globalPolicy->promo_title ?: 'SchoolProfit Launch Offer',
+            'description' => $globalPolicy->promo_description ?: 'Platform Fee Waiver for Qualifying Schools',
+            'discount_percent' => $discountPercent,
+            'bonus_days' => (int) ($globalPolicy->promo_bonus_days ?? 365),
+            'target_tier' => $targetTier,
+        ];
+    }
+
     public function pricePerStudentForSchool(int $schoolId): float
     {
         $school = SchoolSetting::find($schoolId);
@@ -1344,11 +1390,19 @@ $unpaid = StudentBillingEntitlement::query()
         $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
         $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
 
-        return match ($tier) {
+        $basePrice = match ($tier) {
             'basic_result' => $basicPrice,
             'annual_full_session' => round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2),
             default => $cbtPrice,
         };
+
+        $promo = $this->promoCoverageForSchool($schoolId);
+        if ($promo && ($promo['discount_percent'] ?? 0) > 0) {
+            $discount = min(100, (float) $promo['discount_percent']);
+            return round($basePrice * (1 - ($discount / 100)), 2);
+        }
+
+        return $basePrice;
     }
 
     public function clearStudentFromWallet(int $schoolId, int $studentId, int $sessionId, int $termId, ?int $actorId = null): array

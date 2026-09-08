@@ -75,6 +75,9 @@ class GradequestBillingPolicyController extends Controller
             'standard_cbt_tier_price_per_student' => 'nullable|numeric|min:0|max:1000000',
             'annual_full_session_multiplier' => 'nullable|numeric|min:1|max:12',
             'annual_session_discount_percent' => 'nullable|numeric|min:0|max:100',
+            'default_bank_charge_amount' => 'nullable|numeric|min:0|max:100000',
+            'promo_target_tier' => 'nullable|string|in:all,basic_result,standard_cbt',
+            'promo_discount_percent' => 'nullable|numeric|min:0|max:100',
         ]);
 
         if ($validated['temporary_access_max_days'] < $validated['temporary_access_min_days']) {
