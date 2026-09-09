@@ -41,6 +41,10 @@ class FeeAccessPolicyController extends Controller
             'platform_fee_bearer' => ['sometimes', 'string', 'in:parent,school'],
             'active_edition_tier' => ['sometimes', 'string', 'in:basic_result,standard_cbt,annual_full_session'],
             'active_payment_gateway' => ['sometimes', 'string', 'in:wema_alat,monnify,paystack'],
+            'full_payment_discount_enabled' => ['sometimes', 'boolean'],
+            'full_payment_discount_type' => ['sometimes', 'string', 'in:percentage,fixed'],
+            'full_payment_discount_value' => ['sometimes', 'numeric', 'min:0', 'max:1000000'],
+            'full_payment_discount_message' => ['nullable', 'string', 'max:255'],
         ]);
 
         return response()->json([

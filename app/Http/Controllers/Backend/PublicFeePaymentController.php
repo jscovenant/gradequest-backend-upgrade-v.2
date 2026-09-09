@@ -109,13 +109,6 @@ class PublicFeePaymentController extends Controller
             return response()->json(['message' => 'This student does not have an outstanding fee balance.'], 422);
         }
 
-        if ($amount > $totalBalance) {
-            return response()->json([
-                'message' => 'Amount exceeds the student outstanding balance.',
-                'balance' => $totalBalance,
-            ], 422);
-        }
-
         $currentTermFee = $outstanding->first(function (StudentFee $fee) use ($admin) {
             [$session, $term] = $this->schoolBillingService->currentPeriod($admin->school_id);
             return $fee->session_id == $session?->id && $fee->term_id == $term?->id;
@@ -124,6 +117,22 @@ class PublicFeePaymentController extends Controller
         $totalTermAmount = (float) ($currentTermFee?->total_amount ?? $totalBalance);
         $totalTermPaid = (float) ($currentTermFee?->amount_paid ?? 0);
 
+        $fullDiscount = $this->feeAccessPolicyService->calculateFullPaymentDiscount(
+            $admin->school_id,
+            $totalTermAmount,
+            $totalTermPaid,
+            $totalBalance
+        );
+
+        $isDiscountedFull = $fullDiscount['enabled'] && abs($amount - $fullDiscount['discounted_payable_amount']) < 0.01;
+
+        if (! $isDiscountedFull && $amount > $totalBalance) {
+            return response()->json([
+                'message' => 'Amount exceeds the student outstanding balance.',
+                'balance' => $totalBalance,
+            ], 422);
+        }
+
         $installmentPlan = $this->feeAccessPolicyService->calculateInstallmentPlan(
             $admin->school_id,
             $totalTermAmount,
@@ -131,7 +140,7 @@ class PublicFeePaymentController extends Controller
             $totalBalance
         );
 
-        if ($installmentPlan['enabled'] && $amount < $installmentPlan['min_payable_now']) {
+        if (! $isDiscountedFull && $installmentPlan['enabled'] && $amount < $installmentPlan['min_payable_now']) {
             return response()->json([
                 'message' => $installmentPlan['message'] ?: ('Minimum installment payment required is ₦' . number_format($installmentPlan['min_payable_now'], 2)),
                 'min_payable_now' => $installmentPlan['min_payable_now'],
@@ -157,7 +166,7 @@ class PublicFeePaymentController extends Controller
         }
 
         $reference = 'gq_fee_' . Str::uuid()->toString();
-        $allocations = $this->buildAllocations($outstanding, $amount);
+        $allocations = $this->buildAllocations($outstanding, $amount, $isDiscountedFull ? (float) $fullDiscount['discount_amount'] : 0.0);
 
         if (empty($allocations)) {
             return response()->json(['message' => 'No payable fee record was found for this student.'], 422);
@@ -601,13 +610,19 @@ class PublicFeePaymentController extends Controller
                     continue;
                 }
 
-                $amount = min((float) ($allocation['amount'] ?? 0), (float) $studentFee->balance, $remaining);
+                $allocatedPaid = (float) ($allocation['amount'] ?? 0);
+                $allocatedDiscount = (float) ($allocation['discount_amount'] ?? 0);
+                $amount = min($allocatedPaid, (float) $studentFee->balance, $remaining);
 
-                if ($amount <= 0) {
+                if ($amount <= 0 && $allocatedDiscount <= 0) {
                     continue;
                 }
 
                 $paymentReference = $index === 0 ? $reference : $reference . '-' . ($index + 1);
+                $receiptNote = 'Online fee payment (' . strtoupper($method) . '): ' . $paymentReference;
+                if ($allocatedDiscount > 0) {
+                    $receiptNote .= ' (Full Payment Discount of ₦' . number_format($allocatedDiscount, 2) . ' applied)';
+                }
 
                 $paymentData = [
                     'student_fee_id' => $studentFee->id,
@@ -636,10 +651,11 @@ class PublicFeePaymentController extends Controller
                     'payment_id' => $payment->id,
                     'payment_method' => $method,
                     'status' => 'approved',
-                    'notes' => 'Online fee payment (' . strtoupper($method) . '): ' . $paymentReference,
+                    'notes' => $receiptNote,
                 ]);
 
-                $amountPaid = (float) $studentFee->amount_paid + $amount;
+                $effectivePaidIncrease = $amount + $allocatedDiscount;
+                $amountPaid = (float) $studentFee->amount_paid + $effectivePaidIncrease;
                 $balance = max(0, (float) $studentFee->total_amount - $amountPaid);
 
                 $studentFee->update([
@@ -739,15 +755,21 @@ class PublicFeePaymentController extends Controller
             ->get()
             ->keyBy('id');
 
+        $totalDiscount = 0.0;
         $items = [];
         foreach ($allocations as $alloc) {
             $feeId = $alloc['student_fee_id'] ?? null;
             $fee = $studentFees->get($feeId);
+            $allocAmount = (float) ($alloc['amount'] ?? 0);
+            $allocDiscount = (float) ($alloc['discount_amount'] ?? 0);
+            $totalDiscount += $allocDiscount;
+
             $items[] = [
                 'name' => $fee?->feeType?->name ?? 'School Fee',
                 'session' => $fee?->session?->name ?? '',
                 'term' => $fee?->term?->name ?? '',
-                'amount' => (float) ($alloc['amount'] ?? 0),
+                'amount' => $allocAmount,
+                'discount_amount' => $allocDiscount,
             ];
         }
 
@@ -766,6 +788,7 @@ class PublicFeePaymentController extends Controller
             'payer_name' => $intent->payer_name,
             'payer_email' => $intent->payer_email,
             'amount' => (float) $intent->amount,
+            'discount_amount' => round((float) $totalDiscount, 2),
             'remaining_balance' => (float) $remainingBalance,
             'items' => $items,
             'logoBase64' => $logoBase64,
@@ -837,28 +860,38 @@ class PublicFeePaymentController extends Controller
         })->values();
     }
 
-    private function buildAllocations($fees, float $amount): array
+    private function buildAllocations($fees, float $amount, float $discountAmount = 0.0): array
     {
-        $remaining = $amount;
+        $remainingAmount = $amount;
+        $remainingDiscount = $discountAmount;
         $allocations = [];
 
         foreach ($fees as $fee) {
-            if ($remaining <= 0) {
+            if ($remainingAmount <= 0 && $remainingDiscount <= 0) {
                 break;
             }
 
-            $payable = min((float) $fee->balance, $remaining);
+            $feeBalance = (float) $fee->balance;
+            if ($feeBalance <= 0) {
+                continue;
+            }
 
-            if ($payable <= 0) {
+            $allocDiscount = min($feeBalance, $remainingDiscount);
+            $remainingFeeBalance = $feeBalance - $allocDiscount;
+            $allocAmount = min($remainingFeeBalance, $remainingAmount);
+
+            if (($allocAmount + $allocDiscount) <= 0) {
                 continue;
             }
 
             $allocations[] = [
                 'student_fee_id' => (int) $fee->id,
-                'amount' => round($payable, 2),
+                'amount' => round($allocAmount, 2),
+                'discount_amount' => round($allocDiscount, 2),
             ];
 
-            $remaining = round($remaining - $payable, 2);
+            $remainingAmount = round($remainingAmount - $allocAmount, 2);
+            $remainingDiscount = round($remainingDiscount - $allocDiscount, 2);
         }
 
         return $allocations;

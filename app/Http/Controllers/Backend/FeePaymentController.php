@@ -206,9 +206,10 @@ public function payFee(Request $request)
 
     $request->validate([
         'student_fee_id' => 'required|exists:student_fees,id',
-        'amount' => 'required|numeric|min:1',
+        'amount' => 'required|numeric|min:0.01',
         'payment_method' => 'required|string|max:50',
         'reference' => 'nullable|string|max:100',
+        'apply_full_discount' => 'nullable|boolean',
     ]);
 
     // ✅ Get the fee record with student info
@@ -223,8 +224,25 @@ public function payFee(Request $request)
         ], 422);
     }
 
+    $applyDiscount = (bool) $request->input('apply_full_discount', false);
+    $discountAmount = 0.0;
+
+    if ($applyDiscount) {
+        $fullDiscount = $this->feeAccessPolicyService->calculateFullPaymentDiscount(
+            (int) $schoolId,
+            (float) $studentFee->total_amount,
+            (float) $studentFee->amount_paid,
+            (float) $studentFee->balance
+        );
+        if ($fullDiscount['enabled']) {
+            $discountAmount = (float) $fullDiscount['discount_amount'];
+        }
+    }
+
+    $payableBalance = max(0, (float) $studentFee->balance - $discountAmount);
+
     // ✅ Prevent overpayment
-    if ($request->amount > $studentFee->balance) {
+    if ($request->amount > ($studentFee->balance + 0.01) && ! ($applyDiscount && abs($request->amount - $payableBalance) < 0.01)) {
         return response()->json([
             'message' => 'Amount exceeds remaining balance of ₦' . number_format($studentFee->balance, 2),
             'balance' => $studentFee->balance,
@@ -245,6 +263,11 @@ public function payFee(Request $request)
         'received_by' => $user->id,
     ]);
 
+    $receiptNotes = 'Offline fee payment (' . strtoupper($request->payment_method) . '): ' . $ref;
+    if ($discountAmount > 0) {
+        $receiptNotes .= ' (Full Payment Discount of ₦' . number_format($discountAmount, 2) . ' applied)';
+    }
+
     // ✅ If an uploaded receipt exists for this student and payment method, approve it
     $receipt = PaymentReceipt::where('student_id', $studentFee->student_id)
         ->where('school_id', $schoolId)
@@ -256,12 +279,23 @@ public function payFee(Request $request)
     if ($receipt) {
         $receipt->status = 'approved';
         $receipt->approved_by = $user->id;
+        $receipt->notes = $receiptNotes;
         $receipt->save();
+    } else {
+        PaymentReceipt::create([
+            'student_id' => $studentFee->student_id,
+            'school_id' => $schoolId,
+            'payment_id' => $payment->id,
+            'payment_method' => $request->payment_method,
+            'status' => 'approved',
+            'notes' => $receiptNotes,
+        ]);
     }
 
     // ✅ Update totals & status
-    $studentFee->amount_paid += $request->amount;
-    $studentFee->balance = max(0, $studentFee->total_amount - $studentFee->amount_paid);
+    $effectiveAmount = (float) $request->amount + $discountAmount;
+    $studentFee->amount_paid += $effectiveAmount;
+    $studentFee->balance = max(0, (float) $studentFee->total_amount - (float) $studentFee->amount_paid);
 
     if ($studentFee->balance <= 0) {
         $studentFee->status = 'paid';
@@ -275,8 +309,9 @@ public function payFee(Request $request)
     $studentFee->save();
 
     return response()->json([
-        'message' => 'Payment recorded successfully.',
+        'message' => 'Payment recorded successfully.' . ($discountAmount > 0 ? ' Full payment discount of ₦' . number_format($discountAmount, 2) . ' applied.' : ''),
         'payment' => $payment,
+        'discount_amount' => $discountAmount,
         'balance' => $studentFee->balance,
         'amount_paid' => $studentFee->amount_paid,
         'status' => $studentFee->status,
@@ -349,6 +384,7 @@ public function studentFeeDetails(Request $request)
             'class' => optional($student->level)->name ?? 'N/A',
         ],
         'installment_plan' => $installmentPlan,
+        'full_payment_discount' => $installmentPlan['full_payment_discount'] ?? null,
         'fees' => $fees,
     ]);
 }

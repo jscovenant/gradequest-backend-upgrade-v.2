@@ -27,6 +27,10 @@ class SchoolFeeAccessPolicyService
         'platform_fee_bearer' => 'school',
         'active_edition_tier' => 'standard_cbt',
         'active_payment_gateway' => 'wema_alat',
+        'full_payment_discount_enabled' => false,
+        'full_payment_discount_type' => 'percentage',
+        'full_payment_discount_value' => 0.0,
+        'full_payment_discount_message' => 'Pay your school fees in full upfront and enjoy a special discount!',
     ];
 
     public function policyForSchool(int $schoolId): array
@@ -96,6 +100,10 @@ class SchoolFeeAccessPolicyService
             'platform_fee_bearer' => in_array(($data['platform_fee_bearer'] ?? ''), ['parent', 'school'], true) ? $data['platform_fee_bearer'] : ($current['platform_fee_bearer'] ?? 'school'),
             'active_edition_tier' => in_array(($data['active_edition_tier'] ?? ''), ['basic_result', 'standard_cbt', 'annual_full_session'], true) ? $data['active_edition_tier'] : ($current['active_edition_tier'] ?? 'standard_cbt'),
             'active_payment_gateway' => in_array(($data['active_payment_gateway'] ?? ''), ['wema_alat', 'monnify', 'paystack'], true) ? $data['active_payment_gateway'] : ($current['active_payment_gateway'] ?? 'wema_alat'),
+            'full_payment_discount_enabled' => array_key_exists('full_payment_discount_enabled', $data) ? (bool) $data['full_payment_discount_enabled'] : ($current['full_payment_discount_enabled'] ?? false),
+            'full_payment_discount_type' => in_array(($data['full_payment_discount_type'] ?? ''), ['percentage', 'fixed'], true) ? $data['full_payment_discount_type'] : ($current['full_payment_discount_type'] ?? 'percentage'),
+            'full_payment_discount_value' => max(0, (float) ($data['full_payment_discount_value'] ?? ($current['full_payment_discount_value'] ?? 0))),
+            'full_payment_discount_message' => trim((string) ($data['full_payment_discount_message'] ?? ($current['full_payment_discount_message'] ?? self::DEFAULT_POLICY['full_payment_discount_message']))) ?: self::DEFAULT_POLICY['full_payment_discount_message'],
         ]);
 
         $updateColumns = [
@@ -122,6 +130,41 @@ class SchoolFeeAccessPolicyService
         return $this->policyForSchool($schoolId);
     }
 
+    public function calculateFullPaymentDiscount(int $schoolId, float $totalTermAmount, float $totalPaid, float $balance): array
+    {
+        $policy = $this->policyForSchool($schoolId);
+        $enabled = (bool) ($policy['full_payment_discount_enabled'] ?? false);
+        $type = (string) ($policy['full_payment_discount_type'] ?? 'percentage');
+        $value = (float) ($policy['full_payment_discount_value'] ?? 0.0);
+        $customMessage = (string) ($policy['full_payment_discount_message'] ?? self::DEFAULT_POLICY['full_payment_discount_message']);
+
+        $discountAmount = 0.0;
+        if ($enabled && $value > 0 && $balance > 0) {
+            if ($type === 'percentage') {
+                $base = $totalTermAmount > 0 ? $totalTermAmount : $balance;
+                $discountAmount = round(($value / 100) * $base, 2);
+            } else {
+                $discountAmount = round($value, 2);
+            }
+            $discountAmount = min($discountAmount, $balance);
+        }
+
+        $discountedPayable = max(0, round($balance - $discountAmount, 2));
+        $formattedDiscount = $type === 'percentage' ? "{$value}%" : '₦' . number_format($value, 2);
+        $message = str_replace([':discount', ':amount'], [$formattedDiscount, '₦' . number_format($discountAmount, 2)], $customMessage);
+
+        return [
+            'enabled' => $enabled && $discountAmount > 0,
+            'discount_type' => $type,
+            'discount_value' => $value,
+            'discount_amount' => $discountAmount,
+            'original_balance' => round($balance, 2),
+            'discounted_payable_amount' => $discountedPayable,
+            'formatted_discount' => $formattedDiscount,
+            'message' => $message,
+        ];
+    }
+
     public function calculateInstallmentPlan(int $schoolId, float $totalTermAmount, float $totalPaid, float $balance): array
     {
         $policy = $this->policyForSchool($schoolId);
@@ -141,12 +184,17 @@ class SchoolFeeAccessPolicyService
         $initialTarget = max(0, $minInitialAmount - $totalPaid);
         $minPayableNow = min($balance, $initialTarget > 0 ? $initialTarget : 100);
 
+        $fullDiscount = $this->calculateFullPaymentDiscount($schoolId, $totalTermAmount, $totalPaid, $balance);
+
         $presets = [];
         if ($balance > 0) {
             $presets[] = [
-                'label' => 'Full Payment (100%)',
+                'label' => $fullDiscount['enabled'] ? "Full Payment (Save {$fullDiscount['formatted_discount']})" : 'Full Payment (100%)',
                 'percent' => 100,
-                'amount' => round($balance, 2),
+                'amount' => $fullDiscount['enabled'] ? $fullDiscount['discounted_payable_amount'] : round($balance, 2),
+                'original_amount' => round($balance, 2),
+                'discount_amount' => $fullDiscount['discount_amount'],
+                'discount_applied' => $fullDiscount['enabled'],
             ];
 
             if ($enabled && $totalPaid < $minInitialAmount && $balance > $minInitialAmount) {
@@ -154,6 +202,9 @@ class SchoolFeeAccessPolicyService
                     'label' => "1st Installment ({$minPercent}%)",
                     'percent' => $minPercent,
                     'amount' => round($minInitialAmount - $totalPaid, 2),
+                    'original_amount' => round($minInitialAmount - $totalPaid, 2),
+                    'discount_amount' => 0,
+                    'discount_applied' => false,
                 ];
             }
 
@@ -162,6 +213,9 @@ class SchoolFeeAccessPolicyService
                     'label' => '2nd Installment (30% Balance)',
                     'percent' => 30,
                     'amount' => round($balance, 2),
+                    'original_amount' => round($balance, 2),
+                    'discount_amount' => 0,
+                    'discount_applied' => false,
                 ];
             }
         }
@@ -173,6 +227,7 @@ class SchoolFeeAccessPolicyService
             'min_initial_amount' => $minInitialAmount,
             'min_payable_now' => $minPayableNow,
             'presets' => $presets,
+            'full_payment_discount' => $fullDiscount,
             'message' => str_replace([':percent', ':amount'], [(string) $minPercent, number_format($minInitialAmount, 2)], (string) ($policy['installment_message'] ?? '')),
         ];
     }
