@@ -485,12 +485,14 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   Route::get('/school/billing/settings', [SchoolBillingController::class, 'settings']);
   Route::put('/school/billing/settings', [SchoolBillingController::class, 'updateSettings']);
   Route::post('/school/billing/offline-invoice/generate', [SchoolBillingController::class, 'generateOfflineInvoice']);
+  Route::post('/school/billing/session-invoice/generate', [SchoolBillingController::class, 'generateSessionInvoice']);
   Route::post('/school/billing/offline-invoices/{invoice}/payments', [SchoolBillingController::class, 'recordInvoicePayment']);
   Route::get('/school/billing/invoices', [SchoolBillingController::class, 'invoices']);
   Route::get('/school/billing/audits', [SchoolBillingController::class, 'audits']);
   Route::get('/school/billing/invoices/{invoice}/payment', [GradequestInvoicePaymentController::class, 'show']);
   Route::post('/school/billing/invoices/{invoice}/payment/initialize', [GradequestInvoicePaymentController::class, 'initialize']);
   Route::post('/school/billing/invoices/{invoice}/payment/wema-virtual-account', [GradequestInvoicePaymentController::class, 'generateVirtualAccount']);
+  Route::post('/school/billing/invoices/{invoice}/payment/wallet', [GradequestInvoicePaymentController::class, 'payWithWallet']);
   Route::get('/school/billing/invoice-payments/verify/{reference}', [GradequestInvoicePaymentController::class, 'verify']);
 
   // Student Clearance & Wallet Entitlement Routes
@@ -499,6 +501,7 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   Route::post('/school/clearance/clear-class', [StudentClearanceController::class, 'clearClass']);
   Route::post('/school/clearance/clear-school-term', [StudentClearanceController::class, 'clearSchoolTerm']);
   Route::post('/school/clearance/clear-school-session', [StudentClearanceController::class, 'clearSchoolSession']);
+  Route::post('/school/clearance/initiate-online', [StudentClearanceController::class, 'initiateOnlineClearance']);
   Route::get('/school/clearance/students/{studentId}/status', [StudentClearanceController::class, 'studentStatus']);
 
   // For parent dashboard: fetch school active bank accounts

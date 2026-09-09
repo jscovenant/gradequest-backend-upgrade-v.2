@@ -390,6 +390,91 @@ class SchoolBillingService
         });
     }
 
+    public function generateSessionInvoice(int $schoolId, int $sessionId, ?int $actorId = null): SchoolProfitTermInvoice
+    {
+        $legacy = $this->legacySubscriptionProtection($schoolId);
+        if ($legacy['active']) {
+            $this->deferOpenLegacyInvoices($schoolId, $legacy);
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'billing' => $legacy['message'],
+            ]);
+        }
+
+        return DB::transaction(function () use ($schoolId, $sessionId, $actorId) {
+            $settings = $this->settingsForSchool($schoolId);
+            $students = $this->activeStudents($schoolId);
+            $billingProfile = $this->billingProfile($schoolId);
+            $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
+            $termsCount = max(1, $terms->count());
+
+            $pricePerStudent = (float) $billingProfile['price_per_student'];
+            $totalStudentTerms = $students->count() * $termsCount;
+            $amountDue = $totalStudentTerms * $pricePerStudent;
+
+            $invoice = SchoolProfitTermInvoice::firstOrNew([
+                'school_id' => $schoolId,
+                'session_id' => $sessionId,
+                'term_id' => null,
+                'billing_mode' => 'offline',
+                'invoice_type' => 'session_invoice',
+            ]);
+
+            if (! $invoice->exists) {
+                $invoice->invoice_no = $this->invoiceNumber();
+                $invoice->amount_paid = 0;
+                $invoice->created_by = $actorId;
+            }
+
+            $amountPaid = min((float) ($invoice->amount_paid ?? 0), $amountDue);
+            $balance = max(0, $amountDue - $amountPaid);
+
+            $invoice->fill([
+                'active_students_count' => $students->count(),
+                'amount_due' => $amountDue,
+                'amount_paid' => $amountPaid,
+                'balance' => $balance,
+                'status' => $balance <= 0 ? 'paid' : ($amountPaid > 0 ? 'partial' : 'issued'),
+                'issued_at' => now()->toDateString(),
+                'due_date' => now()->addDays((int) $settings->grace_days)->toDateString(),
+                'meta' => array_merge($billingProfile, [
+                    'terms_count' => $termsCount,
+                    'total_student_terms' => $totalStudentTerms,
+                    'is_full_session' => true,
+                ]),
+            ])->save();
+
+            $invoice = $invoice->fresh();
+
+            foreach ($terms as $term) {
+                foreach ($students as $student) {
+                    $entitlement = StudentBillingEntitlement::firstOrNew(
+                        [
+                            'school_id' => $schoolId,
+                            'student_id' => $student->id,
+                            'session_id' => $sessionId,
+                            'term_id' => $term->id,
+                        ]
+                    );
+
+                    if (! $entitlement->exists || in_array($entitlement->status, ['unpaid', 'grace'], true)) {
+                        $entitlement->fill([
+                            'billing_mode' => 'offline',
+                            'status' => now()->lte($invoice->due_date) ? 'grace' : 'unpaid',
+                            'source' => 'offline_session_invoice',
+                            'invoice_id' => $invoice->id,
+                            'grace_until' => $invoice->due_date?->endOfDay(),
+                        ])->save();
+                    }
+                }
+            }
+
+            $this->allocateInvoicePayment($invoice->fresh());
+            $this->audit($schoolId, $actorId, 'session_invoice_generated', $invoice->fresh());
+
+            return $invoice->fresh();
+        });
+    }
+
     public function recordOfflineInvoicePayment(SchoolProfitTermInvoice $invoice, float $amount, ?int $actorId = null, ?string $reason = null): SchoolProfitTermInvoice
     {
         return DB::transaction(function () use ($invoice, $amount, $actorId, $reason) {
@@ -442,6 +527,59 @@ class SchoolBillingService
             } catch (\Throwable $e) {
                 // Commission logging should not break billing transaction
             }
+
+            return $invoice->fresh();
+        });
+    }
+
+    public function applyWalletInvoicePayment(SchoolProfitTermInvoice $invoice, float $amount, ?int $actorId = null): SchoolProfitTermInvoice
+    {
+        return DB::transaction(function () use ($invoice, $amount, $actorId) {
+            $invoice = SchoolProfitTermInvoice::lockForUpdate()->findOrFail($invoice->id);
+            $amount = min((float) $invoice->balance, max(1, $amount));
+
+            $reference = 'SP_WAL_INV_' . strtoupper(Str::random(10));
+            $description = "Wallet payment for Invoice #{$invoice->invoice_no} (₦" . number_format($amount, 2) . ")";
+
+            // Debit school wallet
+            app(WalletService::class)->debitSchoolWalletOrFail(
+                $invoice->school_id,
+                $amount,
+                $actorId ?? 0,
+                $description,
+                $reference
+            );
+
+            // Record invoice payment
+            SchoolProfitInvoicePayment::create([
+                'school_id' => $invoice->school_id,
+                'invoice_id' => $invoice->id,
+                'user_id' => $actorId,
+                'reference' => $reference,
+                'amount' => $amount,
+                'status' => 'successful',
+                'channel' => 'wallet',
+                'paid_at' => now(),
+                'paystack_response' => [
+                    'channel' => 'wallet',
+                    'reference' => $reference,
+                    'amount' => $amount,
+                    'settled_at' => now()->toIso8601String(),
+                ],
+            ]);
+
+            $before = $invoice->toArray();
+            $paid = min((float) $invoice->amount_due, (float) $invoice->amount_paid + $amount);
+            $balance = max(0, (float) $invoice->amount_due - $paid);
+
+            $invoice->update([
+                'amount_paid' => $paid,
+                'balance' => $balance,
+                'status' => $balance <= 0 ? 'paid' : ($paid > 0 ? 'partial' : 'issued'),
+            ]);
+
+            $this->allocateInvoicePayment($invoice->fresh());
+            $this->audit($invoice->school_id, $actorId, 'wallet_invoice_payment_confirmed', $invoice->fresh(), $before, $invoice->fresh()->toArray(), $reference);
 
             return $invoice->fresh();
         });
@@ -1182,6 +1320,34 @@ $unpaid = StudentBillingEntitlement::query()
                         'status' => 'unpaid',
                         'covered_at' => null,
                         'grace_until' => null,
+                    ]);
+                }
+            }
+
+            return;
+        }
+
+        if (($invoice->invoice_type ?? 'term_invoice') === 'session_invoice') {
+            $entitlements = StudentBillingEntitlement::where('school_id', $invoice->school_id)
+                ->where('session_id', $invoice->session_id)
+                ->where('billing_mode', 'offline')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($entitlements as $index => $entitlement) {
+                if ($index < $coveredCount) {
+                    $entitlement->update([
+                        'status' => 'paid',
+                        'source' => 'offline_session_invoice',
+                        'invoice_id' => $invoice->id,
+                        'covered_at' => now(),
+                        'grace_until' => null,
+                    ]);
+                } elseif ($entitlement->status === 'paid') {
+                    $entitlement->update([
+                        'status' => $invoice->due_date && now()->lte($invoice->due_date) ? 'grace' : 'unpaid',
+                        'covered_at' => null,
+                        'grace_until' => $invoice->due_date?->endOfDay(),
                     ]);
                 }
             }

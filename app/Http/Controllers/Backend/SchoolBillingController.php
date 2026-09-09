@@ -70,7 +70,30 @@ class SchoolBillingController extends Controller
         $invoice = $this->billing->generateOfflineInvoice($schoolId, $sessionId, $termId, (int) $request->user()->id);
 
         return response()->json([
-            'message' => 'Offline GradiosEdu invoice generated.',
+            'message' => 'Offline SchoolProfit invoice generated.',
+            'invoice' => $invoice,
+        ]);
+    }
+
+    public function generateSessionInvoice(Request $request)
+    {
+        $validated = $request->validate([
+            'session_id' => 'nullable|exists:academic_sessions,id',
+        ]);
+
+        $schoolId = (int) $request->user()->school_id;
+        [$session, $term] = $this->billing->currentPeriod($schoolId);
+
+        $sessionId = (int) ($validated['session_id'] ?? $session?->id);
+
+        if (! $sessionId) {
+            return response()->json(['message' => 'Current academic session is not set.'], 422);
+        }
+
+        $invoice = $this->billing->generateSessionInvoice($schoolId, $sessionId, (int) $request->user()->id);
+
+        return response()->json([
+            'message' => 'Full session SchoolProfit invoice generated.',
             'invoice' => $invoice,
         ]);
     }

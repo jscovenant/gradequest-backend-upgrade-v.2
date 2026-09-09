@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
-class GradiosEduInvoicePaymentController extends Controller
+class GradequestInvoicePaymentController extends Controller
 {
     public function __construct(
         private SchoolBillingService $billing,
@@ -143,7 +143,7 @@ class GradiosEduInvoicePaymentController extends Controller
         $origin = $request->input('callback_url')
             ?: $request->header('origin')
             ?: ($request->header('referer') ? rtrim(parse_url($request->header('referer'), PHP_URL_SCHEME) . '://' . parse_url($request->header('referer'), PHP_URL_HOST), '/') : null)
-            ?: rtrim((string) (config('app.frontend_url') ?: 'https://gradequest.com.ng'), '/');
+            ?: rtrim((string) (config('app.frontend_url') ?: 'https://schoolprofit.ng'), '/');
 
         $callbackUrl = rtrim($origin, '/') . '/billing/invoice-payment/' . $invoice->id . '?reference=' . $reference;
 
@@ -181,6 +181,47 @@ class GradiosEduInvoicePaymentController extends Controller
             'access_code' => $response->json('data.access_code'),
             'reference' => $reference,
         ]);
+    }
+
+    public function payWithWallet(Request $request, GradiosEduTermInvoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+
+        $invoice = $invoice->fresh();
+
+        if ((float) $invoice->balance <= 0) {
+            return response()->json(['message' => 'This invoice is already fully paid.'], 422);
+        }
+
+        $validated = $request->validate([
+            'amount' => 'nullable|numeric|min:1',
+        ]);
+
+        $amount = (float) ($validated['amount'] ?? $invoice->balance);
+        $amount = min($amount, (float) $invoice->balance);
+
+        try {
+            $updatedInvoice = $this->billing->applyWalletInvoicePayment(
+                $invoice,
+                $amount,
+                (int) $request->user()->id
+            );
+
+            $wallet = DB::table('wallets')->where('school_id', $invoice->school_id)->first();
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Invoice payment deducted from school wallet successfully.',
+                'invoice' => $updatedInvoice,
+                'wallet_balance' => (float) ($wallet?->balance ?? 0),
+                'payments' => GradiosEduInvoicePayment::where('invoice_id', $invoice->id)->latest()->get(),
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'status' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
     }
 
     public function verify(Request $request, string $reference)
@@ -257,4 +298,8 @@ class GradiosEduInvoicePaymentController extends Controller
     {
         return $user && $user->isSuperAdminUser();
     }
+}
+
+if (!class_exists('App\Http\Controllers\Backend\GradiosEduInvoicePaymentController', false)) {
+    class_alias(GradequestInvoicePaymentController::class, 'App\Http\Controllers\Backend\GradiosEduInvoicePaymentController');
 }
