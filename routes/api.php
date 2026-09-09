@@ -490,6 +490,7 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   Route::get('/school/billing/audits', [SchoolBillingController::class, 'audits']);
   Route::get('/school/billing/invoices/{invoice}/payment', [GradequestInvoicePaymentController::class, 'show']);
   Route::post('/school/billing/invoices/{invoice}/payment/initialize', [GradequestInvoicePaymentController::class, 'initialize']);
+  Route::post('/school/billing/invoices/{invoice}/payment/wema-virtual-account', [GradequestInvoicePaymentController::class, 'generateVirtualAccount']);
   Route::get('/school/billing/invoice-payments/verify/{reference}', [GradequestInvoicePaymentController::class, 'verify']);
 
   // Student Clearance & Wallet Entitlement Routes

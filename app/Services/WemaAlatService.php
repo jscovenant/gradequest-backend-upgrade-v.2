@@ -43,16 +43,115 @@ class WemaAlatService
     }
 
     /**
-     * Generate a dedicated or dynamic Wema Bank Virtual Account for school fee payments.
+     * Resolve account name in real-time via Wema Bank Name Enquiry (with resilient multi-gateway fallback).
+     */
+    public function nameEnquiry(string $bankCode, string $accountNumber): array
+    {
+        $bankCode = trim($bankCode);
+        $accountNumber = trim($accountNumber);
+
+        if (strlen($accountNumber) !== 10 || empty($bankCode)) {
+            return [
+                'status' => false,
+                'message' => 'Invalid bank code or 10-digit account number.',
+            ];
+        }
+
+        // 1. Primary: Wema Merchant Payout Name Enquiry API
+        if ($this->environment === 'production' && ! empty($this->payoutKey)) {
+            try {
+                $response = Http::withHeaders($this->headers($this->payoutKey))
+                    ->timeout(12)
+                    ->get("{$this->baseUrl}/merchant-payout-api/api/v1/Payout/AccountNameEnquiry", [
+                        'destinationBankCode' => $bankCode,
+                        'destinationAccountNumber' => $accountNumber,
+                    ]);
+
+                if ($response->successful()) {
+                    $accountName = $response->json('data.accountName') 
+                        ?? $response->json('accountName') 
+                        ?? $response->json('data.account_name')
+                        ?? $response->json('account_name');
+
+                    if (! empty($accountName)) {
+                        return [
+                            'status' => true,
+                            'account_name' => strtoupper(trim((string) $accountName)),
+                            'account_number' => $accountNumber,
+                            'bank_code' => $bankCode,
+                            'gateway' => 'wema',
+                        ];
+                    }
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Wema Name Enquiry live API error: ' . $e->getMessage());
+            }
+        }
+
+        // 2. High-Availability Fallback: Paystack Bank Resolve
+        $paystackSecret = config('services.paystack.secret');
+        if (! empty($paystackSecret)) {
+            try {
+                $paystackResponse = Http::withToken($paystackSecret)
+                    ->timeout(10)
+                    ->get('https://api.paystack.co/bank/resolve', [
+                        'account_number' => $accountNumber,
+                        'bank_code' => $bankCode,
+                    ]);
+
+                if ($paystackResponse->successful() && $paystackResponse->json('status')) {
+                    $data = $paystackResponse->json('data');
+                    return [
+                        'status' => true,
+                        'account_name' => strtoupper(trim((string) ($data['account_name'] ?? ''))),
+                        'account_number' => (string) ($data['account_number'] ?? $accountNumber),
+                        'bank_code' => $bankCode,
+                        'gateway' => 'paystack_fallback',
+                    ];
+                }
+            } catch (\Throwable $payErr) {
+                Log::warning('Paystack account resolve fallback error: ' . $payErr->getMessage());
+            }
+        }
+
+        // 3. Fallback for Sandbox / Test Simulation
+        if ($this->environment === 'sandbox' || app()->environment('local', 'testing')) {
+            $mockNames = [
+                '035' => 'SCHOOLPROFIT WEMA MASTER ACCOUNT',
+                '058' => 'ROYAL HORIZON INTERNATIONAL SCHOOL',
+                '057' => 'EXCELLENCE MODEL COLLEGE',
+                '044' => 'KINGDOM HERITAGE ACADEMY',
+                '100004' => 'OPAY COMMERCE - SCHOOL BENEFICIARY',
+                '090405' => 'MONIEPOINT MFB - SCHOOL VENTURES',
+            ];
+            $accountName = $mockNames[$bankCode] ?? ('SCHOOL BENEFICIARY ' . substr($accountNumber, -4));
+
+            return [
+                'status' => true,
+                'account_name' => $accountName,
+                'account_number' => $accountNumber,
+                'bank_code' => $bankCode,
+                'gateway' => 'wema_sandbox',
+            ];
+        }
+
+        return [
+            'status' => false,
+            'message' => 'Invalid bank account details.',
+        ];
+    }
+
+    /**
+     * Generate a dedicated or dynamic Wema Bank Virtual Account for school fee payments or invoices.
      */
     public function generateVirtualAccount(array $params): array
     {
         $reference = $params['reference'] ?? 'WEMA_' . strtoupper(Str::random(14));
         $amount = (float) ($params['amount'] ?? 0);
-        $name = (string) ($params['student_name'] ?? 'SchoolProfit Student');
+        $name = (string) ($params['student_name'] ?? $params['school_name'] ?? $params['invoice_no'] ?? 'SchoolProfit Client');
         $email = (string) ($params['email'] ?? 'payments@schoolprofit.ng');
         $phone = (string) ($params['phone'] ?? '08000000000');
-        $schoolCode = (string) ($params['school_code'] ?? 'SCH');
+        $schoolCode = (string) ($params['school_code'] ?? 'SP');
 
         // If Virtual Account API is live and active on Azure
         if ($this->environment === 'production' && $this->virtualAccountKey !== 'schooproft_virtual_acct_pending') {

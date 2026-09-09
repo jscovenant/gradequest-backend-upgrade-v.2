@@ -8,6 +8,7 @@ use App\Models\SchoolBankAccount;
 use App\Models\User;
 use App\Services\MonnifyService;
 use App\Services\SchoolBillingService;
+use App\Services\WemaAlatService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -19,7 +20,8 @@ class SchoolBankAccountController extends Controller
 {
     public function __construct(
         private SchoolBillingService $billing,
-        private MonnifyService $monnify
+        private MonnifyService $monnify,
+        private WemaAlatService $wemaService
     ) {
     }
 
@@ -125,19 +127,15 @@ class SchoolBankAccountController extends Controller
 
         try {
             /**
-             * STEP 1: Verify the account number via Paystack
+             * STEP 1: Verify the account number via Wema Bank Name Enquiry (with fallback)
              */
-            $verify = Http::withToken(config('services.paystack.secret'))
-                ->get('https://api.paystack.co/bank/resolve', [
-                    'account_number' => $validated['account_number'],
-                    'bank_code'      => $validated['bank_code'],
-                ]);
+            $verify = $this->wemaService->nameEnquiry($validated['bank_code'], $validated['account_number']);
 
-            if (! $verify->successful() || ! $verify->json('status')) {
-                throw new \Exception('Invalid bank account details.');
+            if (! ($verify['status'] ?? false)) {
+                throw new \Exception($verify['message'] ?? 'Invalid bank account details.');
             }
 
-            $resolvedName = $verify->json('data.account_name');
+            $resolvedName = $verify['account_name'];
             $validated['account_name'] = $resolvedName;
 
             $paystackSubaccountCode = null;
@@ -247,26 +245,21 @@ class SchoolBankAccountController extends Controller
             'account_number' => 'required|string|size:10',
         ]);
 
-        $response = Http::withToken(config('services.paystack.secret'))
-            ->get('https://api.paystack.co/bank/resolve', [
-                'account_number' => $validated['account_number'],
-                'bank_code' => $validated['bank_code'],
-            ]);
+        $verify = $this->wemaService->nameEnquiry($validated['bank_code'], $validated['account_number']);
 
-        if (! $response->successful() || ! $response->json('status')) {
+        if (! ($verify['status'] ?? false)) {
             return response()->json([
                 'status' => false,
-                'message' => 'Invalid bank account details.',
+                'message' => $verify['message'] ?? 'Invalid bank account details.',
             ], 422);
         }
 
-        $data = $response->json('data');
-
         return response()->json([
             'status' => true,
-            'account_name' => $data['account_name'],
-            'account_number' => $data['account_number'],
-            'bank_id' => $data['bank_id'] ?? null,
+            'account_name' => $verify['account_name'],
+            'account_number' => $verify['account_number'],
+            'bank_id' => $verify['bank_code'] ?? null,
+            'gateway' => $verify['gateway'] ?? 'wema',
         ]);
     }
 
@@ -311,17 +304,13 @@ class SchoolBankAccountController extends Controller
                 $accountNumber = $validated['account_number'] ?? $item->account_number;
 
                 if ($bankCode && $accountNumber) {
-                    $verify = Http::withToken(config('services.paystack.secret'))
-                        ->get('https://api.paystack.co/bank/resolve', [
-                            'account_number' => $accountNumber,
-                            'bank_code'      => $bankCode,
-                        ]);
+                    $verify = $this->wemaService->nameEnquiry($bankCode, $accountNumber);
 
-                    if (! $verify->successful() || ! $verify->json('status')) {
-                        throw new \Exception('Invalid bank account details.');
+                    if (! ($verify['status'] ?? false)) {
+                        throw new \Exception($verify['message'] ?? 'Invalid bank account details.');
                     }
 
-                    $validated['account_name'] = $verify->json('data.account_name');
+                    $validated['account_name'] = $verify['account_name'];
                 }
             }
 
@@ -438,18 +427,52 @@ class SchoolBankAccountController extends Controller
 
     public function banks()
     {
-        $response = Http::withToken(config('services.paystack.secret'))
-            ->get('https://api.paystack.co/bank', [
-                'country' => 'nigeria',
-            ]);
+        return Cache::remember('nigerian_banks_list', 86400, function () {
+            try {
+                $response = Http::withToken(config('services.paystack.secret'))
+                    ->timeout(10)
+                    ->get('https://api.paystack.co/bank', [
+                        'country' => 'nigeria',
+                        'perPage' => 100,
+                    ]);
 
-        if (! $response->successful()) {
-            return response()->json([
-                'message' => 'Unable to fetch banks.'
-            ], 500);
-        }
+                if ($response->successful() && is_array($response->json('data'))) {
+                    return response()->json($response->json('data'));
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Could not fetch banks from Paystack: ' . $e->getMessage());
+            }
 
-        return response()->json($response->json('data'));
+            // Standard fallback of major Nigerian commercial banks and FinTechs
+            $fallbackBanks = [
+                ['name' => 'Wema Bank (ALAT)', 'code' => '035'],
+                ['name' => 'Guaranty Trust Bank (GTBank)', 'code' => '058'],
+                ['name' => 'Zenith Bank', 'code' => '057'],
+                ['name' => 'Access Bank', 'code' => '044'],
+                ['name' => 'First Bank of Nigeria', 'code' => '011'],
+                ['name' => 'United Bank For Africa (UBA)', 'code' => '033'],
+                ['name' => 'Moniepoint Microfinance Bank', 'code' => '090405'],
+                ['name' => 'OPay (PayCom)', 'code' => '100004'],
+                ['name' => 'PalmPay', 'code' => '100033'],
+                ['name' => 'Kuda Microfinance Bank', 'code' => '090267'],
+                ['name' => 'Fidelity Bank', 'code' => '070'],
+                ['name' => 'Stanbic IBTC Bank', 'code' => '221'],
+                ['name' => 'Sterling Bank', 'code' => '232'],
+                ['name' => 'Union Bank of Nigeria', 'code' => '032'],
+                ['name' => 'Providus Bank', 'code' => '101'],
+                ['name' => 'Ecobank Nigeria', 'code' => '050'],
+                ['name' => 'FCMB (First City Monument Bank)', 'code' => '214'],
+                ['name' => 'Polaris Bank', 'code' => '076'],
+                ['name' => 'Keystone Bank', 'code' => '082'],
+                ['name' => 'Jaiz Bank', 'code' => '301'],
+                ['name' => 'TAJ Bank', 'code' => '302'],
+                ['name' => 'VFD Microfinance Bank', 'code' => '090110'],
+                ['name' => 'FairMoney Microfinance Bank', 'code' => '090551'],
+                ['name' => 'Rubies MFB', 'code' => '090175'],
+            ];
+
+            return response()->json($fallbackBanks);
+        });
     }
 
     private function syncSchoolPaymentMode(int $schoolId, string $paymentMode, int $actorId): void

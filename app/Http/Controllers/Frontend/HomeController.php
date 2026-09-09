@@ -27,7 +27,12 @@ class HomeController extends Controller
             $cleanWhatsapp = '234' . substr($cleanWhatsapp, 1);
         }
 
-        $platformFee = (float) ($policy?->platform_fee_per_student ?: 1000);
+        $platformFee = (float) ($policy?->platform_fee_per_student ?: 500);
+        $basicTierPrice = (float) ($policy?->basic_tier_price_per_student ?: 300);
+        $standardCbtPrice = (float) ($policy?->standard_cbt_tier_price_per_student ?: 500);
+        $annualMultiplier = (float) ($policy?->annual_full_session_multiplier ?: 3);
+        $annualDiscount = (float) ($policy?->annual_session_discount_percent ?: 0);
+        $bankCharge = (float) ($policy?->default_bank_charge_amount ?: 200);
 
         $plans = SubscriptionPlan::query()
             ->where('is_active', 1)
@@ -98,23 +103,38 @@ class HomeController extends Controller
             })
             ->values();
 
+        $platformData = [
+            'support_whatsapp' => $cleanWhatsapp ?: '2348165748374',
+            'support_whatsapp_raw' => (string) ($whatsappNumber ?: '08165748374'),
+            'support_email' => 'support@schoolprofit.ng',
+            'platform_fee_per_student' => $platformFee,
+            'formatted_platform_fee' => '₦' . number_format($platformFee, 0),
+            'basic_tier_price_per_student' => $basicTierPrice,
+            'formatted_basic_tier_price' => '₦' . number_format($basicTierPrice, 0),
+            'standard_cbt_tier_price_per_student' => $standardCbtPrice,
+            'formatted_standard_cbt_tier_price' => '₦' . number_format($standardCbtPrice, 0),
+            'annual_full_session_multiplier' => $annualMultiplier,
+            'annual_session_discount_percent' => $annualDiscount,
+            'default_bank_charge_amount' => $bankCharge,
+            'whatsapp_credit_unit_price' => (float) ($policy?->whatsapp_credit_unit_price ?: 10),
+            'ai_credit_unit_price' => (float) ($policy?->ai_credit_unit_price ?: 25),
+            'sales_partner_term_1_commission' => (float) ($policy?->sales_partner_term_1_commission_rate ?? 30.00),
+            'sales_partner_retention_commission' => (float) ($policy?->sales_partner_retention_commission_rate ?? 12.00),
+            'promo' => $policy?->promo_enabled ? [
+                'title' => $policy->promo_title,
+                'description' => $policy->promo_description,
+                'target_tier' => $policy->promo_target_tier ?? 'all',
+                'discount_percent' => (float) ($policy->promo_discount_percent ?? 100),
+                'bonus_days' => $policy->promo_bonus_days,
+                'min_students' => $policy->promo_min_students,
+                'starts_at' => $policy->promo_starts_at,
+                'ends_at' => $policy->promo_ends_at,
+            ] : null,
+        ];
+
         return response()->json([
             'data' => $plans,
-            'platform' => [
-                'support_whatsapp' => $cleanWhatsapp ?: '2348165748374',
-                'support_whatsapp_raw' => (string) ($whatsappNumber ?: '08165748374'),
-                'support_email' => 'gradequestapp@gmail.com',
-                'platform_fee_per_student' => $platformFee,
-                'formatted_platform_fee' => '₦' . number_format($platformFee, 0),
-                'sales_partner_term_1_commission' => (float) ($policy?->sales_partner_term_1_commission_rate ?? 30.00),
-                'sales_partner_retention_commission' => (float) ($policy?->sales_partner_retention_commission_rate ?? 12.00),
-                'promo' => $policy?->promo_enabled ? [
-                    'title' => $policy->promo_title,
-                    'description' => $policy->promo_description,
-                    'bonus_days' => $policy->promo_bonus_days,
-                    'min_students' => $policy->promo_min_students,
-                ] : null,
-            ],
+            'platform' => $platformData,
         ]);
     }
 
@@ -135,23 +155,41 @@ class HomeController extends Controller
             $cleanWhatsapp = '234' . substr($cleanWhatsapp, 1);
         }
 
-        $platformFee = (float) ($policy?->platform_fee_per_student ?: 1000);
+        $platformFee = (float) ($policy?->platform_fee_per_student ?: 500);
+        $basicTierPrice = (float) ($policy?->basic_tier_price_per_student ?: 300);
+        $standardCbtPrice = (float) ($policy?->standard_cbt_tier_price_per_student ?: 500);
+        $annualMultiplier = (float) ($policy?->annual_full_session_multiplier ?: 3);
+        $annualDiscount = (float) ($policy?->annual_session_discount_percent ?: 0);
+        $bankCharge = (float) ($policy?->default_bank_charge_amount ?: 200);
 
         return response()->json([
             'status' => 'success',
             'data' => [
                 'support_whatsapp' => $cleanWhatsapp ?: '2348165748374',
                 'support_whatsapp_raw' => (string) ($whatsappNumber ?: '08165748374'),
-                'support_email' => 'gradequestapp@gmail.com',
+                'support_email' => 'support@schoolprofit.ng',
                 'platform_fee_per_student' => $platformFee,
                 'formatted_platform_fee' => '₦' . number_format($platformFee, 0),
+                'basic_tier_price_per_student' => $basicTierPrice,
+                'formatted_basic_tier_price' => '₦' . number_format($basicTierPrice, 0),
+                'standard_cbt_tier_price_per_student' => $standardCbtPrice,
+                'formatted_standard_cbt_tier_price' => '₦' . number_format($standardCbtPrice, 0),
+                'annual_full_session_multiplier' => $annualMultiplier,
+                'annual_session_discount_percent' => $annualDiscount,
+                'default_bank_charge_amount' => $bankCharge,
+                'whatsapp_credit_unit_price' => (float) ($policy?->whatsapp_credit_unit_price ?: 10),
+                'ai_credit_unit_price' => (float) ($policy?->ai_credit_unit_price ?: 25),
                 'sales_partner_term_1_commission' => (float) ($policy?->sales_partner_term_1_commission_rate ?? 30.00),
                 'sales_partner_retention_commission' => (float) ($policy?->sales_partner_retention_commission_rate ?? 12.00),
                 'promo' => $policy?->promo_enabled ? [
                     'title' => $policy->promo_title,
                     'description' => $policy->promo_description,
+                    'target_tier' => $policy->promo_target_tier ?? 'all',
+                    'discount_percent' => (float) ($policy->promo_discount_percent ?? 100),
                     'bonus_days' => $policy->promo_bonus_days,
                     'min_students' => $policy->promo_min_students,
+                    'starts_at' => $policy->promo_starts_at,
+                    'ends_at' => $policy->promo_ends_at,
                 ] : null,
             ],
         ]);

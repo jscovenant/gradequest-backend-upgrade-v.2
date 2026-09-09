@@ -1,25 +1,27 @@
 <?php
 
-namespace AppHttpControllersBackend;
+namespace App\Http\Controllers\Backend;
 
-use AppHttpControllersController;
-use AppModelsPayment;
-use AppModelsPaymentReceipt;
-use AppModelsPublicFeePaymentIntent;
-use AppModelsSchoolBankAccount;
-use AppModelsSchoolSetting;
-use AppModelsStudentFee;
-use AppModelsUser;
-use AppMailSchoolFeePaymentReceiptMail;
-use AppServicesPlatformFeeService;
-use AppServicesSchoolBillingService;
-use AppServicesSalesCommissionService;
-use AppServicesWemaAlatService;
-use IlluminateHttpRequest;
-use IlluminateSupportFacadesDB;
-use IlluminateSupportFacadesLog;
-use IlluminateSupportFacadesMail;
-use IlluminateSupportStr;
+use App\Http\Controllers\Controller;
+use App\Models\GradiosEduInvoicePayment;
+use App\Models\GradiosEduTermInvoice;
+use App\Models\Payment;
+use App\Models\PaymentReceipt;
+use App\Models\PublicFeePaymentIntent;
+use App\Models\SchoolBankAccount;
+use App\Models\SchoolSetting;
+use App\Models\StudentFee;
+use App\Models\User;
+use App\Mail\SchoolFeePaymentReceiptMail;
+use App\Services\PlatformFeeService;
+use App\Services\SchoolBillingService;
+use App\Services\SalesCommissionService;
+use App\Services\WemaAlatService;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Str;
 
 class WemaWebhookController extends Controller
 {
@@ -58,13 +60,64 @@ class WemaWebhookController extends Controller
             return response()->json(['message' => 'Webhook received for non-success event.'], 200);
         }
 
+        // ==========================================
+        // BRANCH A: School Term / Platform Invoice Payment
+        // ==========================================
+        $invPayment = GradiosEduInvoicePayment::where('reference', $reference)->first();
+        if ($invPayment) {
+            if ($invPayment->status === 'successful') {
+                return response()->json(['message' => 'Invoice payment already fulfilled.'], 200);
+            }
+
+            DB::beginTransaction();
+            try {
+                $invoice = GradiosEduTermInvoice::find($invPayment->invoice_id);
+                if ($invoice) {
+                    $invPayment->update([
+                        'status' => 'successful',
+                        'channel' => 'wema_virtual_account',
+                        'paid_at' => now(),
+                        'paystack_response' => array_merge(
+                            is_array($invPayment->paystack_response) ? $invPayment->paystack_response : [],
+                            ['webhook_event' => $payload, 'settled_via' => 'Wema Bank Virtual Account']
+                        ),
+                    ]);
+
+                    $effectiveAmount = $amountPaid > 0 ? $amountPaid : (float) $invPayment->amount;
+                    $this->schoolBillingService->applyOnlineInvoicePayment(
+                        $invoice,
+                        $effectiveAmount,
+                        (int) ($invPayment->user_id ?? 1),
+                        $reference
+                    );
+
+                    Log::info("Wema Virtual Account payment settled for invoice #{$invoice->id}, School: {$invoice->school_id}, Amount: ₦{$effectiveAmount}");
+                }
+
+                DB::commit();
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Invoice payment processed successfully via Wema Virtual Account.',
+                    'reference' => $reference,
+                ]);
+            } catch (\Throwable $invErr) {
+                DB::rollBack();
+                Log::error('Error settling invoice payment from Wema Webhook: ' . $invErr->getMessage(), ['trace' => $invErr->getTraceAsString()]);
+                return response()->json(['message' => 'Internal server error processing invoice webhook.'], 500);
+            }
+        }
+
+        // ==========================================
+        // BRANCH B: Student Tuition / Fee Intent Payment
+        // ==========================================
         $intent = PublicFeePaymentIntent::where('reference', $reference)
             ->orWhere('payment_reference', $reference)
             ->first();
 
         if (! $intent) {
-            Log::info("No matching payment intent for Wema reference: {$reference}");
-            return response()->json(['message' => 'Intent not found or already processed.'], 200);
+            Log::info("No matching payment intent or invoice payment for Wema reference: {$reference}");
+            return response()->json(['message' => 'Transaction not registered or already processed.'], 200);
         }
 
         if ($intent->status === 'paid') {
