@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GradiosEdu Security Alert</title>
+    <title>SchoolProfit Security Alert</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -94,7 +94,7 @@
 <body>
     <div class="email-card">
         <div class="header">
-            <h1>GradiosEdu Security Guard</h1>
+            <h1>SchoolProfit Security Guard</h1>
             <p>Immediate Security Notification</p>
         </div>
         <div class="body">
@@ -132,7 +132,7 @@
             </p>
         </div>
         <div class="footer">
-            <p>&copy; {{ date('Y') }} GradiosEdu School Management System.</p>
+            <p>&copy; {{ date('Y') }} SchoolProfit School Management System.</p>
         </div>
     </div>
 </body>

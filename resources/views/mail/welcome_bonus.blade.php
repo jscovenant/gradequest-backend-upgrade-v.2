@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Welcome to GradiosEdu - &#8358;5,000 Wallet Credit Added</title>
+  <title>Welcome to SchoolProfit - &#8358;5,000 Wallet Credit Added</title>
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -19,7 +19,7 @@
       overflow: hidden;
     }
     .email-header {
-      background-color: #0d6efd;
+      background-color: #0F2744;
       color: white;
       text-align: center;
       padding: 25px 20px;
@@ -62,42 +62,42 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
-      <h1>Welcome to GradiosEdu 🎓</h1>
+      <img src="{{ asset('frontend/logo/schoolprofit-logo.png') }}" alt="SchoolProfit Logo">
+      <h1>Welcome to SchoolProfit 🎓</h1>
     </div>
 
     <div class="email-body">
       <p>Hello <strong>{{ $user->name ?? ($user->firstname . ' ' . $user->surname ?? 'User') }}</strong>,</p>
 
-      <p>Welcome to <strong>GradiosEdu</strong>! 🎉</p>
+      <p>Welcome to <strong>SchoolProfit</strong>! 🎉</p>
 
       <p>
         We’re excited to have you join our community. As a token of appreciation,
-        we’ve credited your wallet with a <strong>&#8358;5,000 GradiosEduPlus wallet credit</strong> to help you get started.
+        we’ve credited your wallet with a <strong>&#8358;5,000 SchoolProfit Plus wallet credit</strong> to help you get started.
       </p>
 
       <p>
-        You can use this credit to subscribe to GradiosEduPlus. The credit expires 30 days after activation if it is not used.
+        You can use this credit to subscribe to SchoolProfit Plus. The credit expires 30 days after activation if it is not used.
       </p>
 
       <p>
         For step-by-step explanatory videos on how to set up and use various features,
         please visit our blog:
         <br>
-        👉 <a href="https://gradequest.com.ng/blog" target="_blank">
-          https://gradequest.com.ng/blog
+        👉 <a href="https://schoolprofit.ng/blog" target="_blank">
+          https://schoolprofit.ng/blog
         </a>
       </p>
 
       <p>
-        Thank you for choosing <strong>GradiosEdu</strong> — where learning meets innovation!
+        Thank you for choosing <strong>SchoolProfit</strong> — where learning meets innovation!
       </p>
 
-      <p>— The GradiosEdu Team</p>
+      <p>— The SchoolProfit Team</p>
     </div>
 
     <div class="email-footer">
-      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradiosEdu</a>. All rights reserved.</p>
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">SchoolProfit</a>. All rights reserved.</p>
     </div>
   </div>
 </body>

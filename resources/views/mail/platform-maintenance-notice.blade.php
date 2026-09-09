@@ -119,7 +119,7 @@
 <body>
     <div class="wrapper">
         <div class="header">
-            <p>GradiosEdu Platform Operations</p>
+            <p>SchoolProfit Platform Operations</p>
             <h1>Scheduled System Maintenance Notice</h1>
         </div>
 
@@ -129,7 +129,7 @@
             </div>
 
             <p style="font-size: 14px; color: #334155; margin-bottom: 16px;">
-                We are writing to notify you that GradiosEdu will be undergoing scheduled infrastructure and database maintenance to optimize performance and improve reliability across all school portals.
+                We are writing to notify you that SchoolProfit will be undergoing scheduled infrastructure and database maintenance to optimize performance and improve reliability across all school portals.
             </p>
 
             <div class="alert-box">
@@ -185,7 +185,7 @@
         </div>
 
         <div class="footer">
-            &copy; {{ date('Y') }} GradiosEdu Smart School Management Platform. All rights reserved.
+            &copy; {{ date('Y') }} SchoolProfit Smart School Management Platform. All rights reserved.
         </div>
     </div>
 </body>

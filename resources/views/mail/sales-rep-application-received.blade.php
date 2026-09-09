@@ -26,7 +26,7 @@
                                 Hello <strong>{{ $user?->firstname ?? 'Sales Partner' }}</strong>,
                             </p>
                             <p style="font-size:14.5px;line-height:1.6;color:#475569;">
-                                Thank you for applying to join the <strong>GradiosEdu Partner Network</strong>. We have received your application and regional credentials.
+                                Thank you for applying to join the <strong>SchoolProfit Partner Network</strong>. We have received your application and regional credentials.
                             </p>
 
                             <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;padding:18px 20px;margin:24px 0;">
@@ -63,14 +63,14 @@
                             </p>
 
                             <div style="border-top:1px solid #E2E8F0;padding-top:20px;margin-top:28px;font-size:12.5px;color:#64748B;line-height:1.6;">
-                                Need immediate assistance or have questions about partnership commissions? Reach out to our partner support team on WhatsApp at <a href="https://gradequest.com.ng" style="color:#1D4ED8;text-decoration:none;font-weight:600;">GradiosEdu Support</a>.
+                                Need immediate assistance or have questions about partnership commissions? Reach out to our partner support team on WhatsApp at <a href="https://schoolprofit.ng" style="color:#1D4ED8;text-decoration:none;font-weight:600;">SchoolProfit Support</a>.
                             </div>
                         </td>
                     </tr>
                     <!-- Footer -->
                     <tr>
                         <td style="background:#F8FAFC;border-top:1px solid #E2E8F0;padding:16px 28px;text-align:center;font-size:12px;color:#94A3B8;">
-                            © {{ date('Y') }} GradiosEdu Platform. All rights reserved.
+                            © {{ date('Y') }} SchoolProfit Platform. All rights reserved.
                         </td>
                     </tr>
                 </table>

@@ -105,7 +105,7 @@
 <body>
     <div class="email-card">
         <div class="header">
-            <h1>GradiosEdu Security Guard</h1>
+            <h1>SchoolProfit Security Guard</h1>
             <p>Proprietor Verification Required</p>
         </div>
         <div class="body">
@@ -133,7 +133,7 @@
             </p>
         </div>
         <div class="footer">
-            <p>&copy; {{ date('Y') }} GradiosEdu School Management System. All rights reserved.</p>
+            <p>&copy; {{ date('Y') }} SchoolProfit School Management System. All rights reserved.</p>
             <p>This is an automated security email sent to the registered school proprietor.</p>
         </div>
     </div>

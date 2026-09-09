@@ -30,7 +30,7 @@ class DemoBookingConfirmationMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Booking Confirmation Mail',
+            subject: 'SchoolProfit Demo Booking Confirmation',
         );
     }
 

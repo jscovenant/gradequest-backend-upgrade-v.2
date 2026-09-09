@@ -16,7 +16,7 @@
                                 Grade<span style="color:#FBBF24;">Quest</span>
                             </div>
                             <h1 style="margin:0;font-size:22px;font-weight:700;color:#FFFFFF;">🎉 Application Approved!</h1>
-                            <p style="margin:8px 0 0;color:#CBD5E1;font-size:14px;">Welcome to the GradiosEdu Sales Representative Network.</p>
+                            <p style="margin:8px 0 0;color:#CBD5E1;font-size:14px;">Welcome to the SchoolProfit Sales Representative Network.</p>
                         </td>
                     </tr>
                     <!-- Content -->
@@ -26,7 +26,7 @@
                                 Hello <strong>{{ $user?->firstname ?? 'Sales Representative' }}</strong>,
                             </p>
                             <p style="font-size:14.5px;line-height:1.6;color:#475569;">
-                                We are thrilled to inform you that your <strong>GradiosEdu Sales Representative Account</strong> has been fully verified and approved by the platform administration!
+                                We are thrilled to inform you that your <strong>SchoolProfit Sales Representative Account</strong> has been fully verified and approved by the platform administration!
                             </p>
 
                             <!-- Partner Details Box -->
@@ -72,7 +72,7 @@
                     <!-- Footer -->
                     <tr>
                         <td style="background:#F8FAFC;border-top:1px solid #E2E8F0;padding:16px 28px;text-align:center;font-size:12px;color:#94A3B8;">
-                            © {{ date('Y') }} GradiosEdu Platform. All rights reserved.
+                            © {{ date('Y') }} SchoolProfit Platform. All rights reserved.
                         </td>
                     </tr>
                 </table>

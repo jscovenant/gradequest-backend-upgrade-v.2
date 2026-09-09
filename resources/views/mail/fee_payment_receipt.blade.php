@@ -103,7 +103,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>{{ $data['school']->school_name ?? 'GradeQuest Portal' }}</h1>
+            <h1>{{ $data['school']->school_name ?? 'SchoolProfit Portal' }}</h1>
             <p>Official School Fee Payment Receipt</p>
         </div>
         <div class="content">
@@ -184,7 +184,7 @@
             </p>
         </div>
         <div class="footer">
-            <p style="margin: 0;">Powered by GradiosEdu School Management System &bull; <a href="https://gradequest.com.ng" style="color: #050008; text-decoration: none;">gradequest.com.ng</a></p>
+            <p style="margin: 0;">Powered by SchoolProfit School Management System &bull; <a href="https://schoolprofit.ng" style="color: #050008; text-decoration: none;">schoolprofit.ng</a></p>
         </div>
     </div>
 </body>

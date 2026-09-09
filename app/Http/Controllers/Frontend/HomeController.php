@@ -260,11 +260,17 @@ class HomeController extends Controller
                     $tag = 'Model Academy';
                 }
 
+                $logoUrl = null;
+                if (!empty($s->logo)) {
+                    $logoUrl = str_starts_with($s->logo, 'http') ? $s->logo : asset($s->logo);
+                }
+
                 return [
                     'id' => $s->id,
                     'name' => trim($s->school_name),
                     'tag' => $tag,
                     'location' => $location,
+                    'logo_url' => $logoUrl,
                 ];
             })
             ->unique('name')

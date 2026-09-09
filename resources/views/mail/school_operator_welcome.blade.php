@@ -96,13 +96,13 @@
 <body>
     <div class="email-card">
         <div class="header">
-            <h1>GradiosEdu Portal Access</h1>
+            <h1>SchoolProfit Portal Access</h1>
             <p>{{ $schoolName }}</p>
         </div>
         <div class="body">
             <p>Dear <strong>{{ $operator->firstname }} {{ $operator->surname }}</strong>,</p>
             <p>
-                You have been registered as a <strong>{{ $title }}</strong> for <strong>{{ $schoolName }}</strong> on GradiosEdu.
+                You have been registered as a <strong>{{ $title }}</strong> for <strong>{{ $schoolName }}</strong> on SchoolProfit.
             </p>
             <p>
                 You can now log in to manage student registrations, upload examination results, schedule CBT exams, and coordinate daily portal operations.
@@ -132,7 +132,7 @@
             </p>
         </div>
         <div class="footer">
-            <p>&copy; {{ date('Y') }} GradiosEdu School Management System.</p>
+            <p>&copy; {{ date('Y') }} SchoolProfit School Management System.</p>
         </div>
     </div>
 </body>

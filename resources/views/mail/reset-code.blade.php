@@ -20,7 +20,7 @@
             overflow: hidden;
         }
         .email-header {
-            background-color: #0d6efd;
+            background-color: #0F2744;
             color: #ffffff;
             text-align: center;
             padding: 20px;
@@ -65,7 +65,7 @@
 <body>
     <div class="email-container">
         <div class="email-header">
-            <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="Your Logo">
+            <img src="{{ asset('frontend/logo/schoolprofit-logo.png') }}" alt="Your Logo">
             <h1>Password Reset</h1>
         </div>
         <div class="email-body">

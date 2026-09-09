@@ -26,7 +26,7 @@ class PaymentConfirmationMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Payment Confirmation!',
+            subject: 'Payment Confirmation — SchoolProfit',
         );
     }
 

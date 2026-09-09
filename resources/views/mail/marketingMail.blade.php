@@ -20,7 +20,7 @@
       overflow: hidden;
     }
     .email-header {
-      background-color: #0d6efd;
+      background-color: #0F2744;
       color: white;
       text-align: center;
       padding: 25px 20px;
@@ -58,7 +58,7 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
+      <img src="{{ asset('frontend/logo/schoolprofit-logo.png') }}" alt="SchoolProfit Logo">
       <h1>{{ $subjectLine }}</h1>
     </div>
 
@@ -67,7 +67,7 @@
     </div>
 
     <div class="email-footer">
-      &copy; {{ date('Y') }} GradiosEdu. All rights reserved.<br>
+      &copy; {{ date('Y') }} SchoolProfit. All rights reserved.<br>
       <a href="#">Privacy Policy</a> | <a href="#">Contact Support</a>
     </div>
   </div>

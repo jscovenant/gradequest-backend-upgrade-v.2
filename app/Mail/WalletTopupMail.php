@@ -30,7 +30,7 @@ class WalletTopupMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Wallet Top-up Confirmation',
+            subject: 'Wallet Top-up Successful — SchoolProfit',
         );
     }
 
@@ -40,7 +40,7 @@ class WalletTopupMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            markdown: 'mail.wallet_topup',
+            view: 'mail.wallet_topup',
             with: [
                 'user' => $this->user,
                 'payment' => $this->payment,

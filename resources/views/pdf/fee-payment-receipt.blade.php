@@ -194,7 +194,7 @@
         </td>
       @endif
       <td style="vertical-align: middle;">
-        <div class="school-name">{{ $school->school_name ?? $school->name ?? 'GradiosEdu School' }}</div>
+        <div class="school-name">{{ $school->school_name ?? $school->name ?? 'SchoolProfit Partner School' }}</div>
         <div class="school-meta">
           @if(!empty($school->address)) {{ $school->address }} <br> @endif
           @if(!empty($school->email)) Email: {{ $school->email }} @endif

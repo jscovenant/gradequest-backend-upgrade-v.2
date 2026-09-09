@@ -19,7 +19,7 @@
       overflow: hidden;
     }
     .email-header {
-      background-color: #0d6efd;
+      background-color: #0F2744;
       color: white;
       text-align: center;
       padding: 25px 20px;
@@ -69,7 +69,7 @@
 <body>
   <div class="email-container">
     <div class="email-header">
-      <img src="{{ asset('frontend/logo/gradequest_log.png') }}" alt="GradiosEdu Logo">
+      <img src="{{ asset('frontend/logo/schoolprofit-logo.png') }}" alt="SchoolProfit Logo">
       <h1>Payment Confirmation</h1>
     </div>
 
@@ -99,7 +99,7 @@
     </div>
 
     <div class="email-footer">
-      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">GradiosEdu</a>. All rights reserved.</p>
+      <p>&copy; {{ date('Y') }} <a href="{{ url('/') }}">SchoolProfit</a>. All rights reserved.</p>
     </div>
   </div>
 </body>
