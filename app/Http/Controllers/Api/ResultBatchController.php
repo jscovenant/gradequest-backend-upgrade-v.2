@@ -620,6 +620,44 @@ public function resultForm(int $batchId, int $studentId)
         }
     }
 
+    // Dynamic attendance calculation
+    $batchTermModel = Term::query()
+        ->where('school_id', $schoolId)
+        ->where('name', (string) $batch->term)
+        ->first();
+
+    $attQuery = DB::table('attendances')
+        ->where('school_id', $schoolId)
+        ->where('student_id', $student->id);
+
+    if ($batchTermModel && !empty($batchTermModel->start_date) && !empty($batchTermModel->end_date)) {
+        $attQuery->whereBetween('date', [$batchTermModel->start_date, $batchTermModel->end_date]);
+    }
+
+    $attRows = $attQuery->get(['status']);
+    $presentCount = $attRows->whereIn('status', ['present', 'late'])->count();
+    $absentCount = $attRows->whereIn('status', ['absent', 'excused'])->count();
+    $totalAttDays = $attRows->count();
+
+    $attendanceData = [
+        'present' => $presentCount,
+        'absent' => $absentCount,
+        'total_open' => $totalAttDays,
+        'available' => $totalAttDays > 0,
+    ];
+
+    if ($existingPayload && $attendanceData['available']) {
+        if (empty($existingPayload['summary']['meta']['no_present']) && !isset($existingPayload['summary']['meta']['no_present'])) {
+            $existingPayload['summary']['meta']['no_present'] = (string) $presentCount;
+        }
+        if (empty($existingPayload['summary']['meta']['no_absent']) && !isset($existingPayload['summary']['meta']['no_absent'])) {
+            $existingPayload['summary']['meta']['no_absent'] = (string) $absentCount;
+        }
+        if (empty($existingPayload['summary']['meta']['school_open']) && !isset($existingPayload['summary']['meta']['school_open'])) {
+            $existingPayload['summary']['meta']['school_open'] = (string) $totalAttDays;
+        }
+    }
+
     return response()->json([
         'batch' => $batch,
         'student' => $student,
@@ -627,6 +665,7 @@ public function resultForm(int $batchId, int $studentId)
         'term' => $batch->term,
         'session' => $batch->session,
         'existing' => $existingPayload,
+        'attendance' => $attendanceData,
         'terms' => $termNames,
         'previous_terms' => $previousTerms,
         'carry_over_preview' => $carryOverPreview,

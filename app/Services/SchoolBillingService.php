@@ -262,8 +262,15 @@ class SchoolBillingService
             $settings = $this->settingsForSchool($schoolId);
             $students = $this->activeStudents($schoolId);
             $billingProfile = $this->billingProfile($schoolId);
+            $pricePerStudent = (float) $billingProfile['price_per_student'];
 
-            $amountDue = $students->count() * (float) $billingProfile['price_per_student'];
+            $clearedCount = StudentBillingEntitlement::where('school_id', $schoolId)
+                ->where('session_id', $sessionId)
+                ->where('term_id', $termId)
+                ->whereIn('status', ['paid', 'override'])
+                ->count();
+
+            $totalAmount = $students->count() * $pricePerStudent;
 
             $invoice = SchoolProfitTermInvoice::firstOrNew([
                 'school_id' => $schoolId,
@@ -279,18 +286,22 @@ class SchoolBillingService
                 $invoice->created_by = $actorId;
             }
 
-            $amountPaid = min(max((float) ($invoice->amount_paid ?? 0), $this->subscriptionPaidAmountForSchool($schoolId)), $amountDue);
-            $balance = max(0, $amountDue - $amountPaid);
+            $alreadyPaidAmount = max((float) ($invoice->amount_paid ?? 0), $clearedCount * $pricePerStudent, $this->subscriptionPaidAmountForSchool($schoolId));
+            $amountPaid = min($alreadyPaidAmount, $totalAmount);
+            $balance = max(0, $totalAmount - $amountPaid);
 
             $invoice->fill([
                 'active_students_count' => $students->count(),
-                'amount_due' => $amountDue,
+                'amount_due' => $totalAmount,
                 'amount_paid' => $amountPaid,
                 'balance' => $balance,
                 'status' => $balance <= 0 ? 'paid' : ($amountPaid > 0 ? 'partial' : 'issued'),
                 'issued_at' => now()->toDateString(),
                 'due_date' => now()->addDays((int) $settings->grace_days)->toDateString(),
-                'meta' => $billingProfile,
+                'meta' => array_merge($billingProfile, [
+                    'cleared_count' => $clearedCount,
+                    'pending_count' => max(0, $students->count() - $clearedCount),
+                ]),
             ])->save();
 
             $invoice = $invoice->fresh();
@@ -411,6 +422,15 @@ class SchoolBillingService
             $totalStudentTerms = $students->count() * $termsCount;
             $amountDue = $totalStudentTerms * $pricePerStudent;
 
+            $clearedStudentTerms = 0;
+            foreach ($terms as $term) {
+                $clearedStudentTerms += StudentBillingEntitlement::where('school_id', $schoolId)
+                    ->where('session_id', $sessionId)
+                    ->where('term_id', $term->id)
+                    ->whereIn('status', ['paid', 'override'])
+                    ->count();
+            }
+
             $invoice = SchoolProfitTermInvoice::firstOrNew([
                 'school_id' => $schoolId,
                 'session_id' => $sessionId,
@@ -425,7 +445,8 @@ class SchoolBillingService
                 $invoice->created_by = $actorId;
             }
 
-            $amountPaid = min((float) ($invoice->amount_paid ?? 0), $amountDue);
+            $alreadyPaidAmount = max((float) ($invoice->amount_paid ?? 0), $clearedStudentTerms * $pricePerStudent);
+            $amountPaid = min($alreadyPaidAmount, $amountDue);
             $balance = max(0, $amountDue - $amountPaid);
 
             $invoice->fill([
@@ -439,6 +460,8 @@ class SchoolBillingService
                 'meta' => array_merge($billingProfile, [
                     'terms_count' => $termsCount,
                     'total_student_terms' => $totalStudentTerms,
+                    'cleared_student_terms' => $clearedStudentTerms,
+                    'pending_student_terms' => max(0, $totalStudentTerms - $clearedStudentTerms),
                     'is_full_session' => true,
                 ]),
             ])->save();
@@ -1866,7 +1889,22 @@ $unpaid = StudentBillingEntitlement::query()
             $pendingCount = max(0, $totalStudents - $clearedCount);
         }
 
-        $termsCount = Term::where('school_id', $schoolId)->whereNull('archived_at')->count();
+        $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
+        $termsCount = $terms->count();
+
+        $sessionPendingSlots = 0;
+        if ($sessionId && $terms->isNotEmpty()) {
+            foreach ($terms as $t) {
+                $termCleared = StudentBillingEntitlement::where('school_id', $schoolId)
+                    ->where('session_id', $sessionId)
+                    ->where('term_id', $t->id)
+                    ->whereIn('status', ['paid', 'override'])
+                    ->count();
+                $sessionPendingSlots += max(0, $totalStudents - $termCleared);
+            }
+        } else {
+            $sessionPendingSlots = $totalStudents * max(1, $termsCount);
+        }
 
         return [
             'total_students' => $totalStudents,
@@ -1875,7 +1913,8 @@ $unpaid = StudentBillingEntitlement::query()
             'terms_count' => $termsCount,
             'fee_per_student' => $feePerStudent,
             'term_clearance_fee' => $pendingCount * $feePerStudent,
-            'session_clearance_fee' => $totalStudents * max(1, $termsCount) * $feePerStudent,
+            'session_clearance_fee' => $sessionPendingSlots * $feePerStudent,
+            'session_pending_slots' => $sessionPendingSlots,
             'wallet_balance' => $walletBalance,
             'session_id' => $sessionId,
             'term_id' => $termId,

@@ -145,14 +145,40 @@ public function findByAdmissionNo($admissionNo)
         $termId ? (int) $termId : null
     );
 
-    return response()->json([
-        'student'  => $student,
-        'term'     => $activeTermName,
-        'session'  => $currentSessionName,
-        'subjects' => $subjects,
-        'warnings' => [],
-    ]);
-}
+        $termModel = Term::query()
+            ->where('school_id', $schoolId)
+            ->where('name', $activeTermName)
+            ->first();
+
+        $attQuery = DB::table('attendances')
+            ->where('school_id', $schoolId)
+            ->where('student_id', $student->id);
+
+        if ($termModel && !empty($termModel->start_date) && !empty($termModel->end_date)) {
+            $attQuery->whereBetween('date', [$termModel->start_date, $termModel->end_date]);
+        }
+
+        $attRecords = $attQuery->get(['status']);
+        $presentCount = $attRecords->whereIn('status', ['present', 'late'])->count();
+        $absentCount = $attRecords->whereIn('status', ['absent', 'excused'])->count();
+        $totalDays = $attRecords->count();
+
+        $attendanceData = [
+            'present' => $presentCount,
+            'absent' => $absentCount,
+            'total_open' => $totalDays,
+            'available' => $totalDays > 0,
+        ];
+
+        return response()->json([
+            'student'    => $student,
+            'term'       => $activeTermName,
+            'session'    => $currentSessionName,
+            'subjects'   => $subjects,
+            'attendance' => $attendanceData,
+            'warnings'   => [],
+        ]);
+    }
 
 
 
@@ -369,6 +395,30 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
         $resumptionDate = $request->input('summary.resumption_date')
             ?? $meta['resumption_date'] ?? null;
+
+        if (($noPresent === null || $noPresent === '') && ($noAbsent === null || $noAbsent === '')) {
+            $batchInfo = DB::table('result_batches')->where('id', $batch)->first();
+            if ($batchInfo) {
+                $termModel = Term::query()
+                    ->where('school_id', $batchInfo->school_id)
+                    ->where('name', (string) $batchInfo->term)
+                    ->first();
+                $attQuery = DB::table('attendances')
+                    ->where('school_id', $batchInfo->school_id)
+                    ->where('student_id', $student);
+                if ($termModel && !empty($termModel->start_date) && !empty($termModel->end_date)) {
+                    $attQuery->whereBetween('date', [$termModel->start_date, $termModel->end_date]);
+                }
+                $attRecords = $attQuery->get(['status']);
+                if ($attRecords->isNotEmpty()) {
+                    $noPresent = (string) $attRecords->whereIn('status', ['present', 'late'])->count();
+                    $noAbsent = (string) $attRecords->whereIn('status', ['absent', 'excused'])->count();
+                    if ($schoolOpen === null || $schoolOpen === '') {
+                        $schoolOpen = (string) $attRecords->count();
+                    }
+                }
+            }
+        }
 
         if (!isset($meta['no_present']) && $noPresent !== null) $meta['no_present'] = $noPresent;
         if (!isset($meta['no_absent']) && $noAbsent !== null) $meta['no_absent'] = $noAbsent;

@@ -9,6 +9,7 @@ use App\Models\CbtExamSection;
 use App\Models\CbtQuestion;
 use App\Models\CbtQuestionGroup;
 use App\Models\LessonNote;
+use App\Models\TeacherSubject;
 use App\Services\Cbt\CbtQuestionImportService;
 use App\Services\Cbt\AiCbtQuestionGeneratorService;
 use App\Services\CbtAccessService;
@@ -40,6 +41,15 @@ class CbtExamController extends Controller
             ->withCount(['sections', 'questionGroups', 'questions', 'attempts'])
             ->latest();
 
+        if (strtolower((string) ($request->user()?->role ?? '')) === 'teacher') {
+            $assignedSubjectIds = TeacherSubject::query()
+                ->where('teacher_id', (int) $request->user()->id)
+                ->pluck('subject_id')
+                ->filter()
+                ->all();
+            $query->whereIn('subject_id', ! empty($assignedSubjectIds) ? $assignedSubjectIds : [0]);
+        }
+
         if ($request->filled('status')) {
             $query->where('status', $request->query('status'));
         }
@@ -57,6 +67,7 @@ class CbtExamController extends Controller
     {
         $data = $this->normalizeExamData($this->validateExam($request));
         $this->ensureExamSetupBelongsToSchool($request, $data);
+        $this->ensureTeacherCanAccessSubject($request->user(), $data['subject_id'] ?? null);
         $schedule = $data['_schedule'] ?? null;
         unset($data['_schedule']);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($data['delivery_mode']) ? 'offline' : 'online');
@@ -82,6 +93,7 @@ class CbtExamController extends Controller
     public function show(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
 
         return response()->json([
@@ -109,10 +121,12 @@ class CbtExamController extends Controller
     public function update(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
         $data = $this->normalizeExamData($this->validateExam($request));
         $this->ensureExamSetupBelongsToSchool($request, $data);
+        $this->ensureTeacherCanAccessSubject($request->user(), $data['subject_id'] ?? null);
         $schedule = $data['_schedule'] ?? null;
         unset($data['_schedule']);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($data['delivery_mode']) ? 'offline' : 'online');
@@ -133,6 +147,7 @@ class CbtExamController extends Controller
     public function destroy(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->attempts()->exists(), 422, 'This CBT exam already has student attempts. Archive it instead.');
 
         Cache::forget("cbt_exam_blocks_{$exam->id}");
@@ -144,6 +159,7 @@ class CbtExamController extends Controller
     public function publish(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
 
         abort_if($exam->questions()->count() === 0, 422, 'Add at least one question before publishing this CBT exam.');
@@ -165,6 +181,7 @@ class CbtExamController extends Controller
     public function close(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $exam->update(['status' => 'closed']);
         Cache::forget("cbt_exam_blocks_{$exam->id}");
 
@@ -177,6 +194,7 @@ class CbtExamController extends Controller
     public function reopen(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
 
         abort_unless($exam->status === 'published', 422, 'Only published CBT exams can be reopened.');
@@ -198,6 +216,7 @@ class CbtExamController extends Controller
     public function storeSection(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
         $data = $request->validate([
@@ -221,6 +240,7 @@ class CbtExamController extends Controller
     public function storeGroup(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
         $data = $request->validate([
@@ -249,6 +269,7 @@ class CbtExamController extends Controller
     public function storeQuestion(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
         $data = $this->validateQuestion($request);
@@ -283,6 +304,7 @@ class CbtExamController extends Controller
     public function importQuestions(Request $request, CbtExam $exam, CbtQuestionImportService $service): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
@@ -318,6 +340,7 @@ class CbtExamController extends Controller
     public function generateAiQuestions(Request $request, CbtExam $exam, AiCbtQuestionGeneratorService $service): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
         abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
@@ -425,6 +448,7 @@ class CbtExamController extends Controller
     public function importAiQuestions(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
         abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
@@ -448,6 +472,7 @@ class CbtExamController extends Controller
     public function downloadQuestionTemplate(Request $request, CbtExam $exam, string $format)
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
 
         $format = strtolower($format);
@@ -648,6 +673,7 @@ Fruits | 4 | 200',
     public function uploadQuestionImage(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
@@ -674,6 +700,7 @@ Fruits | 4 | 200',
     {
         $exam = $question->exam;
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
         $data = $this->validateQuestion($request);
@@ -698,6 +725,7 @@ Fruits | 4 | 200',
     {
         $exam = $question->exam;
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
         abort_if($exam->attempts()->exists(), 422, 'This question cannot be deleted because students have already started this exam.');
         abort_if($question->answers()->exists(), 422, 'This question cannot be deleted because it already has student answers.');
@@ -713,6 +741,9 @@ Fruits | 4 | 200',
     public function resetAttempt(Request $request, CbtAttempt $attempt): JsonResponse
     {
         abort_unless((int) $attempt->school_id === (int) $request->user()->school_id, 403);
+        if ($attempt->exam) {
+            $this->ensureTeacherCanAccessExam($request->user(), $attempt->exam);
+        }
 
         $data = $request->validate([
             'reason' => ['nullable', 'string', 'max:255'],
@@ -759,6 +790,7 @@ Fruits | 4 | 200',
     public function exportScores(Request $request, CbtExam $exam)
     {
         $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
 
         $exam->load(['class:id,name', 'subject:id,name']);
@@ -1182,6 +1214,38 @@ Fruits | 4 | 200',
     private function ensureSameSchool(Request $request, CbtExam $exam): void
     {
         abort_unless((int) $exam->school_id === (int) $request->user()->school_id, 403);
+    }
+
+    private function ensureTeacherCanAccessSubject($user, ?int $subjectId): void
+    {
+        if (! $user || strtolower((string) ($user->role ?? '')) !== 'teacher') {
+            return;
+        }
+
+        abort_unless(
+            $subjectId && TeacherSubject::query()
+                ->where('teacher_id', (int) $user->id)
+                ->where('subject_id', (int) $subjectId)
+                ->exists(),
+            403,
+            'You are not assigned to this subject. Teachers can only manage CBT questions and exams for subjects assigned to them.'
+        );
+    }
+
+    private function ensureTeacherCanAccessExam($user, CbtExam $exam): void
+    {
+        if (! $user || strtolower((string) ($user->role ?? '')) !== 'teacher') {
+            return;
+        }
+
+        abort_unless(
+            $exam->subject_id && TeacherSubject::query()
+                ->where('teacher_id', (int) $user->id)
+                ->where('subject_id', (int) $exam->subject_id)
+                ->exists(),
+            403,
+            'You are not assigned to this subject. Teachers can only manage CBT questions and exams for subjects assigned to them.'
+        );
     }
 
     private function ensureExamSetupBelongsToSchool(Request $request, array $data): void
