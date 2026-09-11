@@ -25,7 +25,7 @@ class WemaAlatService
         $this->payoutKey = (string) config('services.wema_alat.payout_key', env('WEMA_ALAT_PAYOUT_KEY', '1eb9d69581404ba4b89d856b7147711a'));
         $this->virtualAccountKey = (string) config('services.wema_alat.virtual_account_key', env('WEMA_ALAT_VIRTUAL_ACCOUNT_KEY', 'schooproft_virtual_acct_pending'));
         $this->baseUrl = rtrim((string) config('services.wema_alat.base_url', env('WEMA_ALAT_BASE_URL', 'https://wema-alatdev-apimgt.azure-api.net')), '/');
-        $this->corporateAccountNumber = (string) config('services.wema_alat.corporate_account', env('WEMA_CORPORATE_ACCOUNT_NUMBER', '0123456789'));
+        $this->corporateAccountNumber = (string) config('services.wema_alat.corporate_account', env('WEMA_CORPORATE_ACCOUNT_NUMBER', '0128168785'));
         $this->webhookSecret = (string) config('services.wema_alat.webhook_secret', env('WEMA_ALAT_WEBHOOK_SECRET', 'sp_wema_webhook_secret_2026'));
         $this->environment = (string) config('services.wema_alat.env', env('WEMA_ALAT_ENV', 'sandbox'));
     }
