@@ -165,7 +165,7 @@ class StudentClearanceController extends Controller
 
             // Generate or retrieve Wema Virtual Account for this invoice
             $wemaService = app(\App\Services\WemaAlatService::class);
-            $school = \App\Models\SchoolSetting::where('school_id', $schoolId)->first() ?: \App\Models\SchoolSetting::find($schoolId);
+            $school = \App\Models\SchoolSetting::find($schoolId);
             $schoolName = $school?->school_name ?? $school?->name ?? 'School';
             $user = $request->user();
 
