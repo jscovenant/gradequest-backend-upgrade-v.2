@@ -43,7 +43,7 @@ class GradequestInvoicePaymentController extends Controller
         $amount = min($amount, (float) $invoice->balance);
 
         $user = $request->user();
-        $school = SchoolSetting::find($invoice->school_id);
+        $school = SchoolSetting::where('school_id', $invoice->school_id)->first() ?: SchoolSetting::find($invoice->school_id);
         $schoolName = $school?->school_name ?? $school?->name ?? 'School';
 
         // Check if there is an existing active pending virtual account payment for this invoice

@@ -483,7 +483,7 @@ class SchoolBillingService
                         $entitlement->fill([
                             'billing_mode' => 'offline',
                             'status' => now()->lte($invoice->due_date) ? 'grace' : 'unpaid',
-                            'source' => 'offline_session_invoice',
+                            'source' => 'offline_invoice',
                             'invoice_id' => $invoice->id,
                             'grace_until' => $invoice->due_date?->endOfDay(),
                         ])->save();
@@ -1361,7 +1361,7 @@ $unpaid = StudentBillingEntitlement::query()
                 if ($index < $coveredCount) {
                     $entitlement->update([
                         'status' => 'paid',
-                        'source' => 'offline_session_invoice',
+                        'source' => 'offline_invoice',
                         'invoice_id' => $invoice->id,
                         'covered_at' => now(),
                         'grace_until' => null,
