@@ -9,3 +9,5 @@ Route::get('/', function () {
 
 Route::get('/brochure.pdf', [MarketingBrochureController::class, 'publicDownload']);
 Route::get('/downloads/schoolprofit-marketing-brochure.pdf', [MarketingBrochureController::class, 'publicDownload']);
+Route::get('/SchoolProfit-Comprehensive-Platform-Guide.docx', [MarketingBrochureController::class, 'downloadDocxManual']);
+Route::get('/downloads/SchoolProfit-Comprehensive-Platform-Guide.docx', [MarketingBrochureController::class, 'downloadDocxManual']);

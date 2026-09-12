@@ -60,4 +60,20 @@ class MarketingBrochureController extends Controller
     {
         return $this->download($request);
     }
+
+    public function downloadDocxManual(Request $request)
+    {
+        $filePath = public_path('downloads/SchoolProfit-Comprehensive-Platform-Guide.docx');
+        if (!file_exists($filePath)) {
+            $filePath = public_path('SchoolProfit-Comprehensive-Platform-Guide.docx');
+        }
+
+        if (!file_exists($filePath)) {
+            return response()->json(['message' => 'Manual file not found on server.'], 404);
+        }
+
+        return response()->download($filePath, 'SchoolProfit-Comprehensive-Platform-Guide.docx', [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        ]);
+    }
 }

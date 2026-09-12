@@ -129,6 +129,10 @@ Route::get('/public/marketing-brochure', [MarketingBrochureController::class, 'p
 Route::get('/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
 Route::get('/superadmin/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
 Route::get('/sales/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
+Route::get('/public/platform-manual/docx', [MarketingBrochureController::class, 'downloadDocxManual'])->middleware('throttle:60,1');
+Route::get('/superadmin/platform-manual/docx', [MarketingBrochureController::class, 'downloadDocxManual'])->middleware('throttle:60,1');
+Route::get('/sales/platform-manual/docx', [MarketingBrochureController::class, 'downloadDocxManual'])->middleware('throttle:60,1');
+Route::get('/platform-manual/docx', [MarketingBrochureController::class, 'downloadDocxManual'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/school', [PublicFeePaymentController::class, 'school'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 'student'])->middleware('throttle:60,1');
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize'])->middleware('throttle:30,1');
