@@ -68,7 +68,7 @@ class SubscriptionAiCreditService
                 'user_id' => $admin?->id ?: 0,
                 'cycle_start' => now()->startOfYear()->toDateString(),
                 'cycle_end' => now()->addYear()->endOfYear()->toDateString(),
-                'allocated_credits' => 50, // Starter complimentary credits for new schools
+                'allocated_credits' => 0, // No complimentary credits; top-up or subscription required
                 'used_credits' => 0,
             ]);
         });

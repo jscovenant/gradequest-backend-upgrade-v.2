@@ -10,12 +10,16 @@ use Illuminate\Support\Str;
 
 class WelcomeWalletCreditService
 {
-    public const AMOUNT = 5000;
+    public const AMOUNT = 0;
     public const EXPIRY_DAYS = 30;
     public const DESCRIPTION = 'Welcome wallet credit for SchoolProfitPlus subscription';
 
     public function grantToAdmin(User $admin): ?WalletTransaction
     {
+        if (self::AMOUNT <= 0) {
+            return null;
+        }
+
         if (strtolower((string) $admin->role) !== 'admin') {
             return null;
         }

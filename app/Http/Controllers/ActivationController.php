@@ -231,7 +231,7 @@ public function activateBonus()
     $user = User::find(Auth::id());
 
     if ($user->bonus_given) {
-        return response()->json(['message' => 'Welcome credit already claimed'], 409);
+        return response()->json(['message' => 'School account already activated'], 200);
     }
 
     $session = AcademicSession::where('school_id', $user->school_id)
@@ -253,16 +253,18 @@ public function activateBonus()
     $user->status = 1;
     $user->save();
 
-    try {
-        Mail::to($user->email)->send(new WelcomeBonusMail($user));
-    } catch (\Exception $e) {
-        Log::error("Welcome email failed for user {$user->id}: " . $e->getMessage());
+    if (WelcomeWalletCreditService::AMOUNT > 0) {
+        try {
+            Mail::to($user->email)->send(new WelcomeBonusMail($user));
+        } catch (\Exception $e) {
+            Log::error("Welcome email failed for user {$user->id}: " . $e->getMessage());
+        }
     }
 
     return response()->json([
-        'message' => 'Welcome wallet credit added successfully. Use it within 30 days to subscribe to GradiosEduPlus.',
-        'bonus_amount' => WelcomeWalletCreditService::AMOUNT,
-        'expires_at' => $credit?->expires_at,
+        'message' => 'School account activated successfully.',
+        'bonus_amount' => 0,
+        'expires_at' => null,
         'user' => $user->only(['name', 'email']),
     ]);
 }
