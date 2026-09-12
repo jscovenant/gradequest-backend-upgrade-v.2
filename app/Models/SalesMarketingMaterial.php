@@ -36,6 +36,13 @@ class SalesMarketingMaterial extends Model
 
     public function getAssetUrlAttribute(): ?string
     {
-        return $this->asset_path ? url(Storage::disk('public')->url($this->asset_path)) : $this->external_url;
+        if ($this->asset_path) {
+            $path = ltrim($this->asset_path, '/');
+            if (str_starts_with($path, 'marketing/')) {
+                return url($path);
+            }
+            return url('storage/' . $path);
+        }
+        return $this->external_url;
     }
 }
