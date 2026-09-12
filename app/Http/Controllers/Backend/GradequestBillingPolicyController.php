@@ -285,10 +285,10 @@ class GradequestBillingPolicyController extends Controller
         return GradiosEduBillingPolicy::firstOrCreate([], [
             'online_grace_days' => 14,
             'online_minimum_coverage_percent' => 70,
-            'online_whole_school_block_enabled' => true,
+            'online_whole_school_block_enabled' => false,
             'online_student_level_block_enabled' => true,
             'offline_grace_days' => 7,
-            'offline_school_block_enabled' => true,
+            'offline_school_block_enabled' => false,
             'platform_fee_per_student' => 500,
             'basic_tier_price_per_student' => 300,
             'standard_cbt_tier_price_per_student' => 500,

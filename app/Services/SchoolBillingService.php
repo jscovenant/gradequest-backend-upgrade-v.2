@@ -32,10 +32,10 @@ class SchoolBillingService
         return SchoolProfitBillingPolicy::firstOrCreate([], [
             'online_grace_days' => 14,
             'online_minimum_coverage_percent' => 70,
-            'online_whole_school_block_enabled' => true,
+            'online_whole_school_block_enabled' => false,
             'online_student_level_block_enabled' => true,
             'offline_grace_days' => 7,
-            'offline_school_block_enabled' => true,
+            'offline_school_block_enabled' => false,
             'platform_fee_per_student' => 1000,
             'legacy_subscription_honor_enabled' => true,
             'per_student_billing_starts_at' => now(),
@@ -982,9 +982,11 @@ class SchoolBillingService
                 && $graceExpired
                 && $coveragePercent < (int) $policy->online_minimum_coverage_percent;
 
+            $hasUncovered = $blockedEntitlements > 0 || $currentUncovered > 0;
+
             return [
                 'allowed' => ! $shouldBlockSchool,
-                'status' => $shouldBlockSchool ? 'blocked' : 'student_level_enforcement',
+                'status' => $shouldBlockSchool ? 'blocked' : ($hasUncovered ? 'student_level_enforcement' : 'clear'),
                 'payment_mode' => 'online',
                 'blocked_invoices' => 0,
                 'blocked_entitlements' => $blockedEntitlements,
@@ -1000,7 +1002,7 @@ class SchoolBillingService
                 ],
                 'message' => $shouldBlockSchool
                     ? 'Access denied. Current term payment coverage is below the required threshold.'
-                    : 'School operations are allowed. Student-specific academic actions remain protected for uncovered students.',
+                    : 'School operations are fully accessible. Student-specific academic actions (results entry, CBT, promotion) remain protected for uncovered students.',
             ];
         }
 
@@ -1009,10 +1011,11 @@ class SchoolBillingService
             && ($blockedInvoices > 0 || $blockedEntitlements > 0);
 
         $allowed = ! $shouldBlockOffline;
+        $hasUncoveredOffline = $blockedInvoices > 0 || $blockedEntitlements > 0;
 
         return [
             'allowed' => $allowed,
-            'status' => $allowed ? ($graceExpired ? 'clear' : 'grace_period_active') : 'blocked',
+            'status' => $allowed ? ($hasUncoveredOffline ? 'student_level_enforcement' : ($graceExpired ? 'clear' : 'grace_period_active')) : 'blocked',
             'payment_mode' => 'offline',
             'blocked_invoices' => $blockedInvoices,
             'blocked_entitlements' => $blockedEntitlements,
@@ -1027,7 +1030,9 @@ class SchoolBillingService
                 'grace_expired' => $graceExpired,
             ],
             'message' => $allowed
-                ? ($graceExpired ? 'Billing is clear.' : 'School operations are allowed under active grace period.')
+                ? ($hasUncoveredOffline
+                    ? 'School operations are fully accessible. Student-specific academic actions (results entry, CBT, promotion) remain protected for uncovered students.'
+                    : ($graceExpired ? 'Billing is clear.' : 'School operations are allowed under active grace period.'))
                 : 'Access denied. Please settle all outstanding fees or debt before continuing.',
         ];
     }
