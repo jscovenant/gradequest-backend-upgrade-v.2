@@ -82,6 +82,27 @@ class SubscriptionGate
             ], null);
         }
 
+        // CBT Examination Features check Edition Tier
+        if (in_array($featureKey, ['cbt_online', 'cbt_offline', 'cbt', 'cbt_exam_management'], true)) {
+            $schoolSetting = \App\Models\SchoolSetting::find($owner->school_id);
+            $tier = $schoolSetting?->active_edition_tier ?: 'standard_cbt';
+            if ($tier === 'basic_result') {
+                return $this->deny(
+                    'cbt_tier_upgrade_required',
+                    'CBT Examination is not included in the Basic Result Edition. Please upgrade to the Full CBT & AI Edition or Annual Full Session Tier to conduct CBT exams.',
+                    403,
+                    ['active_tier' => 'basic_result', 'upgrade_tier' => 'standard_cbt']
+                );
+            }
+
+            return $this->allow($owner, null, [
+                'feature_key' => $this->normalizeFeatureKey($featureKey),
+                'feature_name' => 'CBT Examination Engine',
+                'is_enabled' => true,
+                'access_model' => 'edition_tier',
+            ], null);
+        }
+
         // WhatsApp Messaging Add-on
         if (in_array($featureKey, ['whatsapp_notifications', 'whatsapp_messaging'], true)) {
             return $this->allow($owner, null, [
