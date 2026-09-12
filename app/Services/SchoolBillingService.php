@@ -644,15 +644,28 @@ class SchoolBillingService
 
         if ($session && $term) {
             $entitlement = $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
-            $isCleared = in_array($entitlement->status, ['paid', 'override'], true);
+            $policy = $this->policy();
+            $settings = $this->settingsForSchool($schoolId);
+            $graceUntil = $this->periodGraceUntil($schoolId, $session, $term, $settings->payment_mode, $policy);
+            $isPeriodGraceActive = $graceUntil ? now()->lte($graceUntil) : false;
+            $isStudentGraceActive = ($entitlement->status === 'grace') && ($entitlement->grace_until ? now()->lte($entitlement->grace_until) : true);
+
+            $isCleared = in_array($entitlement->status, ['paid', 'override'], true) || $isPeriodGraceActive || $isStudentGraceActive;
             $fee = $this->pricePerStudentForSchool($schoolId);
+
+            $status = in_array($entitlement->status, ['paid', 'override'], true)
+                ? 'cleared'
+                : (($isPeriodGraceActive || $isStudentGraceActive) ? 'grace_active' : 'payment_required');
 
             return [
                 'allowed' => $isCleared,
-                'status' => $isCleared ? 'cleared' : 'payment_required',
+                'status' => $status,
                 'fee_amount' => $fee,
+                'grace_until' => $graceUntil?->toDateTimeString() ?? $entitlement->grace_until?->toDateTimeString(),
                 'message' => $isCleared
-                    ? 'Student is cleared for score entry and report cards.'
+                    ? ($status === 'grace_active'
+                        ? 'Student result entry is permitted under active grace period.'
+                        : 'Student is cleared for score entry and report cards.')
                     : "Result Entry Locked: Student fee clearance (₦" . number_format($fee, 2) . ") is required for this term. Please clear student from wallet or collect tuition online.",
             ];
         }
@@ -695,12 +708,31 @@ class SchoolBillingService
             $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
         }
 
+        $policy = $this->policy();
+        $settings = $this->settingsForSchool($schoolId);
+        $periodGraceUntil = ($session && $term) ? $this->periodGraceUntil($schoolId, $session, $term, $settings->payment_mode, $policy) : null;
+        $isPeriodGraceActive = $periodGraceUntil ? now()->lte($periodGraceUntil) : false;
+
         $blocked = StudentBillingEntitlement::query()
             ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
             ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
             ->where('student_billing_entitlements.school_id', $schoolId)
             ->where('student_billing_entitlements.student_id', $studentId)
             ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
+            ->where(function ($q) use ($session, $term, $isPeriodGraceActive) {
+                $q->where(function ($sub) {
+                    $sub->whereNull('student_billing_entitlements.grace_until')
+                        ->orWhere('student_billing_entitlements.grace_until', '<', now());
+                });
+
+                // If period grace is currently active for current session/term, exclude current term from blocked list
+                if ($isPeriodGraceActive && $session && $term) {
+                    $q->where(function ($curSub) use ($session, $term) {
+                        $curSub->where('student_billing_entitlements.session_id', '!=', $session->id)
+                            ->orWhere('student_billing_entitlements.term_id', '!=', $term->id);
+                    });
+                }
+            })
             ->orderByDesc('student_billing_entitlements.updated_at')
             ->get([
                 'student_billing_entitlements.id',
@@ -711,13 +743,17 @@ class SchoolBillingService
                 'terms.name as term',
             ]);
 
+        $isAllowed = $blocked->isEmpty();
+
         return [
-            'allowed' => $blocked->isEmpty(),
-            'status' => $blocked->isEmpty() ? 'clear' : 'blocked',
+            'allowed' => $isAllowed,
+            'status' => $isAllowed ? ($isPeriodGraceActive ? 'grace_period_active' : 'clear') : 'blocked',
             'blocked_terms_count' => $blocked->count(),
             'blocked_terms' => $blocked,
-            'message' => $blocked->isEmpty()
-                ? 'Student billing is clear.'
+            'message' => $isAllowed
+                ? ($isPeriodGraceActive
+                    ? 'Student billing is clear under active grace period.'
+                    : 'Student billing is clear.')
                 : 'Access denied. This student has outstanding fees for one or more current or previous academic periods.',
         ];
     }
