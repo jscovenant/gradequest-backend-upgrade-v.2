@@ -125,7 +125,10 @@ Route::post('/public/sales-representatives/register', [SalesRepresentativeContro
 Route::get('/public/sales-pages/{code}', [PublicSalesPageController::class, 'show'])->middleware('throttle:120,1');
 Route::post('/public/sales-pages/{code}/leads', [PublicSalesPageController::class, 'captureLead'])->middleware('throttle:10,1');
 Route::post('/public/sales-pages/{code}/events', [PublicSalesPageController::class, 'track'])->middleware('throttle:60,1');
-Route::get('/public/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:30,1');
+Route::get('/public/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
+Route::get('/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
+Route::get('/superadmin/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
+Route::get('/sales/marketing-brochure', [MarketingBrochureController::class, 'publicDownload'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/school', [PublicFeePaymentController::class, 'school'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 'student'])->middleware('throttle:60,1');
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize'])->middleware('throttle:30,1');
@@ -362,8 +365,6 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::get('/sales/leads', [SalesRepresentativeController::class, 'myLeads']);
     Route::post('/sales/leads', [SalesRepresentativeController::class, 'storeMyLead']);
     Route::get('/sales/marketing-materials', [SalesMarketingMaterialController::class, 'active']);
-    Route::get('/sales/marketing-brochure', [MarketingBrochureController::class, 'download']);
-    Route::get('/superadmin/marketing-brochure', [MarketingBrochureController::class, 'download'])->middleware('superadmin.access:marketing,sales,owner');
     Route::get('/sales/commissions', [SalesRepresentativeController::class, 'myCommissions']);
     Route::get('/sales/payout-profile', [SalesPayoutController::class, 'myProfile']);
     Route::post('/sales/payout-profile/bank', [SalesPayoutController::class, 'saveMyBank']);
