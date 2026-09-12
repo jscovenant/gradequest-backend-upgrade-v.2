@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use App\Mail\WalletTopupMail;
 use App\Notifications\SystemNotification;
-
+use App\Services\WelcomeWalletCreditService;
 
 class WalletController extends Controller
 {
@@ -179,6 +179,13 @@ class WalletController extends Controller
             $wallet->school_id = $schoolId;
             $wallet->save();
 
+            // Activate welcome bonus if pending
+            try {
+                app(WelcomeWalletCreditService::class)->activateBonusOnDeposit($schoolId, (float) $amountInNaira, (string) $paystackRef);
+            } catch (\Throwable $e) {
+                Log::warning('Welcome bonus activation on topup error: ' . $e->getMessage());
+            }
+
             // Email receipt object used by your mailable
             $payment = (object) [
                 'sub_plan' => 'Wallet Top-up',
@@ -272,6 +279,13 @@ class WalletController extends Controller
             $wallet->school_id = $schoolId;
             $wallet->save();
 
+            // Activate welcome bonus if pending
+            try {
+                app(WelcomeWalletCreditService::class)->activateBonusOnDeposit($schoolId, (float) $amountInNaira, (string) $reference);
+            } catch (\Throwable $e) {
+                Log::warning('Welcome bonus activation on webhook topup error: ' . $e->getMessage());
+            }
+
             DB::commit();
             return true;
         } catch (\Throwable $e) {
@@ -317,10 +331,15 @@ class WalletController extends Controller
     public function getUserBalance()
     {
         $user = Auth::user();
+        if ($user) {
+            app(WelcomeWalletCreditService::class)->expireUnusedCredits($user);
+        }
         $wallet = Wallet::where('school_id', $user->school_id)->first();
+        $bonusStatus = app(WelcomeWalletCreditService::class)->getBonusStatus((int) $user->school_id);
 
         return response()->json([
-            'balance' => $wallet ? $wallet->balance : 0
+            'balance' => $wallet ? (float) $wallet->balance : 0,
+            'welcome_bonus' => $bonusStatus,
         ]);
     }
 

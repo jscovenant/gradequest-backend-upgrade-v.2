@@ -262,9 +262,9 @@ public function activateBonus()
     }
 
     return response()->json([
-        'message' => 'School account activated successfully.',
-        'bonus_amount' => 0,
-        'expires_at' => null,
+        'message' => 'Welcome bonus of ₦' . number_format(WelcomeWalletCreditService::AMOUNT) . ' credited to your wallet! Add funds within 30 days to activate it permanently.',
+        'bonus_amount' => WelcomeWalletCreditService::AMOUNT,
+        'expires_at' => $credit?->expires_at,
         'user' => $user->only(['name', 'email']),
     ]);
 }

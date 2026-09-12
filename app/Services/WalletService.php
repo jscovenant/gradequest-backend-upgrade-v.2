@@ -102,6 +102,13 @@ class WalletService
                 'created_at' => now(),
                 'updated_at' => now(),
             ]);
+
+            // Activate welcome bonus if pending
+            try {
+                app(WelcomeWalletCreditService::class)->activateBonusOnDeposit($schoolId, (float) $amount, (string) $referenceId);
+            } catch (\Throwable $e) {
+                // Ignore
+            }
         });
     }
 }

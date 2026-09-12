@@ -73,11 +73,11 @@
 
       <p>
         We’re excited to have you join our community. As a token of appreciation,
-        we’ve credited your wallet with a <strong>&#8358;5,000 SchoolProfit Plus wallet credit</strong> to help you get started.
+        we’ve credited your wallet with a <strong>&#8358;5,000 Welcome Bonus</strong> to help you get started!
       </p>
 
       <p>
-        You can use this credit to subscribe to SchoolProfit Plus. The credit expires 30 days after activation if it is not used.
+        <strong>Important Activation Notice:</strong> This &#8358;5,000 welcome bonus lasts for 30 days. To activate it and keep it permanently in your wallet, simply fund/add money to your wallet balance before the 30-day countdown ends.
       </p>
 
       <p>
