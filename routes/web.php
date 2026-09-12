@@ -1,12 +1,11 @@
 <?php
+
+use App\Http\Controllers\Backend\MarketingBrochureController;
 use Illuminate\Support\Facades\Route;
-    
-use App\Models\QrCode;
 
-Route::middleware('guest')->group(function () {
-    Route::get('/', function () {
-        return view('welcome');
-    });
-    
-
+Route::get('/', function () {
+    return view('welcome');
 });
+
+Route::get('/brochure.pdf', [MarketingBrochureController::class, 'publicDownload']);
+Route::get('/downloads/schoolprofit-marketing-brochure.pdf', [MarketingBrochureController::class, 'publicDownload']);
