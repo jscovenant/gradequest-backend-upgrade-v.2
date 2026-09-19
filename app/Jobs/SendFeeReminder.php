@@ -153,7 +153,6 @@ class SendFeeReminder implements ShouldQueue
         $hasOnlineAccount = SchoolBankAccount::where('school_id', $this->schoolId)
             ->where('is_active', true)
             ->where('online_payment_enabled', true)
-            ->whereNotNull('paystack_subaccount_code')
             ->exists();
 
         if (! $hasOnlineAccount) {

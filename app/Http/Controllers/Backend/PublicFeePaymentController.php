@@ -157,12 +157,22 @@ class PublicFeePaymentController extends Controller
 
         $bankAccount = SchoolBankAccount::where('school_id', $admin->school_id)
             ->where('is_active', true)
-            ->where('online_payment_enabled', true)
+            ->where(function ($q) {
+                $q->where('online_payment_enabled', true)
+                  ->orWhere('preferred_gateway', 'wema_alat')
+                  ->orWhereNull('online_payment_enabled');
+            })
             ->orderBy('sort_order')
             ->first();
 
         if (! $bankAccount) {
-            return response()->json(['message' => 'This school has not enabled online fee payment yet.'], 422);
+            $bankAccount = SchoolBankAccount::where('school_id', $admin->school_id)
+                ->where('is_active', true)
+                ->first();
+        }
+
+        if (! $bankAccount) {
+            return response()->json(['message' => 'This school has not connected an active bank account for fee settlement yet.'], 422);
         }
 
         $reference = 'gq_fee_' . Str::uuid()->toString();
@@ -248,6 +258,7 @@ class PublicFeePaymentController extends Controller
                 'platform_fee' => $platformFee,
                 'allocations' => $allocations,
                 'gateway' => 'wema_alat',
+                'paystack_response' => $wemaVirtualAcc,
                 'status' => 'pending',
             ]);
 
@@ -400,7 +411,7 @@ class PublicFeePaymentController extends Controller
             return response()->json(['message' => 'Payment transaction reference not found.'], 404);
         }
 
-        if ($intent->status === 'success') {
+        if (in_array($intent->status, ['success', 'paid'])) {
             return response()->json([
                 'status' => 'success',
                 'reference' => $intent->reference,
@@ -416,12 +427,15 @@ class PublicFeePaymentController extends Controller
         // ── 0. VERIFY WITH WEMA ALAT (Dedicated Virtual Account / ALAT Web Checkout) ──
         if ($gateway === 'wema_alat') {
             try {
-                $wemaQuery = $this->wemaService->verifyTransaction($reference);
-                $isLocalDev = app()->environment('local', 'testing');
-                $isVerified = !empty($wemaQuery['verified']);
+                $meta = is_array($intent->paystack_response) ? $intent->paystack_response : (json_decode((string) ($intent->paystack_response ?? '[]'), true) ?: []);
+                $transactionId = $meta['transaction_id'] ?? null;
+                $wemaQuery = $this->wemaService->verifyTransaction($reference, $transactionId);
+                $isSandbox = config('services.wema_alat.env') === 'sandbox' || app()->environment('local', 'testing');
+                $isVerified = ! empty($wemaQuery['verified']);
+                $isSimulated = $isSandbox && request()->boolean('simulate');
 
-                if ($isVerified || ($isLocalDev && config('services.wema_alat.sandbox', false))) {
-                    $this->finalizeSuccessfulPaymentIntent($intent, 'wema_alat', $wemaQuery['raw'] ?? ['mode' => 'sandbox_verified']);
+                if ($isVerified || $isSimulated) {
+                    $this->finalizeSuccessfulPaymentIntent($intent, 'wema_alat', $wemaQuery['raw'] ?? ['mode' => $isSimulated ? 'sandbox_simulated' : 'wema_verified']);
                     $intent = $intent->fresh(['student']);
 
                     return response()->json([
@@ -437,6 +451,7 @@ class PublicFeePaymentController extends Controller
                 return response()->json([
                     'status' => 'pending',
                     'reference' => $reference,
+                    'is_sandbox' => $isSandbox,
                     'message' => 'Interbank bank transfer is pending clearing. If you have sent funds, please allow 30-60 seconds for Wema NIP settlement.',
                 ], 422);
             } catch (\Throwable $wemaErr) {
@@ -690,6 +705,32 @@ class PublicFeePaymentController extends Controller
             $locked->update($updateData);
         });
 
+        // Trigger Automated Payout Sweep to School Bank Account for Wema ALATPay
+        if ($method === 'wema_alat') {
+            try {
+                $schoolBankAccount = SchoolBankAccount::where('school_id', $intent->school_id)
+                    ->where('is_active', true)
+                    ->first();
+
+                if ($schoolBankAccount && !empty($schoolBankAccount->account_number)) {
+                    $tuitionDisbursal = (float) $intent->amount;
+                    if ($tuitionDisbursal > 0) {
+                        $sweepRes = $this->wemaService->singleTransfer([
+                            'amount' => $tuitionDisbursal,
+                            'destination_bank_code' => $schoolBankAccount->bank_code ?: '035',
+                            'destination_account_number' => $schoolBankAccount->account_number,
+                            'destination_account_name' => $schoolBankAccount->account_name ?: 'School Account',
+                            'narration' => 'Tuition Settlement ' . $intent->reference,
+                            'reference' => 'SWEEP_' . strtoupper(Str::random(12)),
+                        ]);
+                        Log::info('Wema School Payout Sweep Result: ', $sweepRes);
+                    }
+                }
+            } catch (\Throwable $sweepErr) {
+                Log::error('Wema Automated School Payout Sweep Error: ' . $sweepErr->getMessage());
+            }
+        }
+
         // Send official school fee receipts via email
         try {
             $intent = $intent->fresh(['student']);
@@ -725,7 +766,7 @@ class PublicFeePaymentController extends Controller
     public function downloadPdfReceipt(string $reference)
     {
         $intent = PublicFeePaymentIntent::where('reference', $reference)
-            ->where('status', 'success')
+            ->whereIn('status', ['success', 'paid'])
             ->firstOrFail();
 
         $payload = $this->receiptPayload($intent);

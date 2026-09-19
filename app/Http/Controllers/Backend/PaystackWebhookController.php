@@ -95,6 +95,47 @@ class PaystackWebhookController extends Controller
             return response()->json(['status' => 'ok', 'type' => 'ai_credit_purchase']);
         }
 
+        $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+
+        if (($metadata['source'] ?? '') === 'student_clearance_paystack' || str_starts_with($reference, 'SP_CLR_')) {
+            if (($data['status'] ?? null) === 'success') {
+                $invPayment = \App\Models\GradiosEduInvoicePayment::where('reference', $reference)->first();
+                if ($invPayment && $invPayment->status !== 'successful') {
+                    $schoolId = (int) ($metadata['school_id'] ?? $invPayment->school_id);
+                    $type = (string) ($metadata['type'] ?? 'selected');
+                    $studentIds = (array) ($metadata['student_ids'] ?? []);
+                    $sessionId = (int) ($metadata['session_id'] ?? 0);
+                    $termId = isset($metadata['term_id']) ? (int) $metadata['term_id'] : null;
+                    $isFullSession = (bool) ($metadata['is_full_session'] ?? false);
+                    $actorId = (int) ($metadata['user_id'] ?? $invPayment->user_id ?? 0);
+
+                    app(\App\Services\SchoolBillingService::class)->applyOnlineClearance(
+                        $schoolId,
+                        $type,
+                        $studentIds,
+                        $sessionId,
+                        $termId,
+                        $isFullSession,
+                        $reference,
+                        'paystack',
+                        $actorId,
+                        $data
+                    );
+
+                    $invPayment->update([
+                        'status' => 'successful',
+                        'channel' => $data['channel'] ?? 'paystack',
+                        'card_type' => $data['authorization']['card_type'] ?? null,
+                        'last4' => $data['authorization']['last4'] ?? null,
+                        'paystack_id' => $data['id'] ?? null,
+                        'paystack_response' => $data,
+                        'paid_at' => now(),
+                    ]);
+                }
+            }
+            return response()->json(['status' => 'ok', 'type' => 'student_clearance_paystack']);
+        }
+
         if (\App\Models\GradiosEduInvoicePayment::where('reference', $reference)->exists()) {
             if (($data['status'] ?? null) === 'success') {
                 $invPayment = \App\Models\GradiosEduInvoicePayment::where('reference', $reference)->first();
@@ -115,6 +156,41 @@ class PaystackWebhookController extends Controller
                 }
             }
             return response()->json(['status' => 'ok', 'type' => 'invoice_payment']);
+        }
+
+        if (\App\Models\SchoolDomainOrder::where('payment_reference', $reference)->exists()) {
+            if (($data['status'] ?? null) === 'success') {
+                $order = \App\Models\SchoolDomainOrder::where('payment_reference', $reference)->first();
+                if ($order && $order->status !== 'active') {
+                    $order->update([
+                        'status' => 'active',
+                        'paystack_transaction_id' => $data['id'] ?? null,
+                        'paid_at' => now(),
+                        'activated_at' => now(),
+                        'expires_at' => now()->addYears($order->duration_years),
+                        'dns_configured' => true,
+                        'registrar_name' => 'schoolprofit_automated',
+                    ]);
+
+                    $school = \App\Models\SchoolSetting::find($order->school_id);
+                    if ($school) {
+                        \App\Models\SchoolDomain::updateOrCreate(
+                            ['domain' => $order->domain_name],
+                            [
+                                'school_id' => $school->id,
+                                'type' => 'custom',
+                                'status' => 'active',
+                                'verified_at' => now(),
+                                'ownership_verified_at' => now(),
+                                'routing_verified_at' => now(),
+                                'activated_at' => now(),
+                            ]
+                        );
+                        $school->update(['custom_domain' => $order->domain_name]);
+                    }
+                }
+            }
+            return response()->json(['status' => 'ok', 'type' => 'domain_order']);
         }
 
         $purpose = (string) ($data['metadata']['purpose'] ?? '');

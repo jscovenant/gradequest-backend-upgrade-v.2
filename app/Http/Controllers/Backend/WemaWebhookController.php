@@ -46,49 +46,85 @@ class WemaWebhookController extends Controller
         }
 
         $payload = $request->all();
-        $eventData = $payload['data'] ?? $payload;
-        $reference = $eventData['reference'] ?? $eventData['paymentReference'] ?? $eventData['transactionReference'] ?? null;
-        $amountPaid = (float) ($eventData['amount'] ?? $eventData['amountPaid'] ?? 0);
-        $status = strtolower((string) ($eventData['status'] ?? $eventData['paymentStatus'] ?? 'successful'));
+        $eventData = $payload['data'] ?? $payload['Data'] ?? $payload;
+        $reference = $eventData['reference'] 
+            ?? $eventData['paymentReference'] 
+            ?? $eventData['transactionReference'] 
+            ?? $eventData['orderId'] 
+            ?? $eventData['OrderId'] 
+            ?? $eventData['TransactionReference']
+            ?? $eventData['PaymentReference']
+            ?? $eventData['Id']
+            ?? null;
+        $amountPaid = (float) ($eventData['amount'] ?? $eventData['Amount'] ?? $eventData['amountPaid'] ?? $eventData['AmountPaid'] ?? 0);
+        $status = strtolower((string) ($eventData['status'] ?? $eventData['Status'] ?? $eventData['paymentStatus'] ?? $eventData['PaymentStatus'] ?? 'successful'));
+        $accountNumber = $eventData['accountNumber'] 
+            ?? $eventData['AccountNumber'] 
+            ?? $eventData['staticAccountResponse']['accountNumber'] 
+            ?? $eventData['staticAccountResponse']['AccountNumber'] 
+            ?? $eventData['StaticAccountResponse']['AccountNumber'] 
+            ?? null;
 
-        if (! $reference) {
-            return response()->json(['message' => 'No reference found in webhook payload.'], 400);
+        if (! $reference && ! $accountNumber) {
+            return response()->json(['message' => 'No reference or account number found in webhook payload.'], 400);
         }
 
-        if (! in_array($status, ['successful', 'paid', 'success', 'completed'])) {
-            Log::info("Wema Webhook skipped for non-successful status: {$status} on reference: {$reference}");
+        if (! in_array($status, ['successful', 'paid', 'success', 'completed', 'settled', '1', 1])) {
+            Log::info("ALATPay/Wema Webhook skipped for non-successful status: {$status} on reference: {$reference}");
             return response()->json(['message' => 'Webhook received for non-success event.'], 200);
         }
 
         // ==========================================
-        // BRANCH A: School Term / Platform Invoice Payment
+        // BRANCH A: School Term / Platform Clearance & Invoice Payment
         // ==========================================
-        $invPayment = GradiosEduInvoicePayment::where('reference', $reference)->first();
+        $invPayment = GradiosEduInvoicePayment::where('reference', $reference)
+            ->orWhere('paystack_response->account_number', $accountNumber)
+            ->orWhere('paystack_response->account_number', $eventData['virtualBankAccountNumber'] ?? '')
+            ->orWhere('paystack_response->account_number', $eventData['ngnVirtualBankAccountNumber'] ?? '')
+            ->latest()
+            ->first();
+
         if ($invPayment) {
             if ($invPayment->status === 'successful') {
-                return response()->json(['message' => 'Invoice payment already fulfilled.'], 200);
+                return response()->json(['message' => 'Invoice/clearance payment already fulfilled.'], 200);
             }
 
             DB::beginTransaction();
             try {
+                $invPayment->update([
+                    'status' => 'successful',
+                    'channel' => 'wema_virtual_account',
+                    'paid_at' => now(),
+                    'paystack_response' => array_merge(
+                        is_array($invPayment->paystack_response) ? $invPayment->paystack_response : [],
+                        ['webhook_event' => $payload, 'settled_via' => 'Wema Bank Virtual Account']
+                    ),
+                ]);
+
+                $meta = $invPayment->paystack_response['metadata'] ?? [];
+                if (! empty($meta['student_ids'])) {
+                    $this->schoolBillingService->applyOnlineClearance(
+                        (int) ($meta['school_id'] ?? $invPayment->school_id),
+                        (string) ($meta['type'] ?? 'selected'),
+                        (array) $meta['student_ids'],
+                        (int) ($meta['session_id'] ?? 0),
+                        isset($meta['term_id']) ? (int) $meta['term_id'] : null,
+                        (bool) ($meta['is_full_session'] ?? false),
+                        $invPayment->reference,
+                        'wema_virtual_account',
+                        (int) ($invPayment->user_id ?? 1),
+                        $payload
+                    );
+                }
+
                 $invoice = GradiosEduTermInvoice::find($invPayment->invoice_id);
                 if ($invoice) {
-                    $invPayment->update([
-                        'status' => 'successful',
-                        'channel' => 'wema_virtual_account',
-                        'paid_at' => now(),
-                        'paystack_response' => array_merge(
-                            is_array($invPayment->paystack_response) ? $invPayment->paystack_response : [],
-                            ['webhook_event' => $payload, 'settled_via' => 'Wema Bank Virtual Account']
-                        ),
-                    ]);
-
                     $effectiveAmount = $amountPaid > 0 ? $amountPaid : (float) $invPayment->amount;
                     $this->schoolBillingService->applyOnlineInvoicePayment(
                         $invoice,
                         $effectiveAmount,
                         (int) ($invPayment->user_id ?? 1),
-                        $reference
+                        $invPayment->reference
                     );
 
                     Log::info("Wema Virtual Account payment settled for invoice #{$invoice->id}, School: {$invoice->school_id}, Amount: ₦{$effectiveAmount}");
@@ -98,8 +134,8 @@ class WemaWebhookController extends Controller
 
                 return response()->json([
                     'status' => 'success',
-                    'message' => 'Invoice payment processed successfully via Wema Virtual Account.',
-                    'reference' => $reference,
+                    'message' => 'Clearance/Invoice payment processed successfully via Wema Virtual Account.',
+                    'reference' => $invPayment->reference,
                 ]);
             } catch (\Throwable $invErr) {
                 DB::rollBack();
@@ -109,7 +145,54 @@ class WemaWebhookController extends Controller
         }
 
         // ==========================================
-        // BRANCH B: Student Tuition / Fee Intent Payment
+        // BRANCH B: Online Admission Application Fee (Wema Instant Split Settlement)
+        // ==========================================
+        $admissionPayment = \App\Models\SchoolAdmissionPayment::where('reference', $reference)->first();
+        if ($admissionPayment) {
+            if ($admissionPayment->status === 'successful') {
+                return response()->json(['message' => 'Admission payment already settled.'], 200);
+            }
+
+            DB::beginTransaction();
+            try {
+                $admissionPayment->update([
+                    'status' => 'successful',
+                    'paid_at' => now(),
+                    'settled_at' => now(),
+                    'gateway_response' => array_merge(
+                        is_array($admissionPayment->gateway_response) ? $admissionPayment->gateway_response : [],
+                        ['webhook_event' => $payload, 'settled_via' => 'Wema Bank Virtual Account']
+                    ),
+                ]);
+
+                $application = \App\Models\SchoolAdmissionApplication::find($admissionPayment->application_id);
+                if ($application) {
+                    $application->update(['payment_status' => 'paid']);
+
+                    $setting = \App\Models\SchoolAdmissionSetting::where('school_id', $application->school_id)->first();
+                    if ($setting && $setting->auto_admit) {
+                        $application->update(['status' => 'admitted']);
+                    }
+                }
+
+                DB::commit();
+
+                Log::info("Wema Admission Payment settled for application {$application?->application_number}, School: {$admissionPayment->school_id}, Total: ₦{$admissionPayment->total_amount}, School Share: ₦{$admissionPayment->school_amount}, Platform Fee: ₦{$admissionPayment->platform_fee}");
+
+                return response()->json([
+                    'status' => 'success',
+                    'type' => 'school_admission_payment',
+                    'reference' => $reference,
+                ], 200);
+            } catch (\Throwable $admErr) {
+                DB::rollBack();
+                Log::error('Wema webhook admission settlement error: ' . $admErr->getMessage());
+                return response()->json(['message' => 'Admission webhook settlement error: ' . $admErr->getMessage()], 500);
+            }
+        }
+
+        // ==========================================
+        // BRANCH C: Student Tuition / Fee Intent Payment
         // ==========================================
         $intent = PublicFeePaymentIntent::where('reference', $reference)
             ->orWhere('payment_reference', $reference)

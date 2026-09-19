@@ -102,10 +102,7 @@ trait HasSubscriptionUsageGuard
         $hasOnlineCore = \App\Models\SchoolBankAccount::query()
             ->where('school_id', $schoolId)
             ->where('is_active', true)
-            ->where(function ($query) {
-                $query->where('online_payment_enabled', true)
-                    ->orWhereNotNull('paystack_subaccount_code');
-            })
+            ->where('online_payment_enabled', true)
             ->exists();
 
         if ($hasOnlineCore) {

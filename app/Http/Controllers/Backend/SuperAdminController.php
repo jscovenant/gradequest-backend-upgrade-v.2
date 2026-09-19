@@ -3,141 +3,100 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Mail\MarketingEmail;
-use App\Models\ActivityLog;
 use Illuminate\Http\Request;
-use App\Models\School;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Mail;
 use App\Models\User;
-use App\Models\WalletTransaction;
-use App\Models\Average;
-use App\Models\SchoolSetting;
 use App\Models\Subscription;
-use Carbon\Carbon;
+use App\Models\SchoolSetting;
+use App\Models\ActivityLog;
+use App\Models\SchoolBillingAuditLog;
+use App\Models\SchoolBankAccount;
+use App\Mail\MarketingEmail;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use \App\Models\SubscriptionPlan;
-
-
 
 class SuperAdminController extends Controller
 {
-  
-   
+    /**
+     * Get subscribers / schools listing with pricing tier information.
+     */
     public function getSubscribers(Request $request)
     {
-        $query = Subscription::with(['user', 'plan']);
-
-        // 🔹 Filter by status (optional)
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-
-        // 🔹 Filter by active subscriptions only (including lifetime / null ends_at)
-        if ($request->has('active') && $request->active == 1) {
-            $query->where(function ($q) {
-                $q->whereNull('ends_at')
-                  ->orWhere('ends_at', '>=', now());
-            });
-        }
-
-        // 🔹 Search by user name or email
-        if ($request->has('search') && $request->search != '') {
-            $search = $request->search;
-            $query->whereHas('user', function ($q) use ($search) {
-                $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%");
-            });
-        }
-
-        // 🔹 Pagination (default 10 per page)
-        $subscriptions = $query->orderBy('starts_at', 'desc')->paginate($request->get('per_page', 10));
-
-        return response()->json([
-            'success' => true,
-            'data' => $subscriptions
-        ]);
+        return $this->getAdminUsers($request);
     }
 
+    /**
+     * Get full list of platform features.
+     */
+    public function getUserFeatures(Request $request)
+    {
+        $allFeatures = [
+            'student_management',
+            'support_student_management',
+            'teacher_management',
+            'support_teacher_management',
+            'result_management',
+            'support_results_upload',
+            'fee_management',
+            'support_fee_management',
+            'online_payment',
+            'attendance_management',
+            'support_student_attendance',
+            'support_teacher_attendance',
+            'staff_attendance',
+            'support_staff_attendance',
+            'parent_management',
+            'support_parent_management',
+            'bursar_management',
+            'support_bursar_management',
+            'settings_management',
+            'support_settings_management',
+            'support_broadsheet',
+            'support_student_promotion',
+            'support_parent_timetable',
+            'cbt_online',
+            'cbt_offline',
+            'cbt',
+            'ai_lesson_plan_generator',
+            'ai_fee_collection_assistant',
+            'ai_cbt_question_generator',
+            'ai_result_comment_generator',
+            'gradequest_plus',
+            'whatsapp_notifications',
+            'whatsapp_messaging',
+            'hostel_management',
+            'transport_management',
+            'fees',
+            'results',
+        ];
 
-public function getUserFeatures(Request $request)
-{
-    $user = $request->user();
-    $schoolId = (int) ($user?->school_id ?? 0);
-    $schoolSetting = $schoolId ? \App\Models\SchoolSetting::find($schoolId) : null;
-    $tier = $schoolSetting?->active_edition_tier ?: 'standard_cbt';
-
-    $allFeatures = [
-        'student_management',
-        'support_student_management',
-        'teacher_management',
-        'support_teacher_management',
-        'result_management',
-        'support_results_upload',
-        'fee_management',
-        'support_fee_management',
-        'online_payment',
-        'attendance_management',
-        'support_student_attendance',
-        'support_teacher_attendance',
-        'staff_attendance',
-        'support_staff_attendance',
-        'parent_management',
-        'support_parent_management',
-        'bursar_management',
-        'support_bursar_management',
-        'settings_management',
-        'support_settings_management',
-        'support_broadsheet',
-        'support_student_promotion',
-        'support_parent_timetable',
-        'ai_lesson_plan_generator',
-        'ai_fee_collection_assistant',
-        'ai_cbt_question_generator',
-        'ai_result_comment_generator',
-        'gradequest_plus',
-        'whatsapp_notifications',
-        'whatsapp_messaging',
-        'hostel_management',
-        'transport_management',
-        'fees',
-        'results',
-    ];
-
-    // Only include CBT features if the school is on the Full CBT & AI Edition or Annual Full Session Tier
-    if ($tier !== 'basic_result') {
-        $allFeatures[] = 'cbt_online';
-        $allFeatures[] = 'cbt_offline';
-        $allFeatures[] = 'cbt';
+        return response()->json(['features' => $allFeatures]);
     }
 
-    return response()->json([
-        'features' => $allFeatures,
-        'active_edition_tier' => $tier,
-    ]);
-}
-
-
-
-
-    
+    /**
+     * Get registered School Owners / Administrators with pricing editions and online payment status.
+     */
     public function getAdminUsers(Request $request)
     {
         $user = $request->user();
-    
+
         if (!$user || !$user->isSuperAdminUser()) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
-    
-        $perPage = $request->get('perPage', 8); 
-        $page = $request->get('page', 1);
-        $search = $request->input('search', '');
-    
-        $adminsQuery = User::whereHas('roles', function ($q) {
-            $q->where('name', 'Admin');
+
+        $perPage = (int) $request->get('perPage', $request->get('per_page', 10));
+        $page = (int) $request->get('page', 1);
+        $search = trim((string) $request->input('search', ''));
+        $tier = trim((string) $request->input('tier', $request->input('edition_tier', '')));
+        $onlinePay = $request->input('online_payment', $request->input('online_pay'));
+        $status = $request->input('status');
+
+        $adminsQuery = User::where(function ($q) {
+            $q->whereIn(DB::raw('LOWER(role)'), ['admin', 'owner', 'proprietor'])
+              ->orWhereHas('roles', function ($rq) {
+                  $rq->whereIn('name', ['Admin', 'admin']);
+              });
         })
         ->where(function ($q) {
             $q->whereNull('school_id')
@@ -146,272 +105,535 @@ public function getUserFeatures(Request $request)
         ->where('email', '!=', 'gradequestapp@gmail.com')
         ->whereDoesntHave('school', function ($q) {
             $q->where('school_name', 'like', '%gradequest international%');
-        })
-        ->when($search, function ($q) use ($search) {
-            $q->where(function ($query) use ($search) {
-                $query->where('firstname', 'like', "%$search%")
-                      ->orWhere('surname', 'like', "%$search%")
-                      ->orWhere('email', 'like', "%$search%");
+        });
+
+        // Search by name, email, phone, or school name
+        if ($search !== '') {
+            $adminsQuery->where(function ($query) use ($search) {
+                $query->where('firstname', 'like', "%{$search}%")
+                      ->orWhere('surname', 'like', "%{$search}%")
+                      ->orWhere('email', 'like', "%{$search}%")
+                      ->orWhere('phone', 'like', "%{$search}%")
+                      ->orWhereHas('school', function ($sq) use ($search) {
+                          $sq->where('school_name', 'like', "%{$search}%")
+                             ->orWhere('phone', 'like', "%{$search}%")
+                             ->orWhere('email', 'like', "%{$search}%");
+                      });
             });
-        })
-        ->with(['roles', 'school'])
-        ->orderBy('created_at', 'desc');
-    
+        }
+
+        // Filter by pricing edition tier
+        if ($tier !== '' && $tier !== 'all') {
+            $adminsQuery->whereHas('school', function ($sq) use ($tier) {
+                $sq->where('active_edition_tier', $tier);
+            });
+        }
+
+        // Filter by online payment switch status
+        if ($onlinePay !== null && $onlinePay !== '' && $onlinePay !== 'all') {
+            $isEnabled = in_array(strval($onlinePay), ['1', 'true', 'enabled', 'on'], true);
+            $adminsQuery->whereHas('school', function ($sq) use ($isEnabled) {
+                $sq->where('online_payment_enabled', $isEnabled ? 1 : 0);
+            });
+        }
+
+        // Filter by user account status
+        if ($status !== null && $status !== '' && $status !== 'all') {
+            $isActive = in_array(strval($status), ['1', 'active', 'true'], true);
+            $adminsQuery->where('status', $isActive ? 1 : 0);
+        }
+
+        $adminsQuery->with(['roles', 'school'])
+                    ->orderBy('created_at', 'desc');
+
         $admins = $adminsQuery->paginate($perPage, ['*'], 'page', $page);
-    
-        return response()->json($admins);
-    }
-    
 
+        // Transform collection to add rich SchoolProfit edition and stats
+        $admins->getCollection()->transform(function ($admin) {
+            $studentCount = 0;
+            if ($admin->school_id) {
+                $studentCount = User::where('school_id', $admin->school_id)
+                    ->whereRaw('LOWER(role) = ?', ['student'])
+                    ->count();
+            }
 
+            $activeTier = $admin->school?->active_edition_tier ?: 'standard_cbt';
+            $tierLabel = match ($activeTier) {
+                'basic_result' => 'Basic Result Edition',
+                'annual_full_session' => 'Annual Full Session Tier',
+                default => 'Standard CBT & AI Edition',
+            };
 
-public function showAdmin($id)
-{
-    $auth = request()->user();
-
-    if (!$auth || !$auth->isSuperAdminUser()) {
-        return response()->json(['message' => 'Unauthorized'], 403);
-    }
-
-    $admin = User::with('school')->findOrFail($id);
-
-    // Subscription + Plan
-    $subscription = \App\Models\Subscription::with('plan')
-        ->where('user_id', $admin->id)
-        ->latest('created_at')
-        ->first();
-
-    // Payments + Plan (billing history)
-    $payments = \App\Models\SubPayment::with('plan')
-        ->where('user_id', $admin->id)
-        ->orderBy('created_at', 'desc')
-        ->get()
-        ->map(function ($p) {
             return [
-                'id' => $p->id,
-                'reference' => $p->reference,
-                'amount' => (float) $p->amount,
-                'status' => $p->status,
-                'channel' => $p->channel,
-                'card_type' => $p->card_type,
-                'last4' => $p->last4,
-                'starts_at' => $p->starts_at,
-                'created_at' => $p->created_at,
-                'plan' => $p->plan ? [
-                    'id' => $p->plan->id,
-                    'name' => $p->plan->name,
-                    'price' => $p->plan->price,
-                    'duration_in_days' => $p->plan->duration_in_days,
+                'id' => $admin->id,
+                'firstname' => $admin->firstname,
+                'surname' => $admin->surname,
+                'name' => $admin->name,
+                'email' => $admin->email,
+                'phone' => $admin->phone,
+                'address' => $admin->address,
+                'status' => $admin->status,
+                'role' => $admin->role,
+                'school_id' => $admin->school_id,
+                'student_count' => $studentCount,
+                'active_edition_tier' => $activeTier,
+                'active_edition_tier_label' => $tierLabel,
+                'online_payment_enabled' => (bool) ($admin->school?->online_payment_enabled ?? true),
+                'created_at' => $admin->created_at?->toIso8601String(),
+                'school' => $admin->school ? [
+                    'id' => $admin->school->id,
+                    'school_name' => $admin->school->school_name,
+                    'active_edition_tier' => $activeTier,
+                    'active_edition_tier_label' => $tierLabel,
+                    'online_payment_enabled' => (bool) ($admin->school->online_payment_enabled ?? true),
+                    'email' => $admin->school->email,
+                    'phone' => $admin->school->phone,
+                    'address' => $admin->school->address,
+                    'created_at' => $admin->school->created_at?->toIso8601String(),
                 ] : null,
+                'plan' => [
+                    'id' => 1,
+                    'name' => $tierLabel,
+                    'tier' => $activeTier,
+                ],
+                'user' => [
+                    'id' => $admin->id,
+                    'firstname' => $admin->firstname,
+                    'surname' => $admin->surname,
+                    'name' => $admin->name,
+                    'email' => $admin->email,
+                    'phone' => $admin->phone,
+                    'school_id' => $admin->school_id,
+                ],
             ];
         });
 
-    return response()->json([
-        'admin' => $admin,
-        'billing' => [
-            'subscription' => $subscription ? [
-                'id' => $subscription->id,
-                'status' => $subscription->status,
-                'auto_renew' => (bool) $subscription->auto_renew,
-                'auto_renew_source' => $subscription->auto_renew_source,
-                'starts_at' => $subscription->starts_at,
-                'ends_at' => $subscription->ends_at,
-                'plan' => $subscription->plan ? [
-                    'id' => $subscription->plan->id,
-                    'name' => $subscription->plan->name,
-                    'price' => $subscription->plan->price,
-                    'duration_in_days' => $subscription->plan->duration_in_days,
-                ] : null,
-            ] : null,
-            'payments' => $payments,
-        ],
-    ]);
-}
+        // Compute tier totals for dashboard cards
+        $totalQuery = User::where(function ($q) {
+            $q->whereIn(DB::raw('LOWER(role)'), ['admin', 'owner', 'proprietor'])
+              ->orWhereHas('roles', function ($rq) {
+                  $rq->whereIn('name', ['Admin', 'admin']);
+              });
+        })
+        ->where(function ($q) {
+            $q->whereNull('school_id')
+              ->orWhere('school_id', '!=', 68);
+        })
+        ->where('email', '!=', 'gradequestapp@gmail.com')
+        ->whereDoesntHave('school', function ($q) {
+            $q->where('school_name', 'like', '%gradequest international%');
+        });
 
+        $totalSchools = (clone $totalQuery)->count();
+        $standardCbtCount = (clone $totalQuery)->whereHas('school', fn($s) => $s->where('active_edition_tier', 'standard_cbt'))->count();
+        $basicResultCount = (clone $totalQuery)->whereHas('school', fn($s) => $s->where('active_edition_tier', 'basic_result'))->count();
+        $annualSessionCount = (clone $totalQuery)->whereHas('school', fn($s) => $s->where('active_edition_tier', 'annual_full_session'))->count();
+        $onlinePayEnabledCount = (clone $totalQuery)->whereHas('school', fn($s) => $s->where('online_payment_enabled', 1))->count();
 
+        $response = $admins->toArray();
+        $response['tier_counts'] = [
+            'total' => $totalSchools,
+            'standard_cbt' => $standardCbtCount,
+            'basic_result' => $basicResultCount,
+            'annual_full_session' => $annualSessionCount,
+            'online_pay_enabled' => $onlinePayEnabledCount,
+            'online_pay_disabled' => max(0, $totalSchools - $onlinePayEnabledCount),
+        ];
 
-
-public function edit($id)
-{
-    return User::with('school')->findOrFail($id);
-}
-
-public function update(Request $request, $id)
-{
-    return $this->updateAdminProfile($request, $id);
-}
-
-public function updateAdminProfile(Request $request, $id)
-{
-    $auth = $request->user();
-    if (!$auth || !$auth->isSuperAdminUser()) {
-        return response()->json(['message' => 'Unauthorized'], 403);
+        return response()->json($response);
     }
 
-    $admin = User::with('school')->findOrFail($id);
+    /**
+     * Show single administrator details with school info, edition tier, and billing history.
+     */
+    public function showAdmin($id)
+    {
+        $auth = request()->user();
 
-    $validated = $request->validate([
-        'firstname' => 'required|string|max:100',
-        'surname' => 'required|string|max:100',
-        'email' => 'required|email|unique:users,email,' . $admin->id,
-        'phone' => 'nullable|string|max:30',
-        'address' => 'nullable|string|max:255',
-        'school_name' => 'nullable|string|max:255',
-    ]);
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
 
-    $admin->update([
-        'firstname' => $validated['firstname'],
-        'surname' => $validated['surname'],
-        'email' => $validated['email'],
-        'phone' => $validated['phone'] ?? $admin->phone,
-        'address' => $validated['address'] ?? $admin->address,
-    ]);
+        $admin = User::with('school')->findOrFail($id);
 
-    if (!empty($validated['school_name']) && $admin->school) {
-        $admin->school->update([
-            'school_name' => $validated['school_name'],
+        $studentCount = 0;
+        if ($admin->school_id) {
+            $studentCount = User::where('school_id', $admin->school_id)
+                ->whereRaw('LOWER(role) = ?', ['student'])
+                ->count();
+        }
+
+        $activeTier = $admin->school?->active_edition_tier ?: 'standard_cbt';
+        $tierLabel = match ($activeTier) {
+            'basic_result' => 'Basic Result Edition',
+            'annual_full_session' => 'Annual Full Session Tier',
+            default => 'Standard CBT & AI Edition',
+        };
+
+        // Subscription + Plan
+        $subscription = \App\Models\Subscription::with('plan')
+            ->where('user_id', $admin->id)
+            ->latest('created_at')
+            ->first();
+
+        // Payments + Plan (billing history)
+        $payments = \App\Models\SubPayment::with('plan')
+            ->where('user_id', $admin->id)
+            ->orderBy('created_at', 'desc')
+            ->get()
+            ->map(function ($p) {
+                return [
+                    'id' => $p->id,
+                    'reference' => $p->reference,
+                    'amount' => (float) $p->amount,
+                    'status' => $p->status,
+                    'channel' => $p->channel,
+                    'card_type' => $p->card_type,
+                    'last4' => $p->last4,
+                    'starts_at' => $p->starts_at,
+                    'created_at' => $p->created_at,
+                    'plan' => $p->plan ? [
+                        'id' => $p->plan->id,
+                        'name' => $p->plan->name,
+                        'price' => $p->plan->price,
+                        'duration_in_days' => $p->plan->duration_in_days,
+                    ] : null,
+                ];
+            });
+
+        return response()->json([
+            'admin' => $admin,
+            'student_count' => $studentCount,
+            'active_edition_tier' => $activeTier,
+            'active_edition_tier_label' => $tierLabel,
+            'online_payment_enabled' => (bool) ($admin->school?->online_payment_enabled ?? true),
+            'billing' => [
+                'subscription' => $subscription ? [
+                    'id' => $subscription->id,
+                    'status' => $subscription->status,
+                    'auto_renew' => (bool) $subscription->auto_renew,
+                    'auto_renew_source' => $subscription->auto_renew_source,
+                    'starts_at' => $subscription->starts_at,
+                    'ends_at' => $subscription->ends_at,
+                    'plan' => $subscription->plan ? [
+                        'id' => $subscription->plan->id,
+                        'name' => $subscription->plan->name,
+                        'price' => $subscription->plan->price,
+                        'duration_in_days' => $subscription->plan->duration_in_days,
+                    ] : null,
+                ] : null,
+                'payments' => $payments,
+            ],
         ]);
     }
 
-    return response()->json([
-        'status' => 'success',
-        'message' => 'Admin profile updated successfully.',
-        'admin' => $admin->fresh(['school']),
-    ]);
-}
-
-public function toggleAdminStatus(Request $request, $id)
-{
-    $auth = $request->user();
-    if (!$auth || !$auth->isSuperAdminUser()) {
-        return response()->json(['message' => 'Unauthorized'], 403);
+    public function edit($id)
+    {
+        return User::with('school')->findOrFail($id);
     }
 
-    $admin = User::with('school')->findOrFail($id);
-    $newStatus = $request->has('status') ? (int) $request->input('status') : ((int) $admin->status === 1 ? 0 : 1);
+    public function update(Request $request, $id)
+    {
+        return $this->updateAdminProfile($request, $id);
+    }
 
-    $admin->status = $newStatus;
-    $admin->save();
-
-    if ($newStatus === 0) {
-        // Immediately revoke all active sessions for this admin and their staff/students
-        $admin->tokens()->delete();
-        if ($admin->school_id) {
-            User::where('school_id', $admin->school_id)->each(function ($u) {
-                $u->tokens()->delete();
-            });
+    public function updateAdminProfile(Request $request, $id)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
         }
-    }
 
-    return response()->json([
-        'status' => 'success',
-        'message' => $newStatus === 1 ? "Admin account for {$admin->email} has been reinstated and activated." : "Admin account for {$admin->email} has been suspended.",
-        'admin' => $admin,
-        'new_status' => $newStatus,
-    ]);
-}
+        $admin = User::with('school')->findOrFail($id);
 
-public function resetAdminPassword(Request $request, $id)
-{
-    $auth = $request->user();
-    if (!$auth || !$auth->isSuperAdminUser()) {
-        return response()->json(['message' => 'Unauthorized'], 403);
-    }
+        $validated = $request->validate([
+            'firstname' => 'required|string|max:100',
+            'surname' => 'required|string|max:100',
+            'email' => 'required|email|unique:users,email,' . $admin->id,
+            'phone' => 'nullable|string|max:30',
+            'address' => 'nullable|string|max:255',
+            'school_name' => 'nullable|string|max:255',
+            'active_edition_tier' => 'nullable|string|in:basic_result,standard_cbt,annual_full_session',
+            'online_payment_enabled' => 'nullable|boolean',
+        ]);
 
-    $admin = User::findOrFail($id);
-    $newPassword = $request->input('password') ?: Str::random(10);
+        $admin->update([
+            'firstname' => $validated['firstname'],
+            'surname' => $validated['surname'],
+            'email' => $validated['email'],
+            'phone' => $validated['phone'] ?? $admin->phone,
+            'address' => $validated['address'] ?? $admin->address,
+        ]);
 
-    $admin->password = Hash::make($newPassword);
-    $admin->default_password = $newPassword;
-    $admin->force_password_change = true;
-    $admin->save();
-
-    // Revoke previous tokens
-    $admin->tokens()->delete();
-
-    return response()->json([
-        'status' => 'success',
-        'message' => "Password reset successfully for {$admin->email}.",
-        'temporary_password' => $newPassword,
-    ]);
-}
-
-
-
-public function destroy($id)
-{
-    $admin = User::find($id);
-
-    if (!$admin) {
-        return response()->json(['message' => 'User not found.'], 404);
-    }
-
-    // Optional: Prevent self-deletion
-    if (Auth::id() == $admin->id) {
-        return response()->json(['message' => 'You cannot delete yourself.'], 403);
-    }
-
-    DB::beginTransaction();
-
-    try {
-        // If the user has a school, delete it
-        if ($admin->school_id) {
-            $schoolSetting = \App\Models\SchoolSetting::where('id', $admin->school_id)->first();
-
-            if ($schoolSetting) {
-                $schoolSetting->delete();
+        if ($admin->school) {
+            $schoolUpdates = [];
+            if (!empty($validated['school_name'])) {
+                $schoolUpdates['school_name'] = $validated['school_name'];
             }
+            if (isset($validated['active_edition_tier'])) {
+                $schoolUpdates['active_edition_tier'] = $validated['active_edition_tier'];
+            }
+            if (isset($validated['online_payment_enabled'])) {
+                $schoolUpdates['online_payment_enabled'] = $validated['online_payment_enabled'];
+            }
+            if (!empty($schoolUpdates)) {
+                $admin->school->update($schoolUpdates);
+            }
+        }
 
-            // Optional: Delete the school record too if it exists
-            SchoolSetting::where('id', $admin->school_id)->delete();
+        return response()->json([
+            'message' => 'Administrator and school profile updated successfully.',
+            'admin' => $admin->fresh(['school']),
+        ]);
+    }
+
+    /**
+     * Toggle school online fee payment by Admin User ID.
+     */
+    public function toggleSchoolOnlinePayment(Request $request, $id)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $admin = User::with('school')->findOrFail($id);
+        $school = $admin->school;
+
+        if (!$school) {
+            return response()->json(['message' => 'No school linked to this administrator account.'], 404);
+        }
+
+        $desiredState = $request->has('enabled')
+            ? filter_var($request->input('enabled'), FILTER_VALIDATE_BOOLEAN)
+            : !$school->online_payment_enabled;
+
+        $school->update([
+            'online_payment_enabled' => $desiredState,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => $desiredState
+                ? "Online fee payment enabled for {$school->school_name}. Parents can now pay online."
+                : "Online fee payment disabled for {$school->school_name}. Online fee payments will now be rejected by the system.",
+            'online_payment_enabled' => (bool) $desiredState,
+            'school' => $school,
+        ]);
+    }
+
+    /**
+     * Toggle school online fee payment directly by School ID.
+     */
+    public function toggleSchoolOnlinePaymentById(Request $request, $schoolId)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $school = SchoolSetting::findOrFail($schoolId);
+
+        $desiredState = $request->has('enabled')
+            ? filter_var($request->input('enabled'), FILTER_VALIDATE_BOOLEAN)
+            : !$school->online_payment_enabled;
+
+        $school->update([
+            'online_payment_enabled' => $desiredState,
+        ]);
+
+        return response()->json([
+            'success' => true,
+            'message' => $desiredState
+                ? "Online fee payment enabled for {$school->school_name}. Parents can now pay online."
+                : "Online fee payment disabled for {$school->school_name}. Online fee payments will now be rejected by the system.",
+            'online_payment_enabled' => (bool) $desiredState,
+            'school' => $school,
+        ]);
+    }
+
+    /**
+     * Bulk enable or disable online fee payment for ALL schools at once.
+     */
+    public function bulkToggleSchoolOnlinePayment(Request $request)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'enabled' => 'required|boolean',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $desiredState = (bool) $validated['enabled'];
+        $reason = trim((string) ($validated['reason'] ?? '')) ?: ($desiredState ? 'Bulk enabled for all schools by SuperAdmin' : 'Bulk disabled for all schools by SuperAdmin');
+
+        $schools = SchoolSetting::all();
+        $updatedCount = $schools->count();
+
+        SchoolSetting::query()->update([
+            'online_payment_enabled' => $desiredState,
+            'updated_at' => now(),
+        ]);
+
+        // If disabling, also ensure bank accounts reflect the disabled status
+        if (!$desiredState) {
+            SchoolBankAccount::withoutGlobalScopes()->update([
+                'online_payment_enabled' => false,
+            ]);
+        }
+
+        // Audit log entry per existing school to satisfy foreign key constraint
+        foreach ($schools as $school) {
+            try {
+                SchoolBillingAuditLog::create([
+                    'school_id' => $school->id,
+                    'actor_id' => $auth->id,
+                    'action' => $desiredState ? 'bulk_online_fee_payment_enabled' : 'bulk_online_fee_payment_disabled',
+                    'auditable_type' => SchoolSetting::class,
+                    'auditable_id' => $school->id,
+                    'after' => [
+                        'online_payment_enabled' => $desiredState,
+                    ],
+                    'reason' => $reason,
+                ]);
+            } catch (\Throwable $e) {
+                // Ignore audit log failure for edge-case school records
+            }
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => $desiredState
+                ? "Online fee payment has been successfully ENABLED for all {$updatedCount} schools. Parents can now pay school fees online across the platform."
+                : "Online fee payment has been successfully DISABLED for all {$updatedCount} schools. Online fee payment attempts will now be rejected platform-wide.",
+            'online_payment_enabled' => $desiredState,
+            'affected_schools_count' => $updatedCount,
+        ]);
+    }
+
+    /**
+     * Update active edition tier for a school.
+     */
+    public function updateSchoolEditionTier(Request $request, $schoolId)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $validated = $request->validate([
+            'tier' => 'required|string|in:basic_result,standard_cbt,annual_full_session',
+        ]);
+
+        $school = SchoolSetting::findOrFail($schoolId);
+        $school->update([
+            'active_edition_tier' => $validated['tier'],
+        ]);
+
+        $tierLabel = match ($validated['tier']) {
+            'basic_result' => 'Basic Result Edition',
+            'annual_full_session' => 'Annual Full Session Tier',
+            default => 'Standard CBT & AI Edition',
+        };
+
+        return response()->json([
+            'success' => true,
+            'message' => "School edition tier updated to {$tierLabel} successfully.",
+            'tier' => $validated['tier'],
+            'school' => $school,
+        ]);
+    }
+
+    public function toggleAdminStatus($id)
+    {
+        $auth = request()->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $admin = User::findOrFail($id);
+
+        if ($admin->id === $auth->id) {
+            return response()->json(['message' => 'You cannot change your own account status.'], 400);
+        }
+
+        $admin->status = ($admin->status == 1) ? 0 : 1;
+        $admin->save();
+
+        return response()->json([
+            'message' => $admin->status == 1 ? 'Administrator account activated.' : 'Administrator account suspended.',
+            'status' => $admin->status,
+        ]);
+    }
+
+    public function resetAdminPassword(Request $request, $id)
+    {
+        $auth = $request->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $admin = User::findOrFail($id);
+
+        $request->validate([
+            'password' => 'required|string|min:6',
+        ]);
+
+        $admin->update([
+            'password' => Hash::make($request->password),
+        ]);
+
+        return response()->json([
+            'message' => 'Password reset successfully for ' . $admin->name,
+        ]);
+    }
+
+    public function destroy($id)
+    {
+        $auth = request()->user();
+        if (!$auth || !$auth->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $admin = User::findOrFail($id);
+
+        if ($admin->id === $auth->id) {
+            return response()->json(['message' => 'You cannot delete your own super admin account.'], 400);
         }
 
         $admin->delete();
 
-        DB::commit();
-
-        return response()->json(['message' => 'User and associated school deleted successfully.']);
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return response()->json(['message' => 'Failed to delete user.'], 500);
+        return response()->json([
+            'message' => 'Administrator account deleted successfully.',
+        ]);
     }
-}
 
+    public function getLogs(Request $request)
+    {
+        $perPage = $request->input('per_page', 10);
 
+        $logs = ActivityLog::with('user:id,firstname,surname')
+            ->orderBy('created_at', 'desc')
+            ->paginate($perPage);
 
+        $logs->getCollection()->transform(function ($log) {
+            return [
+                'id' => $log->id,
+                'user_id' => $log->user_id,
+                'user_name' => $log->user ? $log->user->name : 'System',
+                'action' => $log->action,
+                'description' => $log->description,
+                'ip_address' => $log->ip_address,
+                'user_agent' => $log->user_agent,
+                'created_at' => $log->created_at->toDateTimeString(),
+            ];
+        });
 
-
-
-
-
-public function getLogs(Request $request)
-{
-    $perPage = $request->get('per_page', 10); // default to 10
-    $logs = ActivityLog::with('user')
-        ->orderBy('created_at', 'desc')
-        ->paginate($perPage);
-
-    // Format the logs
-    $logs->getCollection()->transform(function ($log) {
-        return [
-            'id' => $log->id,
-            'user_id' => $log->user_id,
-            'user_name' => $log->user ? $log->user->name : 'System',
-            'action' => $log->action,
-            'description' => $log->description,
-            'ip_address' => $log->ip_address,
-            'user_agent' => $log->user_agent,
-            'created_at' => $log->created_at->toDateTimeString(),
-        ];
-    });
-
-    return response()->json($logs);
-}
-
-
-
-
-
+        return response()->json($logs);
+    }
 
     public function sendMarketingEmail(Request $request)
     {
@@ -434,30 +656,23 @@ public function getLogs(Request $request)
 
             try {
                 $personalizedContent = str_replace('{firstname}', $firstname, $request->content);
-
                 Mail::to($email)->send(new MarketingEmail($request->subject, $personalizedContent));
             } catch (\Exception $e) {
                 Log::error("Failed to send marketing email to " . json_encode($recipient) . ": " . $e->getMessage());
             }
         }
 
-
-
         return response()->json(['message' => 'Emails sent successfully']);
     }
 
-
-
-public function mailAdminUsers()
-{
-    // Classification:
-    // free            -> no subscription OR plan is "Free"
-    // premium_active  -> latest plan != "Free" AND ends_at >= now
-    // premium_expired -> latest plan != "Free" AND ends_at < now
-    //
-    // Premium = premium_active + premium_expired
-
-    $users = User::where('role', 'Admin')
+    public function mailAdminUsers()
+    {
+        $users = User::where(function ($q) {
+            $q->whereIn(DB::raw('LOWER(role)'), ['admin', 'owner', 'proprietor'])
+              ->orWhereHas('roles', function ($rq) {
+                  $rq->whereIn('name', ['Admin', 'admin']);
+              });
+        })
         ->where(function ($q) {
             $q->whereNull('school_id')
               ->orWhere('school_id', '!=', 68);
@@ -466,36 +681,15 @@ public function mailAdminUsers()
         ->whereDoesntHave('school', function ($q) {
             $q->where('school_name', 'like', '%gradequest international%');
         })
-        ->with([
-            'subscriptions' => function ($q) {
-                $q->with('plan:id,name,price,duration_in_days')
-                  ->orderByDesc('created_at');
-            },
-            'school' // optional (if you want school info here too)
-        ])
+        ->with('school')
         ->get(['id', 'firstname', 'surname', 'email', 'status', 'school_id'])
         ->map(function ($u) {
-
-            $latestSub = $u->subscriptions->first(); // latest subscription record (may be null)
-            $planName  = $latestSub?->plan?->name;
-
-            // Treat missing plan or "Free" as free
-            $isFreePlan = !$planName || strtolower(trim($planName)) === 'free';
-
-            $subState = 'none'; // none | active | expired
-            if ($latestSub) {
-                if (!$latestSub->ends_at) {
-                    $subState = 'active'; // Perpetual / Lifetime subscription
-                } else {
-                    $endsAt = \Carbon\Carbon::parse($latestSub->ends_at);
-                    $subState = $endsAt->gte(now()) ? 'active' : 'expired';
-                }
-            }
-
-            $tier = 'free';
-            if (!$isFreePlan && $latestSub) {
-                $tier = ($subState === 'active') ? 'premium_active' : 'premium_expired';
-            }
+            $tier = $u->school?->active_edition_tier ?: 'standard_cbt';
+            $tierLabel = match ($tier) {
+                'basic_result' => 'Basic Result Edition',
+                'annual_full_session' => 'Annual Full Session Tier',
+                default => 'Standard CBT & AI Edition',
+            };
 
             return [
                 'id' => $u->id,
@@ -503,132 +697,115 @@ public function mailAdminUsers()
                 'surname' => $u->surname,
                 'email' => $u->email,
                 'status' => $u->status,
-
-                // Subscription classification
-                'tier' => $tier, // free | premium_active | premium_expired
-                'plan_name' => $planName ?? 'Free',
-                'subscription_status' => $latestSub?->status ?? null,
-                'subscription_starts_at' => $latestSub?->starts_at,
-                'subscription_ends_at' => $latestSub?->ends_at,
-
-                // optional school info if needed
+                'tier' => $tier,
+                'plan_name' => $tierLabel,
+                'subscription_status' => 'active',
+                'subscription_starts_at' => $u->school?->created_at,
+                'subscription_ends_at' => null,
                 'school' => $u->school ? [
                     'id' => $u->school->id ?? null,
                     'school_name' => $u->school->school_name ?? null,
                     'email' => $u->school->email ?? null,
                     'phone' => $u->school->phone ?? null,
                     'address' => $u->school->address ?? null,
+                    'online_payment_enabled' => (bool) ($u->school->online_payment_enabled ?? true),
                 ] : null,
             ];
         });
 
-    $newsletterSubscribers = \App\Models\NewsletterSubscriber::subscribed()->get()->map(function ($ns) {
-        return [
-            'id' => $ns->id,
-            'firstname' => 'Subscriber',
-            'surname' => '',
-            'email' => $ns->email,
-            'status' => 'subscribed',
-            'tier' => 'newsletter',
-            'plan_name' => 'Newsletter Lead (' . ($ns->source ?: 'footer') . ')',
-            'subscription_status' => 'subscribed',
-            'subscription_starts_at' => $ns->created_at,
-            'subscription_ends_at' => null,
-            'school' => null,
-        ];
-    });
-
-    $combined = $users->concat($newsletterSubscribers);
-
-    return response()->json([
-        'users' => $combined
-    ]);
-}
-
-
-
-    
-
-
-public function monthlyRevenueStats()
-{
-    $year = now()->year;
-
-    $subscriptionRevenue = DB::table('sub_payments')
-        ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
-        ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
-        ->where('status', 'successful')
-        ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
-        ->get();
-
-    $onlinePlatformRevenue = DB::table('payments')
-        ->selectRaw("MONTH(created_at) as month_number, DATE_FORMAT(created_at, '%M') as month, SUM(platform_fee) as revenue")
-        ->whereYear('created_at', $year)
-        ->where('status', 'success')
-        ->where('platform_fee', '>', 0)
-        ->groupByRaw("MONTH(created_at), DATE_FORMAT(created_at, '%M')")
-        ->get();
-
-    $offlineInvoiceRevenue = DB::table('gradequest_invoice_payments')
-        ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
-        ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
-        ->whereIn('status', ['success', 'successful', 'paid'])
-        ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
-        ->get();
-
-    $monthlyRevenue = collect()
-        ->merge($subscriptionRevenue)
-        ->merge($onlinePlatformRevenue)
-        ->merge($offlineInvoiceRevenue)
-        ->groupBy('month_number')
-        ->sortKeys()
-        ->map(function ($rows) {
-            $first = $rows->first();
-
+        $newsletterSubscribers = \App\Models\NewsletterSubscriber::subscribed()->get()->map(function ($ns) {
             return [
-                'month' => $first->month,
-                'revenue' => (float) $rows->sum(fn ($row) => (float) $row->revenue),
+                'id' => $ns->id,
+                'firstname' => 'Subscriber',
+                'surname' => '',
+                'email' => $ns->email,
+                'status' => 'subscribed',
+                'tier' => 'newsletter',
+                'plan_name' => 'Newsletter Lead (' . ($ns->source ?: 'footer') . ')',
+                'subscription_status' => 'subscribed',
+                'subscription_starts_at' => $ns->created_at,
+                'subscription_ends_at' => null,
+                'school' => null,
             ];
-        })
-        ->values();
+        });
 
-    $totalActiveStudents = User::whereRaw('LOWER(role) = ?', ['student'])
-        ->where('status', 1)
-        ->where(function ($q) {
-            $q->whereNull('school_id')
-              ->orWhere('school_id', '!=', 68);
-        })
-        ->whereDoesntHave('school', function ($q) {
-            $q->where('school_name', 'like', '%gradequest international%');
-        })
-        ->count();
+        return response()->json([
+            'users' => $users->concat($newsletterSubscribers)
+        ]);
+    }
 
-    return response()->json([
-        'status' => 'success',
-        'data' => $monthlyRevenue,
-        'total_active_students' => $totalActiveStudents,
-    ]);
-}
+    public function monthlyRevenueStats()
+    {
+        $year = now()->year;
 
+        $subscriptionRevenue = DB::table('sub_payments')
+            ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
+            ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
+            ->where('status', 'successful')
+            ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
+            ->get();
 
+        $onlinePlatformRevenue = DB::table('payments')
+            ->selectRaw("MONTH(created_at) as month_number, DATE_FORMAT(created_at, '%M') as month, SUM(platform_fee) as revenue")
+            ->whereYear('created_at', $year)
+            ->where('status', 'success')
+            ->where('platform_fee', '>', 0)
+            ->groupByRaw("MONTH(created_at), DATE_FORMAT(created_at, '%M')")
+            ->get();
 
+        $offlineInvoiceRevenue = DB::table('gradequest_invoice_payments')
+            ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
+            ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
+            ->whereIn('status', ['success', 'successful', 'paid'])
+            ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
+            ->get();
 
+        $monthlyRevenue = collect()
+            ->merge($subscriptionRevenue)
+            ->merge($onlinePlatformRevenue)
+            ->merge($offlineInvoiceRevenue)
+            ->groupBy('month_number')
+            ->sortKeys()
+            ->map(function ($rows) {
+                $first = $rows->first();
 
-public function deleteMultiple(Request $request)
-{
-    $request->validate([
-        'ids' => 'required|array',
-        'ids.*' => 'integer|exists:activity_logs,id',
-    ]);
+                return [
+                    'month' => $first->month,
+                    'revenue' => (float) $rows->sum(fn ($row) => (float) $row->revenue),
+                ];
+            })
+            ->values();
 
-    ActivityLog::whereIn('id', $request->ids)->delete();
+        $totalActiveStudents = User::whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->where(function ($q) {
+                $q->whereNull('school_id')
+                  ->orWhere('school_id', '!=', 68);
+            })
+            ->whereDoesntHave('school', function ($q) {
+                $q->where('school_name', 'like', '%gradequest international%');
+            })
+            ->count();
 
-    return response()->json([
-        'message' => 'Selected logs deleted successfully.',
-    ]);
-}
+        return response()->json([
+            'status' => 'success',
+            'data' => $monthlyRevenue,
+            'total_active_students' => $totalActiveStudents,
+        ]);
+    }
 
+    public function deleteMultiple(Request $request)
+    {
+        $request->validate([
+            'ids' => 'required|array',
+            'ids.*' => 'integer|exists:activity_logs,id',
+        ]);
 
+        ActivityLog::whereIn('id', $request->ids)->delete();
 
+        return response()->json([
+            'message' => 'Selected logs deleted successfully.',
+        ]);
+    }
 }
 

@@ -3,21 +3,22 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\GradiosEduBillingPolicy;
+use App\Models\GradequestBillingPolicy;
+use App\Models\GradequestBillingPolicy as GradiosEduBillingPolicy;
 use App\Models\SchoolBillingAuditLog;
 use App\Models\SchoolBillingPeriod;
 use App\Models\SchoolBillingTemporaryAccess;
 use App\Models\SchoolSetting;
 use App\Services\SchoolBillingService;
+use App\Services\WelcomeSchoolCreditService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\Rule;
 
 class GradequestBillingPolicyController extends Controller
 {
-    public function __construct(private SchoolBillingService $billing)
-    {
-    }
+    public function __construct(
+        protected SchoolBillingService $billing
+    ) {}
 
     public function index(Request $request)
     {
@@ -57,6 +58,8 @@ class GradequestBillingPolicyController extends Controller
             'ai_lesson_note_credit_cost' => 'required|integer|min:1|max:1000000',
             'ai_fee_collection_credit_cost' => 'required|integer|min:1|max:1000000',
             'ai_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
+            'welcome_ai_credits' => 'nullable|integer|min:0|max:100000',
+            'welcome_whatsapp_credits' => 'nullable|integer|min:0|max:100000',
             'legacy_subscription_honor_enabled' => 'required|boolean',
             'temporary_access_min_days' => 'required|integer|min:1|max:30',
             'temporary_access_max_days' => 'required|integer|min:1|max:90',
@@ -84,18 +87,27 @@ class GradequestBillingPolicyController extends Controller
             return response()->json(['message' => 'Maximum temporary access days cannot be less than minimum days.'], 422);
         }
 
-        $policy = DB::transaction(function () use ($validated, $request) {
-            $policy = $this->policy();
-            $before = $policy->toArray();
-            $validated['updated_by'] = $request->user()->id;
-            $policy->update($validated);
+        $policy = $this->policy();
+        $validated['updated_by'] = $request->user()->id;
 
-            return $policy->fresh();
-        });
+        $policy->fill($validated);
+        $policy->save();
 
         return response()->json([
-            'message' => 'Billing policy updated.',
-            'policy' => $policy,
+            'message' => 'Billing policy updated successfully.',
+            'policy' => $policy->fresh(),
+        ]);
+    }
+
+    public function grantWelcomeCreditsToAll(Request $request, WelcomeSchoolCreditService $service)
+    {
+        $this->authorizePlatform($request);
+
+        $result = $service->grantToAllExistingSchools();
+
+        return response()->json([
+            'message' => "Welcome credits granted successfully. {$result['granted_schools']} schools updated.",
+            'result' => $result,
         ]);
     }
 
@@ -104,37 +116,27 @@ class GradequestBillingPolicyController extends Controller
         $this->authorizePlatform($request);
 
         $policy = $this->policy();
-
         $validated = $request->validate([
             'school_id' => 'required|exists:school_settings,id',
-            'scope' => ['required', Rule::in(['school_crud', 'student_academic', 'all'])],
-            'days' => [
-                'required',
-                'integer',
-                'min:' . (int) $policy->temporary_access_min_days,
-                'max:' . (int) $policy->temporary_access_max_days,
-            ],
+            'days' => "required|integer|min:{$policy->temporary_access_min_days}|max:{$policy->temporary_access_max_days}",
             'reason' => 'required|string|max:255',
         ]);
 
         $access = DB::transaction(function () use ($validated, $request) {
             SchoolBillingTemporaryAccess::where('school_id', $validated['school_id'])
-                ->where('scope', $validated['scope'])
                 ->where('status', 'active')
-                ->where('ends_at', '>', now())
                 ->update([
-                    'status' => 'revoked',
+                    'status' => 'superseded',
                     'revoked_at' => now(),
                     'revoked_by' => $request->user()->id,
                 ]);
 
             $access = SchoolBillingTemporaryAccess::create([
                 'school_id' => $validated['school_id'],
-                'scope' => $validated['scope'],
-                'status' => 'active',
-                'starts_at' => now(),
-                'ends_at' => now()->addDays((int) $validated['days']),
                 'granted_by' => $request->user()->id,
+                'starts_at' => now(),
+                'ends_at' => now()->addDays($validated['days'])->endOfDay(),
+                'status' => 'active',
                 'reason' => $validated['reason'],
             ]);
 
@@ -280,6 +282,36 @@ class GradequestBillingPolicyController extends Controller
         ]);
     }
 
+    public function auditActivity(Request $request, int $schoolId)
+    {
+        $this->authorizePlatform($request);
+
+        $audit = $this->billing->auditSchoolActivity($schoolId);
+
+        return response()->json($audit);
+    }
+
+    public function waiveDormantTerms(Request $request)
+    {
+        $this->authorizePlatform($request);
+
+        $validated = $request->validate([
+            'school_id' => 'required|exists:school_settings,id',
+            'period_keys' => 'nullable|array',
+            'period_keys.*' => 'string',
+            'reason' => 'nullable|string|max:500',
+        ]);
+
+        $result = $this->billing->waiveDormantBillings(
+            (int) $validated['school_id'],
+            $validated['period_keys'] ?? [],
+            (int) $request->user()->id,
+            $validated['reason'] ?? ''
+        );
+
+        return response()->json($result);
+    }
+
     private function policy(): GradiosEduBillingPolicy
     {
         return GradiosEduBillingPolicy::firstOrCreate([], [
@@ -303,6 +335,8 @@ class GradequestBillingPolicyController extends Controller
             'ai_lesson_note_credit_cost' => 5,
             'ai_fee_collection_credit_cost' => 2,
             'ai_credit_unit_price' => 25,
+            'welcome_ai_credits' => 50,
+            'welcome_whatsapp_credits' => 15,
             'legacy_subscription_honor_enabled' => true,
             'per_student_billing_starts_at' => now(),
             'temporary_access_min_days' => 3,
@@ -345,5 +379,4 @@ class GradequestBillingPolicyController extends Controller
 if (!class_exists('App\Http\Controllers\Backend\GradiosEduBillingPolicyController', false)) {
     class_alias(GradequestBillingPolicyController::class, 'App\Http\Controllers\Backend\GradiosEduBillingPolicyController');
 }
-
 

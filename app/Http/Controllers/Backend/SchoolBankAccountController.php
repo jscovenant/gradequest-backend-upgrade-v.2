@@ -159,8 +159,8 @@ class SchoolBankAccountController extends Controller
                     Log::warning("Could not create Monnify subaccount for school {$school->id}: " . $monErr->getMessage());
                 }
 
-                // 2. Paystack Subaccount (Optional fallback)
-                if (config('services.paystack.secret')) {
+                // 2. Paystack Subaccount (Only if configured and Paystack active)
+                if (config('services.paystack.secret') && config('services.paystack.enable_subaccounts', false)) {
                     try {
                         $subaccount = Http::withToken(config('services.paystack.secret'))
                             ->post('https://api.paystack.co/subaccount', [
@@ -191,7 +191,7 @@ class SchoolBankAccountController extends Controller
                 'sort_order' => $validated['sort_order'] ?? 0,
                 'paystack_subaccount_code' => $paystackSubaccountCode,
                 'monnify_subaccount_code' => $monnifySubaccountCode,
-                'preferred_gateway' => 'monnify',
+                'preferred_gateway' => 'wema_alat',
             ]);
 
             try {

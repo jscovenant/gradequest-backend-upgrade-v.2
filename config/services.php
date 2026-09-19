@@ -44,13 +44,16 @@ return [
     ],
 
     'wema_alat' => [
-        'alatpay_key' => env('WEMA_ALAT_ALATPAY_KEY', 'f325c0f65b3b4758bf9e0c81fcc23bd6'),
-        'payout_key' => env('WEMA_ALAT_PAYOUT_KEY', '1eb9d69581404ba4b89d856b7147711a'),
-        'virtual_account_key' => env('WEMA_ALAT_VIRTUAL_ACCOUNT_KEY', 'schooproft_virtual_acct_pending'),
-        'base_url' => env('WEMA_ALAT_BASE_URL', 'https://wema-alatdev-apimgt.azure-api.net'),
+        'business_id' => env('WEMA_ALAT_BUSINESS_ID', '170d0720-1287-49ec-8d91-4c42b6a53c22'),
+        'public_key' => env('WEMA_ALAT_PUBLIC_KEY', 'd7ec83fb3f7d48e19b9ef3d417778ed7'),
+        'secret_key' => env('WEMA_ALAT_SECRET_KEY', '2433e36e6f5f4998a2b3bee6a7bfa66e'),
+        'alatpay_key' => env('WEMA_ALAT_ALATPAY_KEY', '2433e36e6f5f4998a2b3bee6a7bfa66e'),
+        'payout_key' => env('WEMA_ALAT_PAYOUT_KEY', '2433e36e6f5f4998a2b3bee6a7bfa66e'),
+        'virtual_account_key' => env('WEMA_ALAT_VIRTUAL_ACCOUNT_KEY', '2433e36e6f5f4998a2b3bee6a7bfa66e'),
+        'base_url' => env('WEMA_ALAT_BASE_URL', 'https://apibox.alatpay.ng'),
         'corporate_account' => env('WEMA_CORPORATE_ACCOUNT_NUMBER', '0128168785'),
-        'corporate_account_name' => env('WEMA_ALAT_CORPORATE_ACCOUNT_NAME', 'SAMARITAN TECHNOLOGIES'),
-        'webhook_secret' => env('WEMA_ALAT_WEBHOOK_SECRET', 'sp_wema_webhook_secret_2026'),
+        'corporate_account_name' => env('WEMA_ALAT_CORPORATE_ACCOUNT_NAME', 'Samaritan Technologies'),
+        'webhook_secret' => env('WEMA_ALAT_WEBHOOK_SECRET', '77f4b0c692cef9f0cb546612751213f8'),
         'env' => env('WEMA_ALAT_ENV', 'sandbox'),
     ],
 

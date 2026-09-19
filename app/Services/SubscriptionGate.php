@@ -403,14 +403,11 @@ class SubscriptionGate
             ->where('school_id', $schoolId)
             ->first();
 
-        // Check if school has an active connected bank account with Paystack subaccount or online enabled
+        // Check if school has an active connected bank account with online enabled
         $hasActiveBankAccount = SchoolBankAccount::query()
             ->where('school_id', $schoolId)
             ->where('is_active', true)
-            ->where(function ($query) {
-                $query->where('online_payment_enabled', true)
-                    ->orWhereNotNull('paystack_subaccount_code');
-            })
+            ->where('online_payment_enabled', true)
             ->exists();
 
         if ($hasActiveBankAccount) {
