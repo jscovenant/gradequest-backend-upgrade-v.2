@@ -322,19 +322,19 @@ Reply to this message to speak with your dedicated onboarding specialist or book
 
         if (preg_match('/(pricing|price|cost|how much|package|edition|tier|rate|fee|charge|bill|plan|300|500)/i', $lastUserMsg)) {
             return "SchoolProfit operates on a transparent, purely per-student fee model with **₦0 upfront software license fees** and two flexible editions:\n\n"
-                . "1. **Basic Result Edition (₦{$basicPrice} per student / term)**:\n"
-                . "   • 1-Click Automated Broadsheets & WAEC/NECO format Report Cards\n"
-                . "   • Automated Grading, Cumulative Averages & AI Teacher Remarks\n"
-                . "   • Dedicated Student Virtual Accounts for direct tuition collections\n"
-                . "   • Complete Bursary Accounting & Defaulter Tracking\n\n"
-                . "2. **Standard CBT & AI Edition (₦{$cbtPrice} per student / term)**:\n"
-                . "   • **Everything in the Basic Package** +\n"
-                . "   • Full Offline & Online Computer-Based Testing (CBT) Examination suite\n"
-                . "   • Automated WhatsApp Broadsheet & Report Card Delivery to Parents\n"
-                . "   • AI Lesson Plan & Scheme of Work Generators\n\n"
-                . "💡 **Zero-Cost Advantage (₦0.00 Expense to School)**:\n"
+                . "**1. Basic Result Edition (₦{$basicPrice} per student / term)**\n"
+                . "• 1-Click Automated Broadsheets & WAEC/NECO format Report Cards\n"
+                . "• Automated Grading, Cumulative Averages & AI Teacher Remarks\n"
+                . "• Dedicated Student Virtual Accounts for direct tuition collections\n"
+                . "• Complete Bursary Accounting & Defaulter Tracking\n\n"
+                . "**2. Standard CBT & AI Edition (₦{$cbtPrice} per student / term)**\n"
+                . "• Everything in the Basic Package +\n"
+                . "• Full Offline & Online Computer-Based Testing (CBT) Examination suite\n"
+                . "• Automated WhatsApp Broadsheet & Report Card Delivery to Parents\n"
+                . "• AI Lesson Plan & Scheme of Work Generators\n\n"
+                . "**Zero-Cost Advantage (₦0.00 Expense to School):**\n"
                 . "Your school can pass this small platform fee to parents on their termly fee payment invoices, meaning the platform costs your school **₦0.00** from your pocket!\n\n"
-                . "📅 Would you like to schedule a 15-minute live screen walkthrough for your school? You can book at [schoolprofit.ng/book-demo]({$demoUrl}) or message our growth desk on WhatsApp ({$whatsapp})!";
+                . "Would you like to schedule a 15-minute live screen walkthrough for your school? You can book at [schoolprofit.ng/book-demo]({$demoUrl}) or message our growth desk on WhatsApp ({$whatsapp})!";
         }
 
         if (preg_match('/(zero|0\.00|parent|pass|recover|free)/i', $lastUserMsg)) {
@@ -468,7 +468,8 @@ YOUR PRIMARY GOAL: MAKE SALES & GUIDE PROSPECTS
 3. Primary Call-to-Actions & Links:
    - Live Demo & Onboarding Booking: {$demoUrl}
    - WhatsApp Support & Growth Desk: {$whatsappNumber}
-4. Tone: Confident, encouraging, authoritative, consultative, professional Nigerian education advisor. Always format messages neatly with bold headers and bullet points where appropriate.
+4. Tone: Confident, encouraging, authoritative, consultative, professional Nigerian education advisor.
+5. Formatting Rules: NEVER use raw markdown hash symbols like `##` or `###` for headings. Instead, use clean bold headings (e.g. `**1. Basic Result Edition (₦{$basicTierPrice}/student/term)**`) with clean bullet points (`•`) and readable spacing.
 
 {$customInstructions}
 PROMPT;
