@@ -221,9 +221,14 @@ class PublicFeePaymentController extends Controller
 
         // ── 0. WEMA BANK (ALAT / Dedicated Virtual Account) ──
         if ($chosenGateway === 'wema_alat' || empty($chosenGateway)) {
+            $studentFullName = trim(($student->firstname ?? '') . ' ' . ($student->surname ?? '')) ?: 'Student';
+            $schoolName = $admin->school?->school_name ?? $admin->name ?? 'School';
+
             $wemaVirtualAcc = $this->wemaService->generateVirtualAccount([
                 'amount' => $totalPayableByParent,
-                'student_name' => trim(($student->firstname ?? '') . ' ' . ($student->surname ?? '')) ?: 'Student',
+                'student_name' => $schoolName . ' - ' . $studentFullName,
+                'raw_student_name' => $studentFullName,
+                'school_name' => $schoolName,
                 'student_id' => $student->id,
                 'school_id' => $admin->school_id,
                 'school_code' => $data['school_code'],
@@ -855,6 +860,10 @@ class PublicFeePaymentController extends Controller
     private function resolveSchoolAdmin(string $schoolCode): ?User
     {
         $code = trim($schoolCode);
+        if (empty($code)) {
+            return null;
+        }
+
         return User::with('school')
             ->where(function ($q) {
                 $q->whereRaw('LOWER(role) = ?', ['admin'])
@@ -866,7 +875,9 @@ class PublicFeePaymentController extends Controller
                   ->orWhere('id', is_numeric($code) ? (int) $code : 0)
                   ->orWhereHas('school', function ($sq) use ($code) {
                       $sq->where('id', is_numeric($code) ? (int) $code : 0)
-                         ->orWhere('school_name', 'like', '%'.$code.'%');
+                         ->orWhere('school_name', 'like', '%'.$code.'%')
+                         ->orWhere('school_subdomain', $code)
+                         ->orWhere('custom_domain', $code);
                   });
             })
             ->whereNotNull('school_id')
@@ -1022,6 +1033,7 @@ class PublicFeePaymentController extends Controller
     private function schoolPayload(User $admin): array
     {
         $school = $admin->school;
+        $website = \App\Models\SchoolWebsiteSetting::where('school_id', $admin->school_id)->first();
 
         return [
             'id' => (int) $admin->school_id,
@@ -1031,6 +1043,11 @@ class PublicFeePaymentController extends Controller
             'phone' => $school?->phone_number ?? $school?->phone ?? $admin->phone_number,
             'address' => $school?->address,
             'logo' => $school?->logo ? url($school->logo) : null,
+            'subdomain' => $school?->school_subdomain,
+            'custom_domain' => $school?->custom_domain,
+            'primary_color' => $website?->primary_color ?? '#0F2744',
+            'secondary_color' => $website?->secondary_color ?? '#D97706',
+            'accent_color' => $website?->accent_color ?? '#2563EB',
         ];
     }
 
