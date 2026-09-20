@@ -22,7 +22,7 @@ Route::get('/robots.txt', function () {
         . "Allow: /login\n"
         . "Allow: /check-result\n"
         . "Allow: /verify-result\n"
-        . "Allow: /pay-school-fee\n"
+        . "Allow: /pay-fees\n"
         . "Allow: /cbt/access\n"
         . "Allow: /privacy-policy\n"
         . "Allow: /terms-and-conditions\n"
@@ -63,7 +63,7 @@ Route::get('/sitemap.xml', function () {
         ['url' => 'https://schoolprofit.ng/sales-representative/register', 'priority' => '0.85', 'freq' => 'weekly'],
         ['url' => 'https://schoolprofit.ng/check-result', 'priority' => '0.80', 'freq' => 'monthly'],
         ['url' => 'https://schoolprofit.ng/verify-result', 'priority' => '0.75', 'freq' => 'monthly'],
-        ['url' => 'https://schoolprofit.ng/pay-school-fee', 'priority' => '0.80', 'freq' => 'monthly'],
+        ['url' => 'https://schoolprofit.ng/pay-fees', 'priority' => '0.80', 'freq' => 'monthly'],
         ['url' => 'https://schoolprofit.ng/cbt/access', 'priority' => '0.75', 'freq' => 'monthly'],
         ['url' => 'https://schoolprofit.ng/cbt/offline-runner', 'priority' => '0.70', 'freq' => 'monthly'],
         ['url' => 'https://schoolprofit.ng/login', 'priority' => '0.70', 'freq' => 'monthly'],

@@ -7,7 +7,7 @@ Allow: /sales-representative/register
 Allow: /login
 Allow: /check-result
 Allow: /verify-result
-Allow: /pay-school-fee
+Allow: /pay-fees
 Allow: /cbt/access
 Allow: /privacy-policy
 Allow: /terms-and-conditions

@@ -396,7 +396,7 @@ class AutoFeeInvoiceService
                     'amount' => number_format((float) $studentFees->sum('balance'), 2, '.', ''),
                 ]);
 
-                return [(int) $studentId => "{$baseUrl}/pay-school-fee?{$query}"];
+                return [(int) $studentId => "{$baseUrl}/pay-fees?{$query}"];
             })
             ->all();
     }

@@ -185,7 +185,7 @@ class SendFeeReminder implements ShouldQueue
                 'amount' => number_format((float) $studentFees->sum('balance'), 2, '.', ''),
             ]);
 
-            $links[(int) $studentId] = "{$baseUrl}/pay-school-fee?{$query}";
+            $links[(int) $studentId] = "{$baseUrl}/pay-fees?{$query}";
         }
 
         return $links;
