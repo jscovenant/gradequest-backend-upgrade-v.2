@@ -3,8 +3,8 @@
 namespace App\Services\Cbt;
 
 use App\Models\CbtExam;
+use App\Services\Ai\GeminiAiService;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use RuntimeException;
 use ZipArchive;
@@ -13,63 +13,45 @@ class AiCbtQuestionGeneratorService
 {
     private const MAX_SOURCE_CHARS = 30000;
 
+    public function __construct(private GeminiAiService $ai)
+    {
+    }
+
     public function generate(CbtExam $exam, array $data): array
     {
-        $apiKey = config('openai.api_key');
-        if (! $apiKey) {
-            throw new RuntimeException('OpenAI API key is not configured. Add OPENAI_API_KEY to your backend .env file.');
-        }
-
         $sourceText = $this->sourceText($data['source_file'] ?? null, (string) ($data['source_text'] ?? ''));
 
         if ($sourceText === '' && trim((string) ($data['topics'] ?? '')) === '') {
             throw new RuntimeException('Upload a teacher note/manual or enter topics separated by commas.');
         }
 
-        $payload = $this->buildPayload($exam, $data, $sourceText);
+        $instructions = $this->instructions($data);
+        $context = $this->buildContext($exam, $data, $sourceText);
 
-        $timeout = max(30, (int) config('openai.timeout', 90));
-        if (function_exists('set_time_limit')) {
-            @set_time_limit($timeout + 20);
-        }
+        $result = $this->ai->generateStructuredJson($instructions, $context);
+        $draft = $result['data'] ?? [];
 
-        $response = Http::withToken($apiKey)
-            ->connectTimeout(15)
-            ->timeout($timeout)
-            ->acceptJson()
-            ->post('https://api.openai.com/v1/responses', $payload);
-
-        if (! $response->successful()) {
-            throw new RuntimeException($response->json('error.message') ?: 'OpenAI could not generate questions at this time.');
-        }
-
-        $body = $response->json();
-        $json = $this->extractOutputJson($body);
-        $draft = json_decode($json, true);
-
-        if (! is_array($draft)) {
-            throw new RuntimeException('OpenAI returned an invalid question structure. Try again with fewer questions or clearer topics.');
+        if (! is_array($draft) || empty($draft)) {
+            throw new RuntimeException('AI returned an invalid question structure. Try again with fewer questions or clearer topics.');
         }
 
         return [
             'draft' => $this->normalizeDraft($draft, $data),
-            'usage' => [
-                'model' => $body['model'] ?? config('openai.model'),
-                'input_tokens' => (int) data_get($body, 'usage.input_tokens', 0),
-                'output_tokens' => (int) data_get($body, 'usage.output_tokens', 0),
-                'total_tokens' => (int) data_get($body, 'usage.total_tokens', 0),
+            'usage' => $result['usage'] ?? [
+                'model' => $result['model'] ?? config('gemini.model'),
+                'input_tokens' => 0,
+                'output_tokens' => 0,
+                'total_tokens' => 0,
             ],
         ];
     }
 
-    private function buildPayload(CbtExam $exam, array $data, string $sourceText): array
+    private function instructions(array $data): string
     {
         $questionCount = max(1, min(80, (int) ($data['question_count'] ?? 20)));
-        $topics = trim((string) ($data['topics'] ?? ''));
-        $formats = $data['formats'] ?? ['single_choice'];
         $difficulty = (string) ($data['difficulty'] ?? 'normal');
 
-        $instructions = <<<PROMPT
+        return <<<PROMPT
 You generate Nigerian/African school CBT exam draft questions.
 Return only valid JSON. Do not include markdown.
 
@@ -103,7 +85,7 @@ Return this exact JSON shape:
           "instructions": "",
           "marks": 1,
           "difficulty": "{$difficulty}",
-          "options": [{"label":"A","option_text":"..."}],
+          "options": [{"label":"A","option_text":"Option A text"}],
           "correct_answer": ["A"],
           "explanation": "Short explanation"
         }
@@ -121,8 +103,16 @@ Return this exact JSON shape:
   ]
 }
 PROMPT;
+    }
 
-        $context = [
+    private function buildContext(CbtExam $exam, array $data, string $sourceText): array
+    {
+        $questionCount = max(1, min(80, (int) ($data['question_count'] ?? 20)));
+        $topics = trim((string) ($data['topics'] ?? ''));
+        $formats = $data['formats'] ?? ['single_choice'];
+        $difficulty = (string) ($data['difficulty'] ?? 'normal');
+
+        return [
             'exam_title' => $exam->title,
             'subject' => $exam->subject?->name,
             'class' => $exam->class?->name,
@@ -133,29 +123,6 @@ PROMPT;
             'difficulty' => $difficulty,
             'question_count' => $questionCount,
             'teacher_note_excerpt' => Str::limit($sourceText, self::MAX_SOURCE_CHARS, ''),
-        ];
-
-        return [
-            'model' => config('openai.model', 'gpt-5-mini'),
-            'input' => [
-                [
-                    'role' => 'system',
-                    'content' => [
-                        ['type' => 'input_text', 'text' => $instructions],
-                    ],
-                ],
-                [
-                    'role' => 'user',
-                    'content' => [
-                        ['type' => 'input_text', 'text' => json_encode($context, JSON_PRETTY_PRINT)],
-                    ],
-                ],
-            ],
-            'text' => [
-                'format' => [
-                    'type' => 'json_object',
-                ],
-            ],
         ];
     }
 
@@ -202,24 +169,6 @@ PROMPT;
         $text = html_entity_decode(strip_tags($xml), ENT_QUOTES | ENT_XML1, 'UTF-8');
 
         return trim(preg_replace('/\s+/', ' ', $text) ?? $text);
-    }
-
-    private function extractOutputJson(array $body): string
-    {
-        if (is_string($body['output_text'] ?? null)) {
-            return $body['output_text'];
-        }
-
-        $parts = [];
-        foreach (($body['output'] ?? []) as $item) {
-            foreach (($item['content'] ?? []) as $content) {
-                if (isset($content['text'])) {
-                    $parts[] = $content['text'];
-                }
-            }
-        }
-
-        return trim(implode("\n", $parts));
     }
 
     private function normalizeDraft(array $draft, array $data): array
@@ -295,5 +244,3 @@ PROMPT;
             ->all();
     }
 }
-
-

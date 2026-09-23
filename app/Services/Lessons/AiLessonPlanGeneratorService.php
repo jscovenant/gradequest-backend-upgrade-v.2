@@ -2,12 +2,16 @@
 
 namespace App\Services\Lessons;
 
-use Illuminate\Support\Facades\Http;
+use App\Services\Ai\GeminiAiService;
 use Illuminate\Support\Str;
 use RuntimeException;
 
 class AiLessonPlanGeneratorService
 {
+    public function __construct(private GeminiAiService $ai)
+    {
+    }
+
     public function generate(array $data): array
     {
         return $this->requestStructuredContent($data, $this->lessonPlanInstructions(), fn (array $payload) => [
@@ -31,46 +35,20 @@ class AiLessonPlanGeneratorService
 
     private function requestStructuredContent(array $data, string $instructions, callable $normalizer): array
     {
-        $apiKey = config('openai.api_key');
-        if (! $apiKey) {
-            throw new RuntimeException('OpenAI API key is not configured. Add OPENAI_API_KEY to your backend .env file.');
-        }
+        $input = $this->compactInput($data);
+        $result = $this->ai->generateStructuredJson($instructions, $input);
 
-        $timeout = max(30, (int) config('openai.timeout', 90));
-        if (function_exists('set_time_limit')) {
-            @set_time_limit($timeout + 20);
-        }
-
-        $response = Http::withToken($apiKey)
-            ->connectTimeout(15)
-            ->timeout($timeout)
-            ->acceptJson()
-            ->post('https://api.openai.com/v1/responses', [
-                'model' => config('openai.model', 'gpt-5-mini'),
-                'input' => [
-                    ['role' => 'system', 'content' => [['type' => 'input_text', 'text' => $instructions]]],
-                    ['role' => 'user', 'content' => [['type' => 'input_text', 'text' => json_encode($this->compactInput($data), JSON_UNESCAPED_SLASHES)]]],
-                ],
-                'text' => ['format' => ['type' => 'json_object']],
-            ]);
-
-        if (! $response->successful()) {
-            throw new RuntimeException($response->json('error.message') ?: 'OpenAI could not process this request at this time.');
-        }
-
-        $body = $response->json();
-        $payload = json_decode($this->extractOutputJson($body), true);
-
-        if (! is_array($payload)) {
-            throw new RuntimeException('OpenAI returned an invalid structure. Try again with clearer details.');
+        $payload = $result['data'] ?? [];
+        if (! is_array($payload) || empty($payload)) {
+            throw new RuntimeException('AI returned an invalid structure. Try again with clearer details.');
         }
 
         return array_merge($normalizer($payload), [
-            'usage' => [
-                'model' => $body['model'] ?? config('openai.model'),
-                'input_tokens' => (int) data_get($body, 'usage.input_tokens', 0),
-                'output_tokens' => (int) data_get($body, 'usage.output_tokens', 0),
-                'total_tokens' => (int) data_get($body, 'usage.total_tokens', 0),
+            'usage' => $result['usage'] ?? [
+                'model' => $result['model'] ?? config('gemini.model'),
+                'input_tokens' => 0,
+                'output_tokens' => 0,
+                'total_tokens' => 0,
             ],
         ]);
     }
@@ -127,11 +105,11 @@ PROMPT;
     private function normalizePlan(array $plan, array $data): array
     {
         return [
-            'title' => Str::limit(trim((string) ($plan['title'] ?? $data['topic'])), 160, ''),
-            'subject' => trim((string) ($plan['subject'] ?? $data['subject'])),
-            'class' => trim((string) ($plan['class'] ?? $data['class'])),
-            'topic' => trim((string) ($plan['topic'] ?? $data['topic'])),
-            'duration_minutes' => (int) ($plan['duration_minutes'] ?? $data['duration_minutes']),
+            'title' => Str::limit(trim((string) ($plan['title'] ?? $data['topic'] ?? 'Lesson Plan')), 160, ''),
+            'subject' => trim((string) ($plan['subject'] ?? $data['subject'] ?? '')),
+            'class' => trim((string) ($plan['class'] ?? $data['class'] ?? '')),
+            'topic' => trim((string) ($plan['topic'] ?? $data['topic'] ?? '')),
+            'duration_minutes' => (int) ($plan['duration_minutes'] ?? ($data['duration_minutes'] ?? 40)),
             'objectives' => $this->stringList($plan['objectives'] ?? []),
             'teaching_aids' => $this->stringList($plan['teaching_aids'] ?? []),
             'previous_knowledge' => trim((string) ($plan['previous_knowledge'] ?? '')),
@@ -201,24 +179,6 @@ PROMPT;
             ->filter()
             ->values()
             ->all();
-    }
-
-    private function extractOutputJson(array $body): string
-    {
-        if (is_string($body['output_text'] ?? null)) {
-            return $body['output_text'];
-        }
-
-        $parts = [];
-        foreach (($body['output'] ?? []) as $item) {
-            foreach (($item['content'] ?? []) as $content) {
-                if (isset($content['text'])) {
-                    $parts[] = $content['text'];
-                }
-            }
-        }
-
-        return trim(implode("\n", $parts));
     }
 
     private function compactInput(array $data): array

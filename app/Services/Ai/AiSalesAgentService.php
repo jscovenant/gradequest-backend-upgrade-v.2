@@ -43,53 +43,23 @@ class AiSalesAgentService
         $existingMessages = $conversation->messages ?: [];
         $mergedMessages = array_merge($existingMessages, $newMessages);
 
-        $apiKey = $this->config->openai_api_key ?: config('openai.api_key') ?: env('OPENAI_API_KEY');
         $replyContent = null;
         $usage = [];
 
-        if ($apiKey) {
-            try {
-                // Build OpenAI Chat Completions payload
-                $systemPrompt = $this->buildSystemPrompt($context);
-
-                $openAiMessages = [
-                    ['role' => 'system', 'content' => $systemPrompt],
-                ];
-
-                foreach ($mergedMessages as $msg) {
-                    $openAiMessages[] = [
-                        'role' => $msg['role'] === 'user' ? 'user' : 'assistant',
-                        'content' => $msg['content'] ?? '',
-                    ];
-                }
-
-                $model = $this->config->model ?: 'gpt-4o-mini';
-                $temperature = (float) ($this->config->temperature ?: 0.70);
-
-                $response = Http::withToken($apiKey)
-                    ->connectTimeout(15)
-                    ->timeout(60)
-                    ->acceptJson()
-                    ->post('https://api.openai.com/v1/chat/completions', [
-                        'model' => $model,
-                        'messages' => $openAiMessages,
-                        'temperature' => $temperature,
-                        'max_tokens' => 1200,
-                    ]);
-
-                if ($response->successful()) {
-                    $responseData = $response->json();
-                    $replyContent = $responseData['choices'][0]['message']['content'] ?? null;
-                    $usage = $responseData['usage'] ?? [];
-                } else {
-                    Log::warning('OpenAI Sales Agent fallback activated due to API response: ' . $response->body());
-                }
-            } catch (\Exception $e) {
-                Log::warning('OpenAI Sales Agent fallback activated due to exception: ' . $e->getMessage());
-            }
+        try {
+            $systemPrompt = $this->buildSystemPrompt($context);
+            $geminiService = app(GeminiAiService::class);
+            $result = $geminiService->generateConversation($systemPrompt, $mergedMessages, [
+                'temperature' => (float) ($this->config->temperature ?: 0.70),
+                'max_tokens' => 1200,
+            ]);
+            $replyContent = $result['reply'] ?? null;
+            $usage = $result['usage'] ?? [];
+        } catch (\Exception $e) {
+            Log::warning('Gemini Sales Agent fallback activated due to exception: ' . $e->getMessage());
         }
 
-        // Use smart dynamic fallback if OpenAI was not called or failed
+        // Use smart dynamic fallback if AI was not called or failed
         if (! $replyContent) {
             $replyContent = $this->generateFallbackReply($mergedMessages, $context);
         }
@@ -123,75 +93,15 @@ class AiSalesAgentService
      */
     public function generateReengagementMessage(SchoolSetting $school, ?User $owner, string $inactivityReason): string
     {
-        $apiKey = $this->config->openai_api_key ?: config('openai.api_key') ?: env('OPENAI_API_KEY');
-        $schoolName = $school->school_name ?: 'Your School';
-        $ownerName = $owner ? "{$owner->firstname} {$owner->surname}" : 'School Administrator';
-        $bookingUrl = $this->config->demo_booking_url ?: 'https://schoolprofit.ng/book-demo';
-        $supportWhatsApp = $this->config->support_whatsapp_number ?: '+2348000000000';
-
-        $billingPolicy = GradequestBillingPolicy::first();
-        $basicPrice = $billingPolicy ? number_format((float) ($billingPolicy->basic_tier_price_per_student ?? 300), 0) : '300';
-        $cbtPrice = $billingPolicy ? number_format((float) ($billingPolicy->standard_cbt_tier_price_per_student ?? 500), 0) : '500';
-
-        $reasonDescriptions = [
-            '0_students_uploaded' => "The school registered their portal on SchoolProfit but has not uploaded their student list or completed setup.",
-            'no_login_30_days' => "The school administrator has not logged into their SchoolProfit dashboard for several weeks.",
-            'trial_expiring' => "The school is preparing for the term and has not yet activated automated fee collections or broadsheet generation.",
-            'abandoned_fee_setup' => "The school started setting up tuition items but hasn't activated automated virtual accounts for parents.",
-            'general_checkin' => "A routine termly check-in to offer school management optimization, 1-click broadsheets, and WhatsApp result delivery.",
-        ];
-
-        $reasonText = $reasonDescriptions[$inactivityReason] ?? $reasonDescriptions['general_checkin'];
-
-        $prompt = <<<EOT
-You are {$this->config->agent_name}, a friendly, respectful, and highly consultative Senior Growth Advisor at SchoolProfit (GradeQuest).
-Write a short, engaging, and high-converting WhatsApp message to {$ownerName}, the owner/head of {$schoolName}.
-
-Context & Business Rules:
-- Inactivity reason: {$reasonText}
-- School Name: {$schoolName}
-- Pricing Model: SchoolProfit uses ONLY a small per-student fee (Basic Results/Portal: ₦{$basicPrice}/student, Full CBT Suite: ₦{$cbtPrice}/student).
-- Zero-Cost Advantage: Schools can pass this small platform fee to parents at the point of fee payment (meaning ZERO cost: ₦0.00 to the school) or have it deducted from collected school fees. NO expensive monthly subscriptions!
-- Value Proposition: Eliminate unpaid school fee debts with automated parent virtual accounts, compile 100% accurate term broadsheets & WAEC-standard report cards in 1 click, and run offline CBT exams.
-- Call to Action: Invite them to book a quick 10-minute live demo/onboarding walkthrough at {$bookingUrl} or reply directly on WhatsApp so our team can import their student list for free.
-- Tone: Professional, warm Nigerian educational context, respectful, concise (under 120 words), with clean WhatsApp formatting (bold keywords, bullet points, polite greeting).
-- Output ONLY the WhatsApp message text without quotes or meta-commentary.
-EOT;
-
-        if (! $apiKey) {
-            return "Good day {$ownerName}, trust {$schoolName} is having a fruitful academic term!
-
-This is {$this->config->agent_name} from *SchoolProfit*.
-
-We noticed your school portal is ready but your student list isn't uploaded yet. With the new term preparations underway, we'd love to help your school:
-• *Zero Cost to School (₦0.00)*: Pass the tiny per-student fee to parents or deduct from fee collections (no subscription fees!).
-• *Eliminate School Fee Debts*: Automated parent virtual accounts with instant clearance passes.
-• *1-Click Broadsheets & Report Cards*: Instant error-free result compilation.
-
-Would you like our onboarding team to import your student roster for free today? 
-📅 Book a quick 10-min walkthrough: {$bookingUrl}
-Or simply reply directly to this WhatsApp message!
-
-Warm regards,
-*SchoolProfit Growth Team*";
-        }
-
         try {
-            $response = Http::withToken($apiKey)
-                ->connectTimeout(10)
-                ->timeout(30)
-                ->post('https://api.openai.com/v1/chat/completions', [
-                    'model' => $this->config->model ?: 'gpt-4o-mini',
-                    'messages' => [
-                        ['role' => 'system', 'content' => 'You write persuasive, warm B2B WhatsApp messages to Nigerian school owners and proprietors.'],
-                        ['role' => 'user', 'content' => $prompt],
-                    ],
-                    'temperature' => 0.75,
-                    'max_tokens' => 350,
-                ]);
-
-            if ($response->successful()) {
-                return trim($response->json('choices.0.message.content') ?? '');
+            $geminiService = app(GeminiAiService::class);
+            $result = $geminiService->generateConversation(
+                'You write persuasive, warm B2B WhatsApp messages to Nigerian school owners and proprietors.',
+                [['role' => 'user', 'content' => $prompt]],
+                ['temperature' => 0.75, 'max_tokens' => 350]
+            );
+            if (! empty($result['reply'])) {
+                return trim($result['reply']);
             }
         } catch (\Exception $e) {
             Log::warning('AI re-engagement generation fallback used: ' . $e->getMessage());

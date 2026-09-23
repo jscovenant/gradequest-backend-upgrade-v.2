@@ -2,13 +2,17 @@
 
 namespace App\Services\Fees;
 
+use App\Services\Ai\GeminiAiService;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use RuntimeException;
 
 class AiFeeCollectionAssistantService
 {
+    public function __construct(private GeminiAiService $ai)
+    {
+    }
+
     public function analyze(int $schoolId, array $filters = []): array
     {
         $dataset = $this->dataset($schoolId, $filters);
@@ -16,44 +20,32 @@ class AiFeeCollectionAssistantService
         if (($dataset['summary']['total_balance'] ?? 0) <= 0) {
             return [
                 'analysis' => $this->emptyAnalysis($dataset),
-                'usage' => ['model' => config('openai.model'), 'input_tokens' => 0, 'output_tokens' => 0, 'total_tokens' => 0],
+                'usage' => ['model' => config('gemini.model'), 'input_tokens' => 0, 'output_tokens' => 0, 'total_tokens' => 0],
             ];
         }
 
-        $apiKey = config('openai.api_key');
-        if (! $apiKey) {
-            throw new RuntimeException('OpenAI API key is not configured. Add OPENAI_API_KEY to your backend .env file.');
-        }
+        $instructions = $this->instructions();
+        $context = [
+            'filters' => $filters,
+            'summary' => $dataset['summary'],
+            'at_risk_parents' => $dataset['at_risk_parents'],
+            'breakdowns' => $dataset['breakdowns'],
+        ];
 
-        $timeout = max(30, (int) config('openai.timeout', 90));
-        if (function_exists('set_time_limit')) {
-            @set_time_limit($timeout + 20);
-        }
+        $result = $this->ai->generateStructuredJson($instructions, $context);
+        $analysis = $result['data'] ?? [];
 
-        $response = Http::withToken($apiKey)
-            ->connectTimeout(15)
-            ->timeout($timeout)
-            ->acceptJson()
-            ->post('https://api.openai.com/v1/responses', $this->payload($dataset, $filters));
-
-        if (! $response->successful()) {
-            throw new RuntimeException($response->json('error.message') ?: 'OpenAI could not analyze fee collection at this time.');
-        }
-
-        $body = $response->json();
-        $analysis = json_decode($this->extractOutputJson($body), true);
-
-        if (! is_array($analysis)) {
-            throw new RuntimeException('OpenAI returned an invalid fee collection response. Try again.');
+        if (! is_array($analysis) || empty($analysis)) {
+            throw new RuntimeException('AI returned an invalid fee collection response. Try again.');
         }
 
         return [
             'analysis' => $this->normalizeAnalysis($analysis, $dataset),
-            'usage' => [
-                'model' => $body['model'] ?? config('openai.model'),
-                'input_tokens' => (int) data_get($body, 'usage.input_tokens', 0),
-                'output_tokens' => (int) data_get($body, 'usage.output_tokens', 0),
-                'total_tokens' => (int) data_get($body, 'usage.total_tokens', 0),
+            'usage' => $result['usage'] ?? [
+                'model' => $result['model'] ?? config('gemini.model'),
+                'input_tokens' => 0,
+                'output_tokens' => 0,
+                'total_tokens' => 0,
             ],
         ];
     }
@@ -156,9 +148,9 @@ class AiFeeCollectionAssistantService
         ];
     }
 
-    private function payload(array $dataset, array $filters): array
+    private function instructions(): string
     {
-        $instructions = <<<'PROMPT'
+        return <<<'PROMPT'
 You are a school fee collection assistant for a Nigerian/African school management system.
 Return only valid JSON. Do not include markdown.
 
@@ -180,22 +172,6 @@ Return exactly this JSON shape:
   ]
 }
 PROMPT;
-
-        $context = [
-            'filters' => $filters,
-            'summary' => $dataset['summary'],
-            'at_risk_parents' => $dataset['at_risk_parents'],
-            'breakdowns' => $dataset['breakdowns'],
-        ];
-
-        return [
-            'model' => config('openai.model', 'gpt-5-mini'),
-            'input' => [
-                ['role' => 'system', 'content' => [['type' => 'input_text', 'text' => $instructions]]],
-                ['role' => 'user', 'content' => [['type' => 'input_text', 'text' => json_encode($context, JSON_PRETTY_PRINT)]]],
-            ],
-            'text' => ['format' => ['type' => 'json_object']],
-        ];
     }
 
     private function normalizeAnalysis(array $analysis, array $dataset): array
@@ -273,23 +249,4 @@ PROMPT;
     {
         return collect(is_array($items) ? $items : [$items])->map(fn ($item) => trim((string) $item))->filter()->values()->all();
     }
-
-    private function extractOutputJson(array $body): string
-    {
-        if (is_string($body['output_text'] ?? null)) {
-            return $body['output_text'];
-        }
-
-        $parts = [];
-        foreach (($body['output'] ?? []) as $item) {
-            foreach (($item['content'] ?? []) as $content) {
-                if (isset($content['text'])) {
-                    $parts[] = $content['text'];
-                }
-            }
-        }
-
-        return trim(implode("\n", $parts));
-    }
 }
-
