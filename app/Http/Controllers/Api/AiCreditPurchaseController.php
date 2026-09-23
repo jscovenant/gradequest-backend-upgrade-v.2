@@ -24,10 +24,11 @@ class AiCreditPurchaseController extends Controller
     public function quote(Request $request): JsonResponse
     {
         $user = $request->user();
+        $isAdmin = in_array(strtolower((string) ($user?->role ?? '')), ['admin', 'super-admin', 'principal'], true);
         $canPurchase = in_array(strtolower((string) ($user?->role ?? '')), ['admin', 'super-admin', 'principal', 'teacher', 'staff', 'bursar'], true);
         $quantity = max(1, (int) $request->query('quantity', 1));
         $unitPrice = $this->unitPrice();
-        $walletBalance = (float) (Wallet::where('user_id', $user->id)->value('balance') ?? 0);
+        $walletBalance = $isAdmin ? (float) (Wallet::where('user_id', $user->id)->value('balance') ?? 0) : null;
 
         return response()->json([
             'unit_price' => $unitPrice,
@@ -35,6 +36,7 @@ class AiCreditPurchaseController extends Controller
             'total_amount' => round($quantity * $unitPrice, 2),
             'currency' => 'NGN',
             'can_purchase' => $canPurchase,
+            'can_use_wallet' => $isAdmin,
             'wallet_balance' => $walletBalance,
             'user_role' => $user?->role,
         ]);
@@ -42,16 +44,22 @@ class AiCreditPurchaseController extends Controller
 
     public function buyWithWallet(Request $request): JsonResponse
     {
-        $this->assertCanPurchaseCredits($request);
-        $data = $request->validate(['quantity' => 'required|integer|min:1|max:1000000']);
         $user = $request->user();
+        $role = strtolower((string) ($user?->role ?? ''));
+        abort_unless(
+            in_array($role, ['admin', 'super-admin', 'principal'], true),
+            403,
+            'Only school administrators can purchase AI credits using the school wallet. Teachers and staff should purchase credits via online payment (Paystack).'
+        );
+
+        $data = $request->validate(['quantity' => 'required|integer|min:1|max:1000000']);
         $quantity = (int) $data['quantity'];
         $unitPrice = $this->unitPrice();
         $amount = round($quantity * $unitPrice, 2);
 
         $purchase = DB::transaction(function () use ($user, $quantity, $unitPrice, $amount) {
             $wallet = Wallet::where('user_id', $user->id)->lockForUpdate()->first();
-            abort_if(! $wallet || (float) $wallet->balance < $amount, 422, 'Insufficient wallet balance.');
+            abort_if(! $wallet || (float) $wallet->balance < $amount, 422, 'Insufficient school wallet balance.');
 
             $wallet->decrement('balance', $amount);
             $reference = 'AI-WALLET-' . strtoupper(Str::random(12));
@@ -80,24 +88,11 @@ class AiCreditPurchaseController extends Controller
             $usage = $this->credits->addPurchasedCredits((int) $user->school_id, $quantity, 'ai-purchase:' . $reference);
             $purchase->update(['subscription_ai_usage_id' => $usage->id]);
 
-            // If buyer is teacher or non-admin staff, allocate directly to their personal quota
-            if (! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'super-admin', 'principal'], true)) {
-                $allocation = SchoolStaffAiCreditAllocation::query()
-                    ->firstOrNew([
-                        'school_id' => $user->school_id,
-                        'user_id' => $user->id,
-                    ]);
-                $allocation->allocated_credits = (int) ($allocation->allocated_credits ?? 0) + $quantity;
-                $allocation->allocated_by = $user->id;
-                $allocation->notes = "Self-purchased {$quantity} credits (wallet)";
-                $allocation->save();
-            }
-
             return $purchase->fresh();
         });
 
         return response()->json([
-            'message' => "{$quantity} AI credits purchased successfully.",
+            'message' => "{$quantity} AI credits purchased successfully from school wallet.",
             'purchase' => $purchase,
             'credits' => $this->credits->getCreditSummary((int) $user->school_id, $user),
         ]);
