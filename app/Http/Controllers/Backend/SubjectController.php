@@ -318,6 +318,213 @@ class SubjectController extends Controller
         ]);
     }
 
+    /**
+     * Bulk seed standard Nigerian/WAEC curriculum subjects into the school.
+     */
+    public function seedCurriculum(Request $request): JsonResponse
+    {
+        $schoolId = (int) Auth::user()->school_id;
+        $category = $request->input('category'); // 'primary', 'junior', 'senior_core', 'senior_science', 'senior_arts', 'senior_commercial', 'senior_vocational', 'all'
+        $requestedSubjects = $request->input('subjects'); // array of { name, code?, section_id?, department_id? }
+
+        $definitions = $this->getCurriculumDefinitions();
+
+        $subjectsToProcess = [];
+
+        if (is_array($requestedSubjects) && count($requestedSubjects) > 0) {
+            $subjectsToProcess = $requestedSubjects;
+        } elseif (!empty($category) && isset($definitions[$category])) {
+            $subjectsToProcess = $definitions[$category];
+        } elseif ($category === 'all') {
+            foreach ($definitions as $catList) {
+                foreach ($catList as $item) {
+                    $subjectsToProcess[] = $item;
+                }
+            }
+        } else {
+            return response()->json([
+                'message' => 'Invalid category or subjects list specified.',
+                'available_categories' => array_keys($definitions),
+            ], 422);
+        }
+
+        // Resolve Sections of the school
+        $sections = Section::where('school_id', $schoolId)->whereNull('archived_at')->get();
+        $primarySec = $sections->first(fn ($s) => preg_match('/primary|nursery|basic|grade|kinder/i', $s->name));
+        $juniorSec = $sections->first(fn ($s) => preg_match('/junior|jss/i', $s->name));
+        $seniorSec = $sections->first(fn ($s) => preg_match('/senior|sss/i', $s->name));
+
+        // Resolve Departments of the school
+        $departments = Department::where('school_id', $schoolId)->whereNull('archived_at')->get();
+        $scienceDept = $departments->first(fn ($d) => preg_match('/science/i', $d->name));
+        $artsDept = $departments->first(fn ($d) => preg_match('/art|humanit/i', $d->name));
+        $commercialDept = $departments->first(fn ($d) => preg_match('/commercial|business/i', $d->name));
+        $vocationalDept = $departments->first(fn ($d) => preg_match('/vocat|tech/i', $d->name));
+
+        $createdCount = 0;
+        $existingCount = 0;
+        $processed = [];
+
+        foreach ($subjectsToProcess as $item) {
+            $name = trim((string) ($item['name'] ?? ''));
+            if (empty($name)) {
+                continue;
+            }
+
+            $existing = Subject::where('school_id', $schoolId)
+                ->whereRaw('LOWER(TRIM(name)) = ?', [strtolower($name)])
+                ->whereNull('archived_at')
+                ->first();
+
+            if ($existing) {
+                $existingCount++;
+                $processed[] = $existing;
+                continue;
+            }
+
+            // Determine Section ID
+            $secId = null;
+            if (isset($item['section_id']) && !empty($item['section_id'])) {
+                $secId = (int) $item['section_id'];
+            } else {
+                $sectionTag = $item['section_tag'] ?? '';
+                if ($sectionTag === 'primary' && $primarySec) $secId = $primarySec->id;
+                elseif ($sectionTag === 'junior' && $juniorSec) $secId = $juniorSec->id;
+                elseif ($sectionTag === 'senior' && $seniorSec) $secId = $seniorSec->id;
+            }
+
+            // Determine Department ID
+            $deptId = null;
+            if (isset($item['department_id']) && !empty($item['department_id'])) {
+                $deptId = (int) $item['department_id'];
+            } else {
+                $deptTag = $item['dept_tag'] ?? '';
+                if ($deptTag === 'science' && $scienceDept) $deptId = $scienceDept->id;
+                elseif ($deptTag === 'arts' && $artsDept) $deptId = $artsDept->id;
+                elseif ($deptTag === 'commercial' && $commercialDept) $deptId = $commercialDept->id;
+                elseif ($deptTag === 'vocational' && $vocationalDept) $deptId = $vocationalDept->id;
+            }
+
+            // Determine code
+            $code = $item['code'] ?? null;
+            if (empty($code)) {
+                $cleanWord = preg_replace('/[^A-Za-z]/', '', $name);
+                $prefix = strlen($cleanWord) >= 3 ? strtoupper(substr($cleanWord, 0, 3)) : 'SUB';
+                $total = Subject::where('school_id', $schoolId)->whereNull('archived_at')->count();
+                $code = $prefix . str_pad($total + 1, 3, '0', STR_PAD_LEFT);
+            }
+
+            $created = Subject::create([
+                'name' => $name,
+                'subject_id' => $code,
+                'school_id' => $schoolId,
+                'section_id' => $secId,
+                'department_id' => $deptId,
+            ]);
+
+            $createdCount++;
+            $processed[] = $created;
+        }
+
+        return response()->json([
+            'message' => "Curriculum processed: {$createdCount} subjects added, {$existingCount} already existed.",
+            'created_count' => $createdCount,
+            'existing_count' => $existingCount,
+            'total_processed' => count($processed),
+        ]);
+    }
+
+    public function getCurriculumTemplates(): JsonResponse
+    {
+        return response()->json($this->getCurriculumDefinitions());
+    }
+
+    private function getCurriculumDefinitions(): array
+    {
+        return [
+            'primary' => [
+                ['name' => 'Mathematics', 'code' => 'MTH', 'section_tag' => 'primary'],
+                ['name' => 'English Studies', 'code' => 'ENG', 'section_tag' => 'primary'],
+                ['name' => 'Basic Science & Technology', 'code' => 'BST', 'section_tag' => 'primary'],
+                ['name' => 'Social Studies', 'code' => 'SOS', 'section_tag' => 'primary'],
+                ['name' => 'Civic Education', 'code' => 'CIV', 'section_tag' => 'primary'],
+                ['name' => 'Quantitative Reasoning', 'code' => 'QTR', 'section_tag' => 'primary'],
+                ['name' => 'Verbal Reasoning', 'code' => 'VRB', 'section_tag' => 'primary'],
+                ['name' => 'Christian Religious Studies (CRS)', 'code' => 'CRS', 'section_tag' => 'primary'],
+                ['name' => 'Islamic Religious Studies (IRS)', 'code' => 'IRS', 'section_tag' => 'primary'],
+                ['name' => 'Cultural & Creative Arts (CCA)', 'code' => 'CCA', 'section_tag' => 'primary'],
+                ['name' => 'Physical & Health Education (PHE)', 'code' => 'PHE', 'section_tag' => 'primary'],
+                ['name' => 'Agricultural Science', 'code' => 'AGR', 'section_tag' => 'primary'],
+                ['name' => 'Home Economics', 'code' => 'HEC', 'section_tag' => 'primary'],
+                ['name' => 'Computer Studies / ICT', 'code' => 'ICT', 'section_tag' => 'primary'],
+                ['name' => 'Handwriting & Phonics', 'code' => 'HWT', 'section_tag' => 'primary'],
+                ['name' => 'French Language', 'code' => 'FRN', 'section_tag' => 'primary'],
+            ],
+            'junior' => [
+                ['name' => 'English Studies', 'code' => 'ENG', 'section_tag' => 'junior'],
+                ['name' => 'General Mathematics', 'code' => 'MTH', 'section_tag' => 'junior'],
+                ['name' => 'Basic Science', 'code' => 'BSC', 'section_tag' => 'junior'],
+                ['name' => 'Basic Technology', 'code' => 'BTE', 'section_tag' => 'junior'],
+                ['name' => 'Business Studies', 'code' => 'BST', 'section_tag' => 'junior'],
+                ['name' => 'Social Studies', 'code' => 'SOS', 'section_tag' => 'junior'],
+                ['name' => 'Civic Education', 'code' => 'CIV', 'section_tag' => 'junior'],
+                ['name' => 'Agricultural Science', 'code' => 'AGR', 'section_tag' => 'junior'],
+                ['name' => 'Home Economics', 'code' => 'HEC', 'section_tag' => 'junior'],
+                ['name' => 'Computer Studies / ICT', 'code' => 'ICT', 'section_tag' => 'junior'],
+                ['name' => 'Physical & Health Education (PHE)', 'code' => 'PHE', 'section_tag' => 'junior'],
+                ['name' => 'Cultural & Creative Arts (CCA)', 'code' => 'CCA', 'section_tag' => 'junior'],
+                ['name' => 'Christian Religious Studies (CRS)', 'code' => 'CRS', 'section_tag' => 'junior'],
+                ['name' => 'Islamic Religious Studies (IRS)', 'code' => 'IRS', 'section_tag' => 'junior'],
+                ['name' => 'French Language', 'code' => 'FRN', 'section_tag' => 'junior'],
+                ['name' => 'Nigerian Language', 'code' => 'NLN', 'section_tag' => 'junior'],
+            ],
+            'senior_core' => [
+                ['name' => 'English Language', 'code' => 'ENG', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+                ['name' => 'General Mathematics', 'code' => 'MTH', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+                ['name' => 'Civic Education', 'code' => 'CIV', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+                ['name' => 'Economics', 'code' => 'ECO', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+                ['name' => 'Data Processing', 'code' => 'DTP', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+                ['name' => 'Trade & Entrepreneurship', 'code' => 'TRD', 'section_tag' => 'senior', 'dept_tag' => 'general'],
+            ],
+            'senior_science' => [
+                ['name' => 'Physics', 'code' => 'PHY', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Chemistry', 'code' => 'CHM', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Biology', 'code' => 'BIO', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Further Mathematics', 'code' => 'FMT', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Agricultural Science', 'code' => 'AGR', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Technical Drawing', 'code' => 'TDR', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+                ['name' => 'Geography', 'code' => 'GEO', 'section_tag' => 'senior', 'dept_tag' => 'science'],
+            ],
+            'senior_arts' => [
+                ['name' => 'Literature in English', 'code' => 'LIT', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Government', 'code' => 'GOV', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Christian Religious Studies (CRS)', 'code' => 'CRS', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Islamic Religious Studies (IRS)', 'code' => 'IRS', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'History', 'code' => 'HIS', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Visual Arts', 'code' => 'ART', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Music', 'code' => 'MUS', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'French Language', 'code' => 'FRN', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+                ['name' => 'Nigerian Language', 'code' => 'NLN', 'section_tag' => 'senior', 'dept_tag' => 'arts'],
+            ],
+            'senior_commercial' => [
+                ['name' => 'Financial Accounting', 'code' => 'ACC', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+                ['name' => 'Commerce', 'code' => 'COM', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+                ['name' => 'Book Keeping', 'code' => 'BKK', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+                ['name' => 'Store Management', 'code' => 'STM', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+                ['name' => 'Office Practice', 'code' => 'OFP', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+                ['name' => 'Insurance', 'code' => 'INS', 'section_tag' => 'senior', 'dept_tag' => 'commercial'],
+            ],
+            'senior_vocational' => [
+                ['name' => 'Food & Nutrition', 'code' => 'FDN', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+                ['name' => 'Clothing & Textiles', 'code' => 'CLT', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+                ['name' => 'Auto Mechanics', 'code' => 'MEC', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+                ['name' => 'Building Construction', 'code' => 'BLD', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+                ['name' => 'Electrical Installation', 'code' => 'ELE', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+                ['name' => 'Woodwork', 'code' => 'WDW', 'section_tag' => 'senior', 'dept_tag' => 'vocational'],
+            ],
+        ];
+    }
+
     private function isGeneralDepartment($departmentId): bool
     {
         if (is_null($departmentId) || $departmentId === '') {

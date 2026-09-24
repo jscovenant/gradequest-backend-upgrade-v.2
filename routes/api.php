@@ -962,6 +962,9 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
 
     //route for subjects
     Route::get('/subjects/list', [SubjectController::class, 'index']);
+    Route::post('/subjects/seed-curriculum', [SubjectController::class, 'seedCurriculum'])
+        ->middleware('subscription.feature:settings_management');
+    Route::get('/subjects/curriculum-templates', [SubjectController::class, 'getCurriculumTemplates']);
     Route::post('/subjects', [SubjectController::class, 'storeSubject'])
         ->middleware('subscription.feature:settings_management');
     Route::get('/departments/{id}/subjects', [SubjectController::class, 'getAllSubjects']);
