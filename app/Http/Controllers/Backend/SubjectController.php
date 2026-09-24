@@ -331,10 +331,12 @@ class SubjectController extends Controller
 
         $subjectsToProcess = [];
 
+        $categoryKey = $category === 'senior_core' ? 'senior_compulsory' : $category;
+
         if (is_array($requestedSubjects) && count($requestedSubjects) > 0) {
             $subjectsToProcess = $requestedSubjects;
-        } elseif (!empty($category) && isset($definitions[$category])) {
-            $subjectsToProcess = $definitions[$category];
+        } elseif (!empty($categoryKey) && isset($definitions[$categoryKey])) {
+            $subjectsToProcess = $definitions[$categoryKey];
         } elseif ($category === 'all') {
             foreach ($definitions as $catList) {
                 foreach ($catList as $item) {
@@ -478,7 +480,7 @@ class SubjectController extends Controller
                 ['name' => 'French Language', 'code' => 'FRN', 'section_tag' => 'junior'],
                 ['name' => 'Nigerian Language', 'code' => 'NLN', 'section_tag' => 'junior'],
             ],
-            'senior_core' => [
+            'senior_compulsory' => [
                 ['name' => 'English Language', 'code' => 'ENG', 'section_tag' => 'senior', 'dept_tag' => 'general'],
                 ['name' => 'General Mathematics', 'code' => 'MTH', 'section_tag' => 'senior', 'dept_tag' => 'general'],
                 ['name' => 'Civic Education', 'code' => 'CIV', 'section_tag' => 'senior', 'dept_tag' => 'general'],
