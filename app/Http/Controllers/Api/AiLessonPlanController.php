@@ -92,7 +92,7 @@ class AiLessonPlanController extends Controller
             $result = $generator->generateScheme($data + ['school_context' => 'Nigerian/African primary and secondary school classroom']);
         } catch (Throwable $exception) {
             $this->logAiUsage($request, $featureKey, 'failed', [], ['error' => $exception->getMessage(), 'input' => $data]);
-            return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
+            return response()->json(['message' => $exception->getMessage() ?: 'Unable to generate scheme of work at this time.'], 422);
         }
 
         $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-scheme', $schoolId), $data, $auth);
@@ -140,7 +140,7 @@ class AiLessonPlanController extends Controller
             $result = $generator->generate($data);
         } catch (Throwable $exception) {
             $this->logAiUsage($request, $featureKey, 'failed', [], ['error' => $exception->getMessage(), 'input' => $data]);
-            return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
+            return response()->json(['message' => $exception->getMessage() ?: 'Unable to generate lesson plan at this time.'], 422);
         }
 
         $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-plan', $schoolId), $data, $auth);
@@ -195,7 +195,7 @@ class AiLessonPlanController extends Controller
             ]);
         } catch (Throwable $exception) {
             $this->logAiUsage($request, $featureKey, 'failed', [], ['error' => $exception->getMessage(), 'input' => $data]);
-            return response()->json(['message' => 'Something went wrong while processing this AI request. Please try again later.'], 422);
+            return response()->json(['message' => $exception->getMessage() ?: 'Unable to generate lesson note at this time.'], 422);
         }
 
         $usage = $credits->consumeCredits($schoolId, $featureKey, $creditCost, $this->reference('ai-lesson-note', $schoolId), $data, $auth);
@@ -683,8 +683,8 @@ class AiLessonPlanController extends Controller
             'user_id' => $request->user()?->id,
             'subscription_ai_usage_id' => $creditUsageId,
             'feature_key' => $featureKey,
-            'provider' => 'openai',
-            'model' => $usage['model'] ?? config('openai.model'),
+            'provider' => 'gemini',
+            'model' => $usage['model'] ?? config('gemini.model'),
             'status' => $status,
             'input_tokens' => (int) ($usage['input_tokens'] ?? 0),
             'output_tokens' => (int) ($usage['output_tokens'] ?? 0),

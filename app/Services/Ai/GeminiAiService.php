@@ -49,34 +49,46 @@ class GeminiAiService
         $lastError = null;
 
         foreach ($modelsToTry as $model) {
-            try {
-                $response = $this->callGeminiApi($model, $instructions, $userText, true, $options);
+            $attempts = 0;
+            while ($attempts < 2) {
+                $attempts++;
+                try {
+                    $response = $this->callGeminiApi($model, $instructions, $userText, true, $options);
 
-                if ($response->successful()) {
-                    $body = $response->json();
-                    $rawText = $this->extractCandidateText($body);
-                    $cleanJson = $this->cleanJsonString($rawText);
-                    $parsed = json_decode($cleanJson, true);
+                    if ($response->successful()) {
+                        $body = $response->json();
+                        $rawText = $this->extractCandidateText($body);
+                        $cleanJson = $this->cleanJsonString($rawText);
+                        $parsed = json_decode($cleanJson, true);
 
-                    if (is_array($parsed)) {
-                        $usage = $this->extractUsage($body, $model);
-                        return [
-                            'data' => $parsed,
-                            'model' => $model,
-                            'usage' => $usage,
-                        ];
+                        if (is_array($parsed)) {
+                            $usage = $this->extractUsage($body, $model);
+                            return [
+                                'data' => $parsed,
+                                'model' => $model,
+                                'usage' => $usage,
+                            ];
+                        }
+
+                        Log::warning("Gemini model {$model} returned unparseable JSON: " . substr($rawText, 0, 300));
+                        break;
+                    } else {
+                        $errorMsg = $response->json('error.message') ?: $response->body();
+                        $statusCode = $response->status();
+                        Log::warning("Gemini model {$model} returned HTTP {$statusCode}: {$errorMsg}");
+                        $lastError = $errorMsg;
+
+                        if (in_array($statusCode, [503, 429], true) && $attempts < 2) {
+                            usleep(1200000); // 1.2s retry on temporary Google demand spikes
+                            continue;
+                        }
+                        break;
                     }
-
-                    Log::warning("Gemini model {$model} returned unparseable JSON: " . substr($rawText, 0, 300));
-                } else {
-                    $errorMsg = $response->json('error.message') ?: $response->body();
-                    $statusCode = $response->status();
-                    Log::warning("Gemini model {$model} returned HTTP {$statusCode}: {$errorMsg}");
-                    $lastError = $errorMsg;
+                } catch (Throwable $e) {
+                    Log::warning("Gemini exception on model {$model}: " . $e->getMessage());
+                    $lastError = $e->getMessage();
+                    break;
                 }
-            } catch (Throwable $e) {
-                Log::warning("Gemini exception on model {$model}: " . $e->getMessage());
-                $lastError = $e->getMessage();
             }
         }
 
@@ -208,13 +220,33 @@ class GeminiAiService
         $cleaned = trim($raw);
 
         // Strip ```json ... ``` code fences if present
-        if (preg_match('/^```(?:json)?\s*(.*?)\s*```$/s', $cleaned, $matches)) {
+        if (preg_match('/```(?:json)?\s*([\s\S]*?)\s*```/i', $cleaned, $matches)) {
             $cleaned = trim($matches[1]);
         }
 
-        // If wrapped in single or multiple outer fences
-        $cleaned = preg_replace('/^```[a-zA-Z]*\n?/', '', $cleaned);
-        $cleaned = preg_replace('/\n?```$/', '', $cleaned);
+        // If not valid JSON yet, find outermost { ... } or [ ... ]
+        $decoded = json_decode($cleaned, true);
+        if (! is_array($decoded)) {
+            $firstBrace = strpos($cleaned, '{');
+            $firstBracket = strpos($cleaned, '[');
+            if ($firstBrace !== false && ($firstBracket === false || $firstBrace < $firstBracket)) {
+                $lastBrace = strrpos($cleaned, '}');
+                if ($lastBrace !== false && $lastBrace > $firstBrace) {
+                    $candidate = substr($cleaned, $firstBrace, $lastBrace - $firstBrace + 1);
+                    if (is_array(json_decode($candidate, true))) {
+                        return $candidate;
+                    }
+                }
+            } elseif ($firstBracket !== false) {
+                $lastBracket = strrpos($cleaned, ']');
+                if ($lastBracket !== false && $lastBracket > $firstBracket) {
+                    $candidate = substr($cleaned, $firstBracket, $lastBracket - $firstBracket + 1);
+                    if (is_array(json_decode($candidate, true))) {
+                        return $candidate;
+                    }
+                }
+            }
+        }
 
         return trim($cleaned);
     }
