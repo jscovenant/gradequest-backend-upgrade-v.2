@@ -961,6 +961,9 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     Route::delete('/departments/{id}', [DepartmentController::class, 'destroy']);
 
     //route for subjects
+    Route::get('/subjects/list', [SubjectController::class, 'index']);
+    Route::post('/subjects', [SubjectController::class, 'storeSubject'])
+        ->middleware('subscription.feature:settings_management');
     Route::get('/departments/{id}/subjects', [SubjectController::class, 'getAllSubjects']);
     Route::post('/subjects/assign-section', [SubjectController::class, 'assignSection']);
     Route::get('/subject-offerings', [SubjectOfferingController::class, 'index']);
@@ -968,7 +971,7 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     Route::get('/students/{student}/subject-overrides', [SubjectOfferingController::class, 'studentOverrides']);
     Route::post('/students/{student}/subject-overrides', [SubjectOfferingController::class, 'saveStudentOverrides']);
 
-Route::get('/sections', [SubjectController::class, 'getSections']);
+    Route::get('/sections', [SubjectController::class, 'getSections']);
 
     Route::post('/departments/{id}/subjects', [SubjectController::class, 'storeSubject'])
         ->middleware('subscription.feature:settings_management');
