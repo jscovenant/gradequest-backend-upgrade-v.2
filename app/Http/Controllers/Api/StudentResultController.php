@@ -170,12 +170,57 @@ public function findByAdmissionNo($admissionNo)
             'available' => $totalDays > 0,
         ];
 
+        $batch = DB::table('result_batches')
+            ->where('school_id', $schoolId)
+            ->where('class_id', $student->level_id)
+            ->where('term', $activeTermName)
+            ->where('session', $currentSessionName)
+            ->first();
+
+        $existingPayload = null;
+        if ($batch) {
+            $existing = $this->repo->getV2StudentResult($batch->id, $student->id);
+            if ($existing) {
+                $rows = $this->repo->getV2StudentResultRows($existing->id);
+                $normalizedRows = $rows->map(function ($r) {
+                    return [
+                        'subject_id' => (int) $r->subject_id,
+                        'ca' => $r->ca_raw ? json_decode($r->ca_raw, true) : [],
+                        'ca_total' => isset($r->ca_total) ? (float) $r->ca_total : null,
+                        'exam' => is_null($r->exam) ? null : (int) $r->exam,
+                        'total' => is_null($r->total) ? null : (int) $r->total,
+                        'grade' => $r->grade,
+                        'remark' => $r->remark,
+                        'subject_position' => $r->subject_position ?? null,
+                        'carry_over' => $r->carry_over_json ? json_decode($r->carry_over_json, true) : null,
+                    ];
+                });
+
+                $existingPayload = [
+                    'summary' => [
+                        'position' => $existing->position,
+                        'class_teacher' => $existing->class_teacher,
+                        'class_size' => $existing->class_size,
+                        'total_grade' => $existing->total_grade,
+                        'total_average' => $existing->total_average,
+                        'principal_comment' => $existing->principal_comment,
+                        'class_teacher_comment' => $existing->class_teacher_comment,
+                        'general_remark' => $existing->general_remark,
+                        'meta' => $existing->meta_json ? json_decode($existing->meta_json, true) : [],
+                    ],
+                    'results' => $normalizedRows,
+                ];
+            }
+        }
+
         return response()->json([
             'student'    => $student,
             'term'       => $activeTermName,
             'session'    => $currentSessionName,
             'subjects'   => $subjects,
             'attendance' => $attendanceData,
+            'batch_id'   => $batch?->id,
+            'existing'   => $existingPayload,
             'warnings'   => [],
         ]);
     }
