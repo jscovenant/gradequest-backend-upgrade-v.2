@@ -211,8 +211,7 @@ class StudentController extends Controller
                 $q->where('student_status', $studentStatus);
             }
         }])
-        ->orderByRaw('COALESCE(sort_order, 999999) ASC')
-        ->orderBy('name')
+        ->orderBy('name', 'asc')
         ->get();
 
     $statusCounts = User::withRole('student')
