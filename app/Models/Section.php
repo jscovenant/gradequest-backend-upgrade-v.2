@@ -15,8 +15,8 @@ class Section extends Model
 
     protected $casts = [
         'archived_at' => 'datetime',
+        'uses_grading_scale' => 'boolean',
     ];
-
 
     public function level()
     {
@@ -32,14 +32,14 @@ class Section extends Model
     {
         return $this->hasOne(Average::class);
     }
-    
-    //     public function students()
-    // {
-    //     return $this->hasOne(User::class, 'section_id', 'id');
-    // }
-    
+
     public function subjects()
-{
-    return $this->hasMany(Subject::class, 'section_id',);
-}
+    {
+        return $this->hasMany(Subject::class, 'section_id');
+    }
+
+    public function gradingScales()
+    {
+        return $this->hasMany(GradingScale::class, 'section_id', 'id')->orderByRaw('CAST(min AS DECIMAL(8,2)) DESC');
+    }
 }

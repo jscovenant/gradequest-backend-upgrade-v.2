@@ -26,6 +26,7 @@ class ResultComputeService
                 'sr.general_remark',
                 'u.section_id',
                 'sec.name as section_name',
+                'sec.uses_grading_scale',
             ])
             ->get();
 
@@ -80,7 +81,8 @@ class ResultComputeService
 
                 $exam = $this->toFloat($row->exam);
                 $total = round($caTotal + $exam, 2);
-                $grade = $this->resolveGrade($total, $student?->section_name, $gradingRules);
+                $usesGrading = $student ? ($student->uses_grading_scale ?? true) : true;
+                $grade = $this->resolveGrade($total, $student?->section_id, $student?->section_name, (bool) $usesGrading, $gradingRules);
 
                 DB::table('subject_results_v2')
                     ->where('id', $row->id)
@@ -106,7 +108,8 @@ class ResultComputeService
                 $scores = $totalsByStudentResult[$studentResult->id] ?? [];
                 $totalScore = round(array_sum($scores), 2);
                 $average = count($scores) > 0 ? round($totalScore / count($scores), 2) : 0.0;
-                $grade = $this->resolveGrade($average, $studentResult->section_name, $gradingRules);
+                $usesGrading = $studentResult->uses_grading_scale ?? true;
+                $grade = $this->resolveGrade($average, $studentResult->section_id, $studentResult->section_name, (bool) $usesGrading, $gradingRules);
 
                 $overallScores[$studentResult->id] = $average;
 
@@ -162,7 +165,17 @@ class ResultComputeService
 
     private function gradingRules(int $schoolId): array
     {
+        $sectionScales = collect();
+        if (Schema::hasTable('grading_scales')) {
+            $sectionScales = DB::table('grading_scales')
+                ->where('school_id', $schoolId)
+                ->orderByRaw('CAST(min AS DECIMAL(8,2)) DESC')
+                ->get()
+                ->groupBy('section_id');
+        }
+
         return [
+            'by_section' => $sectionScales,
             'junior' => $this->rulesFromTable('grading_for_juniors', $schoolId),
             'senior' => $this->rulesFromTable('grading_for_seniors', $schoolId),
             'default' => $this->rulesFromTable('grade_settings'),
@@ -181,8 +194,32 @@ class ResultComputeService
             ->get();
     }
 
-    private function resolveGrade(float $score, ?string $sectionName, array $gradingRules): array
+    private function resolveGrade(float $score, ?int $sectionId, ?string $sectionName, bool $usesGradingScale, array $gradingRules): array
     {
+        // If the section is configured to not use letter grading (e.g. Nursery / Primary / Junior)
+        if (! $usesGradingScale) {
+            return [
+                'grade' => '',
+                'remark' => '',
+            ];
+        }
+
+        // 1. Check section-specific grading scale configured in grading_scales
+        if ($sectionId && isset($gradingRules['by_section'][$sectionId]) && $gradingRules['by_section'][$sectionId]->isNotEmpty()) {
+            foreach ($gradingRules['by_section'][$sectionId] as $rule) {
+                $min = $this->toFloat($rule->min);
+                $max = $this->toFloat($rule->max);
+
+                if ($score >= $min && $score <= $max) {
+                    return [
+                        'grade' => (string) $rule->grade,
+                        'remark' => (string) ($rule->remark ?? ''),
+                    ];
+                }
+            }
+        }
+
+        // 2. Legacy fallback
         $section = strtolower((string) $sectionName);
         $rules = str_contains($section, 'senior')
             ? $gradingRules['senior']
@@ -199,7 +236,7 @@ class ResultComputeService
             if ($score >= $min && $score <= $max) {
                 return [
                     'grade' => (string) $rule->grade,
-                    'remark' => (string) $rule->remark,
+                    'remark' => (string) ($rule->remark ?? ''),
                 ];
             }
         }

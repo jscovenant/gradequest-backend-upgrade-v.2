@@ -47,6 +47,7 @@ use App\Http\Controllers\Backend\TeacherSubjectController;
 use App\Http\Controllers\Backend\WhatsAppSettingsController;
 use App\Http\Controllers\Backend\WhatsAppBroadcastController;
 use App\Http\Controllers\Backend\SectionController;
+use App\Http\Controllers\Backend\GradingScaleController;
 use App\Http\Controllers\Backend\FeePaymentController;
 use App\Http\Controllers\Backend\FeeTypeController;
 use App\Http\Controllers\Backend\StudentFeeController;
@@ -836,6 +837,14 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::delete('/{id}', [SectionController::class, 'destroy']);
 });
 //end Route
+
+// Grading Scales Routes (Section-specific custom scales & toggle)
+Route::prefix('grading-scales')->group(function () {
+    Route::get('/', [GradingScaleController::class, 'index']);
+    Route::put('/section/{sectionId}', [GradingScaleController::class, 'updateSectionGrading']);
+    Route::post('/section/{sectionId}/toggle', [GradingScaleController::class, 'toggleSectionGrading']);
+    Route::post('/section/{sectionId}/apply-preset', [GradingScaleController::class, 'applyPreset']);
+});
     Route::get('/student-class', [StudentController::class, 'Level']);
     Route::get('/all-sections', [StudentController::class, 'Section']);
     Route::get('/student-department', [StudentController::class, 'Department']);
