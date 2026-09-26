@@ -373,7 +373,7 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
     $srId = null;
 
-    DB::transaction(function () use ($request, $batch, $student, &$srId) {
+    DB::transaction(function () use ($request, $batch, $student, &$srId, $batchRow) {
         $sr = DB::table('student_results_v2')
             ->where('batch_id', $batch)
             ->where('user_id', $student)
@@ -487,13 +487,13 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
         }
 
         $sessionId = AcademicSession::query()
-            ->where('school_id', (int) $batch->school_id)
-            ->where('name', (string) $batch->session)
+            ->where('school_id', (int) $batchRow->school_id)
+            ->where('name', (string) $batchRow->session)
             ->value('id');
 
         $termId = Term::query()
-            ->where('school_id', (int) $batch->school_id)
-            ->where('name', (string) $batch->term)
+            ->where('school_id', (int) $batchRow->school_id)
+            ->where('name', (string) $batchRow->term)
             ->value('id');
 
         $allowedSubjectIds = $this->subjectService
@@ -504,10 +504,7 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
         foreach ($request->input('results') as $row) {
             if (! in_array((int) $row['subject_id'], $allowedSubjectIds, true)) {
-                return response()->json([
-                    'message' => 'This student does not offer one of the selected subjects. Check the student subject offering setup before saving results.',
-                    'subject_id' => (int) $row['subject_id'],
-                ], 422);
+                abort(422, 'This student does not offer one of the selected subjects. Check the student subject offering setup before saving results.');
             }
             $existing = DB::table('subject_results_v2')
                 ->where('student_result_id', $srId)
