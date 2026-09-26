@@ -188,7 +188,10 @@ class StudentController extends Controller
     // ========================
     // CLASS FILTER
     // ========================
-    if ($levelFilter) {
+    $classIdFilter = $request->input('class_id') ?? $request->input('level_id');
+    if ($classIdFilter) {
+        $studentsQuery->where('level_id', (int) $classIdFilter);
+    } elseif ($levelFilter && $levelFilter !== 'all') {
         $studentsQuery->whereHas('level', function ($q) use ($levelFilter) {
             $q->where('name', $levelFilter);
         });
@@ -198,7 +201,20 @@ class StudentController extends Controller
     // PAGINATION
     // ========================
     $students = $studentsQuery->latest()->paginate($perPage, ['*'], 'page', $page);
-    $levels = $levelsQuery->get();
+    $levels = $levelsQuery->with('section:id,name')
+        ->withCount(['students' => function ($q) use ($user, $studentStatus) {
+            $q->where('school_id', $user->school_id)
+              ->where('role', 'Student');
+            if ($studentStatus === 'inactive') {
+                $q->where('status', 0);
+            } elseif ($studentStatus !== 'all') {
+                $q->where('student_status', $studentStatus);
+            }
+        }])
+        ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+        ->orderBy('name')
+        ->get();
+
     $statusCounts = User::withRole('student')
         ->where('school_id', $user->school_id)
         ->selectRaw('COALESCE(student_status, "active") as student_status, COUNT(*) as total')
