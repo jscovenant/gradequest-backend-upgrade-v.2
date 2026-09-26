@@ -43,10 +43,10 @@ class GradequestBillingPolicyController extends Controller
         $validated = $request->validate([
             'online_grace_days' => 'required|integer|min:0|max:90',
             'online_minimum_coverage_percent' => 'required|integer|min:0|max:100',
-            'online_whole_school_block_enabled' => 'required|boolean',
-            'online_student_level_block_enabled' => 'required|boolean',
+            'online_whole_school_block_enabled' => 'nullable|boolean',
+            'online_student_level_block_enabled' => 'nullable|boolean',
             'offline_grace_days' => 'required|integer|min:0|max:90',
-            'offline_school_block_enabled' => 'required|boolean',
+            'offline_school_block_enabled' => 'nullable|boolean',
             'platform_fee_per_student' => 'required|numeric|min:0|max:10000000',
             'support_whatsapp' => 'nullable|string|max:50',
             'whatsapp_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
@@ -60,7 +60,8 @@ class GradequestBillingPolicyController extends Controller
             'ai_credit_unit_price' => 'required|numeric|min:0.01|max:1000000',
             'welcome_ai_credits' => 'nullable|integer|min:0|max:100000',
             'welcome_whatsapp_credits' => 'nullable|integer|min:0|max:100000',
-            'legacy_subscription_honor_enabled' => 'required|boolean',
+            'legacy_subscription_honor_enabled' => 'nullable|boolean',
+            'per_student_billing_starts_at' => 'nullable',
             'temporary_access_min_days' => 'required|integer|min:1|max:30',
             'temporary_access_max_days' => 'required|integer|min:1|max:90',
             'promo_enabled' => 'nullable|boolean',
@@ -89,6 +90,11 @@ class GradequestBillingPolicyController extends Controller
 
         $policy = $this->policy();
         $validated['updated_by'] = $request->user()->id;
+        $validated['online_whole_school_block_enabled'] = (bool) ($request->input('online_whole_school_block_enabled', $policy->online_whole_school_block_enabled));
+        $validated['online_student_level_block_enabled'] = (bool) ($request->input('online_student_level_block_enabled', $policy->online_student_level_block_enabled));
+        $validated['offline_school_block_enabled'] = (bool) ($request->input('offline_school_block_enabled', $policy->offline_school_block_enabled));
+        $validated['legacy_subscription_honor_enabled'] = (bool) ($request->input('legacy_subscription_honor_enabled', $policy->legacy_subscription_honor_enabled));
+        $validated['promo_enabled'] = (bool) ($request->input('promo_enabled', $policy->promo_enabled));
 
         $policy->fill($validated);
         $policy->save();
