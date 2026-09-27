@@ -18,8 +18,8 @@ class WhogohostResellerService
     public function __construct()
     {
         $this->apiKey = (string) (config('services.whogohost.api_key') ?: env('WHOGOHOST_API_KEY', 'gN1A3YIoNfWDlEqmP05nnlcNs9Gj2FkY'));
-        $this->email = (string) (config('services.whogohost.email') ?: env('WHOGOHOST_EMAIL', 'notifications@gradequest.com.ng'));
-        $this->baseUrl = rtrim((string) (config('services.whogohost.base_url') ?: env('WHOGOHOST_BASE_URL', 'https://panel.whogohost.com/modules/addons/DomainsReseller/api/index.php')), '/');
+        $this->email = (string) (config('services.whogohost.email') ?: env('WHOGOHOST_EMAIL', 'jscovenant05@gmail.com'));
+        $this->baseUrl = rtrim((string) (config('services.whogohost.base_url') ?: env('WHOGOHOST_BASE_URL', 'https://whogohost.com/host/modules/addons/DomainsReseller/api/index.php')), '/');
         
         $ns = config('services.whogohost.nameservers');
         $this->defaultNameservers = is_array($ns) && !empty($ns) ? $ns : ['ns1.schoolprofit.ng', 'ns2.schoolprofit.ng'];
@@ -28,8 +28,8 @@ class WhogohostResellerService
         $this->defaultContact = (array) (config('services.whogohost.registrant') ?: [
             'firstname' => 'Ezekiel',
             'lastname' => 'Alonge',
-            'company' => 'Samaritan Technologies',
-            'email' => 'notifications@gradequest.com.ng',
+            'companyname' => 'Samaritan Technologies',
+            'email' => 'jscovenant05@gmail.com',
             'address1' => '12 Allen Avenue, Ikeja',
             'city' => 'Ikeja',
             'state' => 'Lagos',
@@ -40,7 +40,7 @@ class WhogohostResellerService
     }
 
     /**
-     * Build authentication headers required by WHMCS DomainsReseller Addon API.
+     * Build authentication headers required by Whogohost WHMCS DomainsReseller API.
      */
     protected function buildHeaders(): array
     {
@@ -50,18 +50,77 @@ class WhogohostResellerService
         return [
             'username' => $this->email,
             'token' => $token,
-            'apikey' => $this->apiKey,
             'Accept' => 'application/json',
-            'Content-Type' => 'application/json',
         ];
     }
 
     /**
+     * Get Reseller Account Credits from Whogohost.
+     * Endpoint: GET /billing/credits
+     */
+    public function getCredits(): array
+    {
+        try {
+            $endpoint = $this->baseUrl . '/billing/credits';
+            $response = Http::withHeaders($this->buildHeaders())
+                ->timeout(12)
+                ->get($endpoint);
+
+            if ($response->successful()) {
+                $raw = $response->body();
+                $clean = trim($raw, "\"'\n\r ");
+                $numericBalance = is_numeric($clean) ? (float) $clean : 0.00;
+
+                return [
+                    'success' => true,
+                    'balance' => $numericBalance,
+                    'currency' => 'NGN',
+                    'formatted' => '₦' . number_format($numericBalance, 2),
+                    'raw' => $response->json() ?? $raw,
+                ];
+            }
+
+            return [
+                'success' => false,
+                'balance' => 0.00,
+                'message' => 'Unable to fetch reseller credits from Whogohost.',
+                'raw' => $response->body(),
+            ];
+        } catch (Throwable $e) {
+            Log::error('Whogohost getCredits failed: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'balance' => 0.00,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * Get Available TLDs supported by Whogohost Reseller.
+     * Endpoint: GET /tlds
+     */
+    public function getAvailableTlds(): array
+    {
+        try {
+            $endpoint = $this->baseUrl . '/tlds';
+            $response = Http::withHeaders($this->buildHeaders())
+                ->timeout(10)
+                ->get($endpoint);
+
+            if ($response->successful()) {
+                $data = $response->json();
+                return is_array($data) ? $data : [];
+            }
+        } catch (Throwable $e) {
+            Log::warning('Whogohost getAvailableTlds error: ' . $e->getMessage());
+        }
+
+        return ['.com', '.com.ng', '.sch.ng', '.ng', '.org', '.net'];
+    }
+
+    /**
      * Check domain availability for a given name across multiple TLDs.
-     *
-     * @param string $searchTerm Base domain name (without extension, e.g. "mygreatschool")
-     * @param array $tlds Array of TLDs, e.g. ['.com.ng', '.sch.ng', '.ng', '.com', '.org']
-     * @return array<string, bool> Map of domain => availability (true/false)
      */
     public function lookup(string $searchTerm, array $tlds = ['.com.ng', '.sch.ng', '.ng', '.com', '.org']): array
     {
@@ -74,50 +133,10 @@ class WhogohostResellerService
             return str_starts_with($tld, '.') ? $tld : '.' . $tld;
         }, $tlds);
 
-        try {
-            $endpoint = $this->baseUrl . '/domains/lookup';
-            $payload = [
-                'searchTerm' => $cleanTerm,
-                'tldsToInclude' => $normalizedTlds,
-                'isIdnDomain' => false,
-                'premiumEnabled' => false,
-            ];
-
-            $response = Http::withHeaders($this->buildHeaders())
-                ->timeout(10)
-                ->post($endpoint, $payload);
-
-            if ($response->successful()) {
-                $data = $response->json();
-                
-                // WHMCS DomainsReseller returns domains in different payload formats
-                $domainList = $data['domains'] ?? $data['result'] ?? $data;
-
-                if (is_array($domainList)) {
-                    foreach ($domainList as $item) {
-                        if (is_array($item) && isset($item['domain'])) {
-                            $domainKey = strtolower($item['domain']);
-                            $isAvail = in_array(strtolower((string) ($item['status'] ?? '')), ['available', '1', 'true'], true);
-                            $results[$domainKey] = $isAvail;
-                        }
-                    }
-                }
-            } else {
-                Log::warning('Whogohost domain lookup non-200 response', [
-                    'status' => $response->status(),
-                    'body' => $response->body(),
-                ]);
-            }
-        } catch (Throwable $e) {
-            Log::notice('Whogohost lookup fallback triggered: ' . $e->getMessage());
-        }
-
-        // Fill any missing TLDs via fast DNS verification fallback
         foreach ($normalizedTlds as $tld) {
             $fullDomain = $cleanTerm . $tld;
-            if (! isset($results[$fullDomain])) {
-                $results[$fullDomain] = $this->checkAvailabilityFallback($fullDomain);
-            }
+            // Check availability using DNS and registrar lookups
+            $results[$fullDomain] = $this->checkAvailabilityFallback($fullDomain);
         }
 
         return $results;
@@ -125,6 +144,7 @@ class WhogohostResellerService
 
     /**
      * Register a domain via Whogohost Domain Reseller API.
+     * Endpoint: POST /order/domains/register
      */
     public function registerDomain(
         string $domain,
@@ -135,7 +155,7 @@ class WhogohostResellerService
         $domain = strtolower(trim($domain));
         $nameservers = $customNameservers ?: $this->defaultNameservers;
 
-        // Build contact information combining default registrant with school details
+        // Merge contact info
         $contact = array_merge($this->defaultContact, array_filter((array) $customContact));
 
         // Format nameservers as ns1, ns2, etc.
@@ -146,9 +166,14 @@ class WhogohostResellerService
             $i++;
         }
 
-        $payload = [
+        $params = [
             'domain' => $domain,
             'regperiod' => max(1, $years),
+            'addons' => [
+                'dnsmanagement' => 1,
+                'emailforwarding' => 0,
+                'idprotection' => 1,
+            ],
             'nameservers' => $nsPayload,
             'contacts' => [
                 'firstname' => $contact['firstname'] ?? 'School',
@@ -162,32 +187,29 @@ class WhogohostResellerService
                 'country' => $contact['country'] ?? 'NG',
                 'phonenumber' => $contact['phonenumber'] ?? '+234.8030000000',
             ],
-            'addons' => [
-                'dnsmanagement' => 1,
-                'emailforwarding' => 0,
-                'idprotection' => 1,
-            ],
         ];
 
         try {
             $endpoint = $this->baseUrl . '/order/domains/register';
-            Log::info('Whogohost Domain Registration Request', ['domain' => $domain, 'payload' => $payload]);
+            Log::info('Whogohost RegisterDomain Request', ['domain' => $domain, 'params' => $params]);
 
-            $response = Http::withHeaders($this->buildHeaders())
-                ->timeout(30)
-                ->post($endpoint, $payload);
+            // Whogohost API requires form-urlencoded payload (http_build_query)
+            $response = Http::asForm()
+                ->withHeaders($this->buildHeaders())
+                ->timeout(35)
+                ->post($endpoint, $params);
 
             $data = $response->json();
-            Log::info('Whogohost Domain Registration Response', [
+            Log::info('Whogohost RegisterDomain Response', [
                 'domain' => $domain,
                 'status' => $response->status(),
                 'body' => $data ?: $response->body(),
             ]);
 
             $resultStatus = strtolower((string) ($data['result'] ?? ($data['status'] ?? '')));
-            $isSuccess = $response->successful() && in_array($resultStatus, ['success', 'true', 'ok', 'active'], true);
+            $hasSuccess = $response->successful() && in_array($resultStatus, ['success', 'true', 'ok', 'active'], true);
 
-            if ($isSuccess) {
+            if ($hasSuccess) {
                 return [
                     'success' => true,
                     'order_id' => $data['orderid'] ?? ($data['order_id'] ?? ($data['domainid'] ?? null)),
@@ -197,7 +219,7 @@ class WhogohostResellerService
                 ];
             }
 
-            $errorMessage = $data['message'] ?? ($data['error'] ?? 'Domain registration failed on registrar end.');
+            $errorMessage = $data['error'] ?? ($data['message'] ?? 'Domain registration failed on registrar end.');
 
             return [
                 'success' => false,
@@ -207,16 +229,15 @@ class WhogohostResellerService
                 'raw' => $data ?: ['body' => $response->body()],
             ];
         } catch (Throwable $e) {
-            Log::error('Whogohost Domain Registration Exception: ' . $e->getMessage(), [
+            Log::error('Whogohost RegisterDomain Exception: ' . $e->getMessage(), [
                 'domain' => $domain,
-                'trace' => $e->getTraceAsString(),
             ]);
 
             return [
                 'success' => false,
                 'order_id' => null,
                 'domain_id' => null,
-                'message' => 'Whogohost API connection error: ' . $e->getMessage(),
+                'message' => 'Whogohost API error: ' . $e->getMessage(),
                 'raw' => ['exception' => $e->getMessage()],
             ];
         }
@@ -224,6 +245,7 @@ class WhogohostResellerService
 
     /**
      * Renew an existing registered domain.
+     * Endpoint: POST /order/domains/renew
      */
     public function renewDomain(string $domain, int $years = 1): array
     {
@@ -231,14 +253,15 @@ class WhogohostResellerService
 
         try {
             $endpoint = $this->baseUrl . '/order/domains/renew';
-            $payload = [
+            $params = [
                 'domain' => $domain,
                 'regperiod' => max(1, $years),
             ];
 
-            $response = Http::withHeaders($this->buildHeaders())
+            $response = Http::asForm()
+                ->withHeaders($this->buildHeaders())
                 ->timeout(25)
-                ->post($endpoint, $payload);
+                ->post($endpoint, $params);
 
             $data = $response->json();
             $resultStatus = strtolower((string) ($data['result'] ?? ''));
@@ -246,7 +269,7 @@ class WhogohostResellerService
 
             return [
                 'success' => $isSuccess,
-                'message' => $data['message'] ?? ($isSuccess ? 'Domain renewed successfully.' : 'Renewal failed.'),
+                'message' => $data['message'] ?? ($isSuccess ? 'Domain renewed successfully.' : ($data['error'] ?? 'Renewal failed.')),
                 'raw' => $data,
             ];
         } catch (Throwable $e) {
@@ -260,7 +283,45 @@ class WhogohostResellerService
     }
 
     /**
+     * Transfer domain into Whogohost.
+     * Endpoint: POST /order/domains/transfer
+     */
+    public function transferDomain(string $domain, string $eppCode, int $years = 1): array
+    {
+        $domain = strtolower(trim($domain));
+
+        try {
+            $endpoint = $this->baseUrl . '/order/domains/transfer';
+            $params = [
+                'domain' => $domain,
+                'eppcode' => $eppCode,
+                'regperiod' => max(1, $years),
+            ];
+
+            $response = Http::asForm()
+                ->withHeaders($this->buildHeaders())
+                ->timeout(30)
+                ->post($endpoint, $params);
+
+            $data = $response->json();
+            $isSuccess = $response->successful() && (($data['result'] ?? '') === 'success');
+
+            return [
+                'success' => $isSuccess,
+                'message' => $data['message'] ?? ($data['error'] ?? 'Transfer request submitted.'),
+                'raw' => $data,
+            ];
+        } catch (Throwable $e) {
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * Fetch active nameservers for a domain.
+     * Endpoint: GET /domains/{domain}/nameservers
      */
     public function getNameservers(string $domain): ?array
     {
@@ -284,8 +345,9 @@ class WhogohostResellerService
 
     /**
      * Update nameservers for a domain.
+     * Endpoint: POST /domains/{domain}/nameservers
      */
-    public function updateNameservers(string $domain, array $nameservers): array
+    public function saveNameservers(string $domain, array $nameservers): array
     {
         $domain = strtolower(trim($domain));
         $nsPayload = [];
@@ -297,18 +359,19 @@ class WhogohostResellerService
 
         try {
             $endpoint = $this->baseUrl . '/domains/' . urlencode($domain) . '/nameservers';
-            $response = Http::withHeaders($this->buildHeaders())
+            $response = Http::asForm()
+                ->withHeaders($this->buildHeaders())
                 ->timeout(20)
                 ->post($endpoint, $nsPayload);
 
             $data = $response->json();
             return [
                 'success' => $response->successful() && (($data['result'] ?? '') === 'success'),
-                'message' => $data['message'] ?? 'Nameservers update submitted.',
+                'message' => $data['message'] ?? ($data['error'] ?? 'Nameservers updated.'),
                 'raw' => $data,
             ];
         } catch (Throwable $e) {
-            Log::error('Whogohost updateNameservers failed: ' . $e->getMessage());
+            Log::error('Whogohost saveNameservers failed: ' . $e->getMessage());
             return [
                 'success' => false,
                 'message' => $e->getMessage(),
@@ -317,27 +380,49 @@ class WhogohostResellerService
     }
 
     /**
-     * Check Reseller Account Balance / Credits.
+     * Get domain DNS records.
+     * Endpoint: GET /domains/{domain}/dns
      */
-    public function getAccountBalance(): array
+    public function getDns(string $domain): ?array
     {
+        $domain = strtolower(trim($domain));
+
         try {
-            $endpoint = $this->baseUrl . '/account/balance';
+            $endpoint = $this->baseUrl . '/domains/' . urlencode($domain) . '/dns';
             $response = Http::withHeaders($this->buildHeaders())
-                ->timeout(10)
+                ->timeout(15)
                 ->get($endpoint);
 
             if ($response->successful()) {
-                return [
-                    'success' => true,
-                    'data' => $response->json(),
-                ];
+                return $response->json();
             }
+        } catch (Throwable $e) {
+            Log::warning('Whogohost getDns failed: ' . $e->getMessage());
+        }
 
+        return null;
+    }
+
+    /**
+     * Save domain DNS records.
+     * Endpoint: POST /domains/{domain}/dns
+     */
+    public function saveDns(string $domain, array $dnsRecords): array
+    {
+        $domain = strtolower(trim($domain));
+
+        try {
+            $endpoint = $this->baseUrl . '/domains/' . urlencode($domain) . '/dns';
+            $response = Http::asForm()
+                ->withHeaders($this->buildHeaders())
+                ->timeout(20)
+                ->post($endpoint, ['records' => $dnsRecords]);
+
+            $data = $response->json();
             return [
-                'success' => false,
-                'message' => $response->json('message') ?: 'Unable to fetch reseller balance',
-                'status' => $response->status(),
+                'success' => $response->successful() && (($data['result'] ?? '') === 'success'),
+                'message' => $data['message'] ?? ($data['error'] ?? 'DNS updated.'),
+                'raw' => $data,
             ];
         } catch (Throwable $e) {
             return [
@@ -345,6 +430,30 @@ class WhogohostResellerService
                 'message' => $e->getMessage(),
             ];
         }
+    }
+
+    /**
+     * Get domain information (status, expiry date, registration date).
+     * Endpoint: GET /domains/{domain}/information
+     */
+    public function getDomainInformation(string $domain): ?array
+    {
+        $domain = strtolower(trim($domain));
+
+        try {
+            $endpoint = $this->baseUrl . '/domains/' . urlencode($domain) . '/information';
+            $response = Http::withHeaders($this->buildHeaders())
+                ->timeout(15)
+                ->get($endpoint);
+
+            if ($response->successful()) {
+                return $response->json();
+            }
+        } catch (Throwable $e) {
+            Log::warning('Whogohost getDomainInformation failed: ' . $e->getMessage());
+        }
+
+        return null;
     }
 
     /**

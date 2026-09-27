@@ -79,15 +79,15 @@ return [
 
     'whogohost' => [
         'api_key' => env('WHOGOHOST_API_KEY', 'gN1A3YIoNfWDlEqmP05nnlcNs9Gj2FkY'),
-        'email' => env('WHOGOHOST_EMAIL', 'notifications@gradequest.com.ng'),
-        'base_url' => env('WHOGOHOST_BASE_URL', 'https://panel.whogohost.com/modules/addons/DomainsReseller/api/index.php'),
+        'email' => env('WHOGOHOST_EMAIL', 'jscovenant05@gmail.com'),
+        'base_url' => env('WHOGOHOST_BASE_URL', 'https://whogohost.com/host/modules/addons/DomainsReseller/api/index.php'),
         'nameservers' => explode(',', (string) env('WHOGOHOST_NAMESERVERS', 'ns1.schoolprofit.ng,ns2.schoolprofit.ng')),
         'auto_register' => (bool) env('WHOGOHOST_AUTO_REGISTER', true),
         'registrant' => [
             'firstname' => env('WHOGOHOST_DEFAULT_FIRSTNAME', 'Ezekiel'),
             'lastname' => env('WHOGOHOST_DEFAULT_LASTNAME', 'Alonge'),
             'company' => env('WHOGOHOST_DEFAULT_COMPANY', 'Samaritan Technologies'),
-            'email' => env('WHOGOHOST_DEFAULT_EMAIL', 'notifications@gradequest.com.ng'),
+            'email' => env('WHOGOHOST_DEFAULT_EMAIL', 'jscovenant05@gmail.com'),
             'address1' => env('WHOGOHOST_DEFAULT_ADDRESS', '12 Allen Avenue, Ikeja'),
             'city' => env('WHOGOHOST_DEFAULT_CITY', 'Ikeja'),
             'state' => env('WHOGOHOST_DEFAULT_STATE', 'Lagos'),
