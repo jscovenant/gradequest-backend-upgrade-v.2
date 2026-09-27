@@ -120,7 +120,7 @@ class WhogohostResellerService
     }
 
     /**
-     * Check domain availability for a given name across multiple TLDs.
+     * Check domain availability for a given name across multiple TLDs using official Registry RDAP & DNS.
      */
     public function lookup(string $searchTerm, array $tlds = ['.com.ng', '.sch.ng', '.ng', '.com', '.org']): array
     {
@@ -135,11 +135,67 @@ class WhogohostResellerService
 
         foreach ($normalizedTlds as $tld) {
             $fullDomain = $cleanTerm . $tld;
-            // Check availability using DNS and registrar lookups
-            $results[$fullDomain] = $this->checkAvailabilityFallback($fullDomain);
+            $results[$fullDomain] = $this->isDomainAvailable($fullDomain);
         }
 
         return $results;
+    }
+
+    /**
+     * Check authoritative domain availability via Registry RDAP & DNS.
+     */
+    public function isDomainAvailable(string $domain): bool
+    {
+        $domain = strtolower(trim($domain));
+
+        // 1. Fast DNS verification (if the domain actively resolves on public DNS, it is registered)
+        if (@checkdnsrr($domain, 'A') || @checkdnsrr($domain, 'NS') || @checkdnsrr($domain, 'MX') || @checkdnsrr($domain, 'SOA')) {
+            return false;
+        }
+        $ip = @gethostbyname($domain);
+        if (!empty($ip) && $ip !== $domain) {
+            return false;
+        }
+
+        // 2. Query Official Authoritative RDAP Registry
+        try {
+            $rdapUrl = null;
+            if (str_ends_with($domain, '.ng')) {
+                // Official Nigeria Internet Registration Association (NiRA) Registry RDAP
+                $rdapUrl = "https://rdap.nic.net.ng/domain/{$domain}";
+            } elseif (str_ends_with($domain, '.com') || str_ends_with($domain, '.net')) {
+                // Official Verisign Registry RDAP
+                $rdapUrl = "https://rdap.verisign.com/com/v1/domain/{$domain}";
+            } elseif (str_ends_with($domain, '.org')) {
+                // Official Public Interest Registry (PIR) RDAP
+                $rdapUrl = "https://rdap.publicinterestregistry.org/rdap/domain/{$domain}";
+            } else {
+                $rdapUrl = "https://rdap.org/domain/{$domain}";
+            }
+
+            if ($rdapUrl) {
+                $response = Http::timeout(4)
+                    ->withoutVerifying()
+                    ->withUserAgent('SchoolProfit-DomainLookup/1.0')
+                    ->get($rdapUrl);
+
+                $status = $response->status();
+                if ($status === 200) {
+                    // Domain object actively registered in the registry
+                    return false;
+                }
+
+                if ($status === 404) {
+                    // Domain not found in the official registry -> Available
+                    return true;
+                }
+            }
+        } catch (Throwable $e) {
+            Log::notice("RDAP check exception for {$domain}: " . $e->getMessage());
+        }
+
+        // 3. Fallback DNS
+        return ! (@checkdnsrr($domain, 'A') || @checkdnsrr($domain, 'NS') || @checkdnsrr($domain, 'SOA'));
     }
 
     /**
@@ -454,14 +510,5 @@ class WhogohostResellerService
         }
 
         return null;
-    }
-
-    /**
-     * Fast DNS fallback availability checker.
-     */
-    protected function checkAvailabilityFallback(string $domain): bool
-    {
-        $records = @dns_get_record($domain, DNS_A | DNS_NS | DNS_SOA);
-        return empty($records);
     }
 }
