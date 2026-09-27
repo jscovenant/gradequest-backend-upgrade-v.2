@@ -51,5 +51,6 @@ class GradequestBillingPolicy extends Model
         'default_bank_charge_amount' => 'decimal:2',
         'promo_target_tier' => 'string',
         'promo_discount_percent' => 'decimal:2',
+        'domain_pricing' => 'array',
     ];
 }

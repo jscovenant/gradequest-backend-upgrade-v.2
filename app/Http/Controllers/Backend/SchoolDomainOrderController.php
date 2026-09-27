@@ -27,15 +27,32 @@ class SchoolDomainOrderController extends Controller
     }
 
     /**
-     * Standard pricing tiers for domain registration & managed hosting.
+     * Dynamically resolve domain pricing tiers configured by Super-Admin.
      */
-    public const DOMAIN_PRICING = [
-        '.com.ng' => ['price' => 35000.00, 'label' => '.com.ng (Nigeria Commercial/Standard)', 'popular' => true],
-        '.sch.ng' => ['price' => 35000.00, 'label' => '.sch.ng (Official Academic)', 'popular' => false],
-        '.ng'     => ['price' => 45000.00, 'label' => '.ng (Direct National Pride)', 'popular' => false],
-        '.com'    => ['price' => 50000.00, 'label' => '.com (Global Commercial)', 'popular' => true],
-        '.org'    => ['price' => 55000.00, 'label' => '.org (Global Organization)', 'popular' => false],
-    ];
+    public static function getPricingTiers(): array
+    {
+        $policy = \App\Models\GradequestBillingPolicy::first();
+        $customPricing = is_array($policy?->domain_pricing) ? $policy->domain_pricing : [];
+
+        $tiers = [
+            '.com.ng' => ['price' => 35000.00, 'label' => '.com.ng (Nigeria Commercial/Standard)', 'popular' => true],
+            '.sch.ng' => ['price' => 35000.00, 'label' => '.sch.ng (Official Academic)', 'popular' => false],
+            '.ng'     => ['price' => 45000.00, 'label' => '.ng (Direct National Pride)', 'popular' => false],
+            '.com'    => ['price' => 50000.00, 'label' => '.com (Global Commercial)', 'popular' => true],
+            '.org'    => ['price' => 55000.00, 'label' => '.org (Global Organization)', 'popular' => false],
+        ];
+
+        foreach ($tiers as $tld => $meta) {
+            if (isset($customPricing[$tld]['price']) && is_numeric($customPricing[$tld]['price']) && (float) $customPricing[$tld]['price'] > 0) {
+                $tiers[$tld]['price'] = (float) $customPricing[$tld]['price'];
+            }
+            if (! empty($customPricing[$tld]['label'])) {
+                $tiers[$tld]['label'] = (string) $customPricing[$tld]['label'];
+            }
+        }
+
+        return $tiers;
+    }
 
     /**
      * Check domain pricing & real-time availability via Whogohost Reseller API.
@@ -55,13 +72,14 @@ class SchoolDomainOrderController extends Controller
             return response()->json(['message' => 'Please enter a valid school domain name query.'], 422);
         }
 
-        $tlds = array_keys(self::DOMAIN_PRICING);
+        $pricing = self::getPricingTiers();
+        $tlds = array_keys($pricing);
 
         // Perform live lookup via Whogohost Reseller Service
         $availabilityMap = $this->whogohostService->lookup($cleanName, $tlds);
 
         $results = [];
-        foreach (self::DOMAIN_PRICING as $tld => $meta) {
+        foreach ($pricing as $tld => $meta) {
             $candidateDomain = $cleanName . $tld;
 
             // Check if already registered or in active order in SchoolProfit
@@ -76,7 +94,7 @@ class SchoolDomainOrderController extends Controller
                 $available = (bool) $isAvailableViaApi;
             } else {
                 // Fallback lightweight DNS check
-                $hasDns = ! empty(@dns_get_record($candidateDomain, DNS_A | DNS_NS));
+                $hasDns = ! empty(@checkdnsrr($candidateDomain, 'A') || @checkdnsrr($candidateDomain, 'NS'));
                 $available = ! $hasDns;
             }
 
@@ -145,10 +163,11 @@ class SchoolDomainOrderController extends Controller
         $domainName = strtolower(trim($validated['domain_name']));
         $durationYears = (int) ($validated['duration_years'] ?? 1);
 
-        // Determine TLD and pricing
+        // Determine TLD and pricing dynamically
+        $pricing = self::getPricingTiers();
         $selectedTld = null;
         $unitPrice = 45000.00; // fallback
-        foreach (self::DOMAIN_PRICING as $tld => $info) {
+        foreach ($pricing as $tld => $info) {
             if (str_ends_with($domainName, $tld)) {
                 $selectedTld = $tld;
                 $unitPrice = $info['price'];
@@ -450,7 +469,7 @@ class SchoolDomainOrderController extends Controller
             'active_domain' => $activeDomain,
             'instructions' => $instructions,
             'orders' => $orders,
-            'pricing' => self::DOMAIN_PRICING,
+            'pricing' => self::getPricingTiers(),
             'server_ip' => '18.133.82.13',
             'cname_target' => config('domains.cname_target', 'portal.schoolprofit.ng'),
         ]);

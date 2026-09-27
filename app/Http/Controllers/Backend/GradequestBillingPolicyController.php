@@ -82,6 +82,7 @@ class GradequestBillingPolicyController extends Controller
             'default_bank_charge_amount' => 'nullable|numeric|min:0|max:100000',
             'promo_target_tier' => 'nullable|string|in:all,basic_result,standard_cbt',
             'promo_discount_percent' => 'nullable|numeric|min:0|max:100',
+            'domain_pricing' => 'nullable|array',
         ]);
 
         if ($validated['temporary_access_max_days'] < $validated['temporary_access_min_days']) {
