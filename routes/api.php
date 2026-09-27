@@ -1174,11 +1174,13 @@ Route::get('/attendance-settings', [AttendanceSettingController::class, 'show'])
 Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'])
     ->middleware('subscription.feature:staff_attendance');
 
-    // ------ Custom Domains (Paystack Powered) ------
+    // ------ Custom Domains (Paystack & Whogohost Powered) ------
     Route::prefix('admin/domain-orders')->group(function () {
         Route::post('/check', [SchoolDomainOrderController::class, 'check']);
         Route::post('/initiate', [SchoolDomainOrderController::class, 'initiateOrder']);
         Route::get('/verify/{reference}', [SchoolDomainOrderController::class, 'verifyOrder']);
+        Route::post('/{id}/retry-provision', [SchoolDomainOrderController::class, 'retryProvisioning']);
+        Route::get('/reseller-balance', [SchoolDomainOrderController::class, 'resellerBalance']);
         Route::post('/connect-existing', [SchoolDomainOrderController::class, 'connectExistingDomain']);
         Route::get('/status', [SchoolDomainOrderController::class, 'status']);
     });

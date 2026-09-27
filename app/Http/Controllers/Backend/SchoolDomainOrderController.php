@@ -7,6 +7,7 @@ use App\Models\SchoolDomain;
 use App\Models\SchoolDomainOrder;
 use App\Models\SchoolSetting;
 use App\Services\SchoolDomainService;
+use App\Services\WhogohostResellerService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -19,7 +20,8 @@ class SchoolDomainOrderController extends Controller
     private string $paystackSecretKey;
 
     public function __construct(
-        private SchoolDomainService $domainService
+        private SchoolDomainService $domainService,
+        private WhogohostResellerService $whogohostService
     ) {
         $this->paystackSecretKey = (string) (config('services.paystack.secret') ?: env('PAYSTACK_SECRET_KEY'));
     }
@@ -36,7 +38,7 @@ class SchoolDomainOrderController extends Controller
     ];
 
     /**
-     * Check domain pricing & availability.
+     * Check domain pricing & real-time availability via Whogohost Reseller API.
      */
     public function check(Request $request): JsonResponse
     {
@@ -53,21 +55,30 @@ class SchoolDomainOrderController extends Controller
             return response()->json(['message' => 'Please enter a valid school domain name query.'], 422);
         }
 
+        $tlds = array_keys(self::DOMAIN_PRICING);
+
+        // Perform live lookup via Whogohost Reseller Service
+        $availabilityMap = $this->whogohostService->lookup($cleanName, $tlds);
+
         $results = [];
         foreach (self::DOMAIN_PRICING as $tld => $meta) {
             $candidateDomain = $cleanName . $tld;
-            
-            // Check if already registered in our system
+
+            // Check if already registered or in active order in SchoolProfit
             $isUsedInSchoolProfit = SchoolDomain::where('domain', $candidateDomain)->exists() ||
-                SchoolDomainOrder::where('domain_name', $candidateDomain)->whereIn('status', ['paid', 'active', 'provisioning'])->exists();
+                SchoolDomainOrder::where('domain_name', $candidateDomain)->whereIn('status', ['paid', 'active', 'provisioning', 'provisioning_pending'])->exists();
 
-            // Lightweight DNS check
-            $hasDns = false;
-            if (! $isUsedInSchoolProfit) {
+            $isAvailableViaApi = $availabilityMap[$candidateDomain] ?? null;
+
+            if ($isUsedInSchoolProfit) {
+                $available = false;
+            } elseif ($isAvailableViaApi !== null) {
+                $available = (bool) $isAvailableViaApi;
+            } else {
+                // Fallback lightweight DNS check
                 $hasDns = ! empty(@dns_get_record($candidateDomain, DNS_A | DNS_NS));
+                $available = ! $hasDns;
             }
-
-            $available = ! $isUsedInSchoolProfit && ! $hasDns;
 
             $results[] = [
                 'domain' => $candidateDomain,
@@ -77,8 +88,8 @@ class SchoolDomainOrderController extends Controller
                 'label' => $meta['label'],
                 'popular' => $meta['popular'],
                 'includes' => [
-                    '1-Year Domain Registration',
-                    'High-Speed Managed Hosting',
+                    '1-Year Official Domain Registration',
+                    'High-Speed Managed Cloud Hosting',
                     'Automated Let\'s Encrypt SSL (HTTPS)',
                     'Custom School Website & Public Pages',
                     'Custom Branded Portal Login',
@@ -222,7 +233,7 @@ class SchoolDomainOrderController extends Controller
     }
 
     /**
-     * Verify Paystack Domain Purchase Payment.
+     * Verify Paystack Domain Purchase Payment and automatically register domain via Whogohost.
      */
     public function verifyOrder(Request $request, string $reference): JsonResponse
     {
@@ -233,10 +244,10 @@ class SchoolDomainOrderController extends Controller
         }
         $order = $orderQuery->firstOrFail();
 
-        if (in_array($order->status, ['paid', 'active', 'provisioning'], true)) {
+        if (in_array($order->status, ['active'], true)) {
             return response()->json([
                 'status' => true,
-                'message' => 'Domain payment already confirmed.',
+                'message' => 'Domain payment confirmed and active.',
                 'order' => $order,
             ]);
         }
@@ -247,44 +258,9 @@ class SchoolDomainOrderController extends Controller
 
             if ($response->successful() && $response->json('status') && ($response->json('data.status') === 'success')) {
                 $data = $response->json('data');
-                
-                $order->update([
-                    'status' => 'active',
-                    'paystack_transaction_id' => $data['id'] ?? null,
-                    'paid_at' => now(),
-                    'activated_at' => now(),
-                    'expires_at' => now()->addYears($order->duration_years),
-                    'dns_configured' => true,
-                    'registrar_name' => 'schoolprofit_automated',
-                    'nameservers' => ['ns1.schoolprofit.ng', 'ns2.schoolprofit.ng'],
-                ]);
+                $user = Auth::user();
 
-                // Automatically register or update SchoolDomain
-                $school = SchoolSetting::find($order->school_id);
-                if ($school) {
-                    $schoolDomain = SchoolDomain::updateOrCreate(
-                        ['domain' => $order->domain_name],
-                        [
-                            'school_id' => $school->id,
-                            'type' => 'custom',
-                            'status' => 'active',
-                            'verified_at' => now(),
-                            'ownership_verified_at' => now(),
-                            'routing_verified_at' => now(),
-                            'activated_at' => now(),
-                            'last_checked_at' => now(),
-                            'last_error' => null,
-                        ]
-                    );
-
-                    $school->update(['custom_domain' => $order->domain_name]);
-                }
-
-                return response()->json([
-                    'status' => true,
-                    'message' => 'Congratulations! Payment confirmed and domain configured successfully.',
-                    'order' => $order->fresh(),
-                ]);
+                return $this->executeDomainProvisioning($order, $school, $data, $user);
             }
 
             return response()->json([
@@ -298,6 +274,126 @@ class SchoolDomainOrderController extends Controller
                 'message' => 'Verification failed: ' . $e->getMessage(),
             ], 500);
         }
+    }
+
+    /**
+     * Execute domain provisioning via Whogohost Reseller API.
+     */
+    public function executeDomainProvisioning(SchoolDomainOrder $order, ?SchoolSetting $school, array $paystackData, $user = null): JsonResponse
+    {
+        $school = $school ?: SchoolSetting::find($order->school_id);
+        $nameservers = config('services.whogohost.nameservers', ['ns1.schoolprofit.ng', 'ns2.schoolprofit.ng']);
+
+        // Build contact details for domain registration
+        $nameParts = explode(' ', (string) ($user?->name ?: 'School Administrator'));
+        $firstname = $nameParts[0] ?? 'School';
+        $lastname = $nameParts[1] ?? 'Admin';
+
+        $contact = [
+            'firstname' => $firstname,
+            'lastname' => $lastname,
+            'company' => $school?->school_name ?: 'SchoolProfit Education',
+            'email' => $user?->email ?: ($school?->email ?: 'admin@' . $order->domain_name),
+            'address1' => $school?->address ?: '12 Allen Avenue, Ikeja',
+            'city' => $school?->city ?: 'Ikeja',
+            'state' => $school?->state ?: 'Lagos',
+            'phonenumber' => $school?->phone_number ?: '+234.8030000000',
+        ];
+
+        // Call Whogohost Reseller API
+        $regResult = $this->whogohostService->registerDomain(
+            $order->domain_name,
+            $order->duration_years,
+            $contact,
+            $nameservers
+        );
+
+        if ($regResult['success']) {
+            // Update order to active
+            $order->update([
+                'status' => 'active',
+                'paystack_transaction_id' => $paystackData['id'] ?? $order->paystack_transaction_id,
+                'paid_at' => $order->paid_at ?: now(),
+                'activated_at' => now(),
+                'expires_at' => now()->addYears($order->duration_years),
+                'dns_configured' => true,
+                'registrar_name' => 'whogohost',
+                'registrar_order_id' => $regResult['order_id'] ?? null,
+                'nameservers' => $nameservers,
+                'failure_reason' => null,
+                'meta' => array_merge($order->meta ?? [], [
+                    'registrar_response' => $regResult['raw'] ?? [],
+                    'registered_at' => now()->toIso8601String(),
+                ]),
+            ]);
+
+            // Register/activate SchoolDomain and update school setting
+            if ($school) {
+                SchoolDomain::updateOrCreate(
+                    ['domain' => $order->domain_name],
+                    [
+                        'school_id' => $school->id,
+                        'type' => 'custom',
+                        'status' => 'active',
+                        'verified_at' => now(),
+                        'ownership_verified_at' => now(),
+                        'routing_verified_at' => now(),
+                        'activated_at' => now(),
+                        'last_checked_at' => now(),
+                        'last_error' => null,
+                    ]
+                );
+
+                $school->update(['custom_domain' => $order->domain_name]);
+            }
+
+            return response()->json([
+                'status' => true,
+                'message' => 'Congratulations! Domain registered and configured successfully with SchoolProfit.',
+                'order' => $order->fresh(),
+            ]);
+        }
+
+        // Domain registration was queued or needs funds in Whogohost wallet
+        $order->update([
+            'status' => 'provisioning_pending',
+            'paystack_transaction_id' => $paystackData['id'] ?? $order->paystack_transaction_id,
+            'paid_at' => $order->paid_at ?: now(),
+            'registrar_name' => 'whogohost',
+            'failure_reason' => $regResult['message'] ?? 'Pending automated provisioning.',
+            'meta' => array_merge($order->meta ?? [], [
+                'provisioning_error' => $regResult['message'] ?? 'Pending automated provisioning.',
+                'registrar_raw' => $regResult['raw'] ?? [],
+            ]),
+        ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'Payment received successfully! Your domain registration has been queued and is being provisioned automatically.',
+            'order' => $order->fresh(),
+        ]);
+    }
+
+    /**
+     * Retry Domain Provisioning (Admin / Super-Admin action).
+     */
+    public function retryProvisioning(Request $request, int $id): JsonResponse
+    {
+        $order = SchoolDomainOrder::findOrFail($id);
+        $school = SchoolSetting::find($order->school_id);
+        $user = Auth::user();
+
+        $paystackData = ['id' => $order->paystack_transaction_id];
+        return $this->executeDomainProvisioning($order, $school, $paystackData, $user);
+    }
+
+    /**
+     * Check Whogohost Reseller Balance.
+     */
+    public function resellerBalance(): JsonResponse
+    {
+        $balance = $this->whogohostService->getAccountBalance();
+        return response()->json($balance);
     }
 
     /**

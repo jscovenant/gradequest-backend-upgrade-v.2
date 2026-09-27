@@ -162,32 +162,9 @@ class PaystackWebhookController extends Controller
             if (($data['status'] ?? null) === 'success') {
                 $order = \App\Models\SchoolDomainOrder::where('payment_reference', $reference)->first();
                 if ($order && $order->status !== 'active') {
-                    $order->update([
-                        'status' => 'active',
-                        'paystack_transaction_id' => $data['id'] ?? null,
-                        'paid_at' => now(),
-                        'activated_at' => now(),
-                        'expires_at' => now()->addYears($order->duration_years),
-                        'dns_configured' => true,
-                        'registrar_name' => 'schoolprofit_automated',
-                    ]);
-
                     $school = \App\Models\SchoolSetting::find($order->school_id);
-                    if ($school) {
-                        \App\Models\SchoolDomain::updateOrCreate(
-                            ['domain' => $order->domain_name],
-                            [
-                                'school_id' => $school->id,
-                                'type' => 'custom',
-                                'status' => 'active',
-                                'verified_at' => now(),
-                                'ownership_verified_at' => now(),
-                                'routing_verified_at' => now(),
-                                'activated_at' => now(),
-                            ]
-                        );
-                        $school->update(['custom_domain' => $order->domain_name]);
-                    }
+                    $user = \App\Models\User::find($order->meta['ordered_by_user_id'] ?? null);
+                    app(SchoolDomainOrderController::class)->executeDomainProvisioning($order, $school, $data, $user);
                 }
             }
             return response()->json(['status' => 'ok', 'type' => 'domain_order']);
