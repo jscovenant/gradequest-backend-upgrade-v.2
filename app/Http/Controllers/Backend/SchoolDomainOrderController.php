@@ -27,6 +27,22 @@ class SchoolDomainOrderController extends Controller
     }
 
     /**
+     * Dynamically resolve existing custom domain setup fee configured by Super-Admin.
+     */
+    public static function getExistingDomainSetupFee(): float
+    {
+        $policy = \App\Models\GradequestBillingPolicy::first();
+        $customPricing = is_array($policy?->domain_pricing) ? $policy->domain_pricing : [];
+        if (isset($customPricing['setup_fee']['price']) && is_numeric($customPricing['setup_fee']['price'])) {
+            return (float) $customPricing['setup_fee']['price'];
+        }
+        if (isset($customPricing['setup_fee']) && is_numeric($customPricing['setup_fee'])) {
+            return (float) $customPricing['setup_fee'];
+        }
+        return 10000.00; // Default: ₦10,000 one-time setup & DNS routing fee
+    }
+
+    /**
      * Dynamically resolve domain pricing tiers configured by Super-Admin.
      */
     public static function getPricingTiers(): array
@@ -252,7 +268,7 @@ class SchoolDomainOrderController extends Controller
     }
 
     /**
-     * Verify Paystack Domain Purchase Payment and automatically register domain via Whogohost.
+     * Verify Paystack Domain Purchase / Connection Payment.
      */
     public function verifyOrder(Request $request, string $reference): JsonResponse
     {
@@ -278,6 +294,28 @@ class SchoolDomainOrderController extends Controller
             if ($response->successful() && $response->json('status') && ($response->json('data.status') === 'success')) {
                 $data = $response->json('data');
                 $user = Auth::user();
+                $orderType = $data['metadata']['order_type'] ?? ($order->meta['order_type'] ?? 'domain_purchase');
+
+                if ($orderType === 'connect_existing') {
+                    $order->update([
+                        'status' => 'active',
+                        'paystack_transaction_id' => $data['id'] ?? $order->paystack_transaction_id,
+                        'paid_at' => now(),
+                        'activated_at' => now(),
+                    ]);
+
+                    $targetSchool = $school ?: SchoolSetting::find($order->school_id);
+                    $schoolDomain = $this->domainService->register($targetSchool, $order->domain_name);
+                    $instructions = $this->domainService->instructions($schoolDomain);
+
+                    return response()->json([
+                        'status' => true,
+                        'message' => 'Domain setup fee confirmed! Please configure your DNS records to complete setup.',
+                        'order' => $order->fresh(),
+                        'domain' => $schoolDomain,
+                        'instructions' => $instructions,
+                    ]);
+                }
 
                 return $this->executeDomainProvisioning($order, $school, $data, $user);
             }
@@ -427,16 +465,182 @@ class SchoolDomainOrderController extends Controller
 
         $validated = $request->validate([
             'domain' => 'required|string|max:150',
+            'setup_type' => 'nullable|string|in:portal_subdomain,full_website',
         ]);
 
-        $schoolDomain = $this->domainService->register($school, $validated['domain']);
+        $inputDomain = strtolower(trim($validated['domain']));
+        $inputDomain = preg_replace('/^(https?:\/\/)?(www\.)?/', '', $inputDomain);
+        $inputDomain = preg_replace('/\/.*$/', '', $inputDomain);
+        $inputDomain = strtolower(trim($inputDomain, '. '));
+
+        if (empty($inputDomain)) {
+            return response()->json(['status' => false, 'message' => 'Please provide a valid domain name.'], 422);
+        }
+
+        $setupType = $validated['setup_type'] ?? (substr_count($inputDomain, '.') > 1 && !str_ends_with($inputDomain, '.com.ng') && !str_ends_with($inputDomain, '.sch.ng') && !str_ends_with($inputDomain, '.org.ng') ? 'portal_subdomain' : 'full_website');
+
+        $user = Auth::user();
+        $setupFee = self::getExistingDomainSetupFee();
+
+        // If setup fee > 0, initiate Paystack checkout for the connection fee
+        if ($setupFee > 0 && !empty($this->paystackSecretKey)) {
+            $reference = 'SP_DOM_CONN_' . strtoupper(Str::random(14));
+            $order = SchoolDomainOrder::create([
+                'school_id' => $school->id,
+                'domain_name' => $inputDomain,
+                'tld' => '.' . (pathinfo($inputDomain, PATHINFO_EXTENSION) ?: 'custom'),
+                'duration_years' => 1,
+                'amount' => $setupFee,
+                'payment_gateway' => 'paystack',
+                'payment_reference' => $reference,
+                'status' => 'pending_payment',
+                'meta' => [
+                    'order_type' => 'connect_existing',
+                    'setup_type' => $setupType,
+                    'ordered_by_user_id' => $user?->id ?? null,
+                    'ordered_by_email' => $user?->email ?? $school->email,
+                    'school_name' => $school->school_name,
+                ],
+            ]);
+
+            $amountInKobo = (int) round($setupFee * 100);
+            $callbackUrl = config('app.frontend_url', 'https://schoolprofit.ng') . '/admin/school/domain-and-website?reference=' . $reference;
+
+            try {
+                $response = Http::withToken($this->paystackSecretKey)->post('https://api.paystack.co/transaction/initialize', [
+                    'email' => $user?->email ?: ($school->email ?: 'admin@' . $inputDomain),
+                    'amount' => $amountInKobo,
+                    'reference' => $reference,
+                    'callback_url' => $callbackUrl,
+                    'metadata' => [
+                        'order_type' => 'connect_existing',
+                        'order_id' => $order->id,
+                        'school_id' => $school->id,
+                        'domain_name' => $inputDomain,
+                        'setup_type' => $setupType,
+                    ],
+                ]);
+
+                if ($response->successful() && $response->json('status')) {
+                    $paystackData = $response->json('data');
+                    return response()->json([
+                        'status' => true,
+                        'requires_payment' => true,
+                        'message' => 'Please complete the custom domain connection fee checkout.',
+                        'order' => $order,
+                        'authorization_url' => $paystackData['authorization_url'],
+                        'access_code' => $paystackData['access_code'],
+                        'reference' => $reference,
+                        'setup_fee' => $setupFee,
+                    ]);
+                }
+
+                Log::error('Paystack Domain Connection Fee Init Failed', ['response' => $response->body()]);
+            } catch (\Throwable $e) {
+                Log::error('Paystack Domain Connection Exception: ' . $e->getMessage());
+            }
+        }
+
+        // If no fee (or fee = 0), register directly
+        $schoolDomain = $this->domainService->register($school, $inputDomain);
         $instructions = $this->domainService->instructions($schoolDomain);
 
         return response()->json([
             'status' => true,
+            'requires_payment' => false,
             'message' => 'Domain registered for verification. Add the DNS records to complete setup.',
             'domain' => $schoolDomain,
             'instructions' => $instructions,
+        ]);
+    }
+
+    /**
+     * Live check whether the domain's CNAME or A records have propagated.
+     */
+    public function verifyDns(Request $request): JsonResponse
+    {
+        $school = $this->resolveSchool($request);
+        if (!$school) {
+            return response()->json(['status' => false, 'message' => 'Active school profile not found.'], 404);
+        }
+
+        $domainRecord = SchoolDomain::where('school_id', $school->id)->latest()->first();
+        $domainName = $request->input('domain') ?: ($domainRecord?->domain ?: $school->custom_domain);
+
+        if (!$domainName) {
+            return response()->json(['status' => false, 'message' => 'No custom domain submitted for verification.'], 422);
+        }
+
+        $domainName = strtolower(trim($domainName));
+        $targetCname = strtolower(trim((string) config('domains.cname_target', 'portal.schoolprofit.ng'), '. '));
+        $targetIps = array_unique(array_filter(array_merge(
+            ['18.133.82.13'],
+            config('domains.target_ips', [])
+        )));
+
+        // Perform DNS lookup
+        $records = @dns_get_record($domainName, DNS_CNAME | DNS_A | DNS_AAAA) ?: [];
+        $foundCnames = [];
+        $foundIps = [];
+        $isPropagated = false;
+
+        foreach ($records as $rec) {
+            if (isset($rec['target'])) {
+                $target = strtolower(trim($rec['target'], '. '));
+                $foundCnames[] = $target;
+                if ($target === $targetCname || $target === 'portal.schoolprofit.ng' || $target === 'domains.schoolprofit.ng' || str_ends_with($target, 'schoolprofit.ng')) {
+                    $isPropagated = true;
+                }
+            }
+            if (isset($rec['ip'])) {
+                $ip = trim($rec['ip']);
+                $foundIps[] = $ip;
+                if (in_array($ip, $targetIps, true)) {
+                    $isPropagated = true;
+                }
+            }
+        }
+
+        if ($isPropagated) {
+            if ($domainRecord) {
+                $domainRecord->forceFill([
+                    'status' => 'active',
+                    'routing_verified_at' => now(),
+                    'verified_at' => $domainRecord->verified_at ?: now(),
+                    'activated_at' => $domainRecord->activated_at ?: now(),
+                    'last_checked_at' => now(),
+                    'last_error' => null,
+                    'consecutive_health_failures' => 0,
+                ])->save();
+            }
+
+            $school->update(['custom_domain' => $domainName]);
+
+            return response()->json([
+                'status' => true,
+                'verified' => true,
+                'domain' => $domainName,
+                'message' => "DNS verification successful! {$domainName} is properly pointed to SchoolProfit and active.",
+                'records' => [
+                    'cnames' => $foundCnames,
+                    'ips' => $foundIps,
+                    'expected_cname' => $targetCname,
+                    'expected_ip' => '18.133.82.13',
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'status' => true,
+            'verified' => false,
+            'domain' => $domainName,
+            'message' => "DNS records not detected yet for {$domainName}. Please ensure you have added the CNAME or A record in your domain registrar and allow 5-15 minutes for DNS propagation.",
+            'records' => [
+                'detected_cnames' => $foundCnames,
+                'detected_ips' => $foundIps,
+                'expected_cname' => $targetCname,
+                'expected_ip' => '18.133.82.13',
+            ],
         ]);
     }
 
@@ -470,6 +674,7 @@ class SchoolDomainOrderController extends Controller
             'instructions' => $instructions,
             'orders' => $orders,
             'pricing' => self::getPricingTiers(),
+            'setup_fee' => self::getExistingDomainSetupFee(),
             'server_ip' => '18.133.82.13',
             'cname_target' => config('domains.cname_target', 'portal.schoolprofit.ng'),
         ]);

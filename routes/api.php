@@ -1182,6 +1182,8 @@ Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'
         Route::post('/{id}/retry-provision', [SchoolDomainOrderController::class, 'retryProvisioning']);
         Route::get('/reseller-balance', [SchoolDomainOrderController::class, 'resellerBalance']);
         Route::post('/connect-existing', [SchoolDomainOrderController::class, 'connectExistingDomain']);
+        Route::post('/verify-dns', [SchoolDomainOrderController::class, 'verifyDns']);
+        Route::get('/verify-dns', [SchoolDomainOrderController::class, 'verifyDns']);
         Route::get('/status', [SchoolDomainOrderController::class, 'status']);
         Route::delete('/remove', [SchoolDomainOrderController::class, 'removeDomain']);
         Route::post('/remove', [SchoolDomainOrderController::class, 'removeDomain']);
