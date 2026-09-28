@@ -474,4 +474,36 @@ class SchoolDomainOrderController extends Controller
             'cname_target' => config('domains.cname_target', 'portal.schoolprofit.ng'),
         ]);
     }
+
+    /**
+     * Remove / Disconnect custom domain from the school.
+     */
+    public function removeDomain(Request $request): JsonResponse
+    {
+        $school = $this->resolveSchool($request);
+        if (!$school) {
+            return response()->json(['status' => false, 'message' => 'Active school profile not found.'], 404);
+        }
+
+        $domainName = $school->custom_domain ?: SchoolDomain::where('school_id', $school->id)->value('domain');
+
+        // Clear custom domain on school profile
+        $school->update(['custom_domain' => null]);
+
+        // Remove SchoolDomain records associated with this school
+        SchoolDomain::where('school_id', $school->id)->delete();
+
+        return response()->json([
+            'status' => true,
+            'message' => $domainName
+                ? "Custom domain '{$domainName}' has been disconnected from your school."
+                : 'Custom domain removed successfully.',
+            'school' => [
+                'id' => $school->id,
+                'school_name' => $school->school_name,
+                'custom_domain' => null,
+                'subdomain' => $school->school_subdomain,
+            ],
+        ]);
+    }
 }

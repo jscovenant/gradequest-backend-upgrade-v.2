@@ -1183,6 +1183,8 @@ Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'
         Route::get('/reseller-balance', [SchoolDomainOrderController::class, 'resellerBalance']);
         Route::post('/connect-existing', [SchoolDomainOrderController::class, 'connectExistingDomain']);
         Route::get('/status', [SchoolDomainOrderController::class, 'status']);
+        Route::delete('/remove', [SchoolDomainOrderController::class, 'removeDomain']);
+        Route::post('/remove', [SchoolDomainOrderController::class, 'removeDomain']);
     });
 
     // ------ School Custom Website, Theme Colors & Menus Builder ------
