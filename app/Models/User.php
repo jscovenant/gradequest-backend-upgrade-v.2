@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Laravel\Sanctum\HasApiTokens;
 use App\Traits\HasSubscriptionUsageGuard;
+use Illuminate\Support\Facades\DB;
 
 
 class User extends Authenticatable
@@ -65,6 +66,18 @@ protected $casts = [
     'last_login_at' => 'datetime',
 ];
 
+public const ROLE_SUPER_ADMIN = 'super_admin';
+public const ROLE_PLATFORM_STAFF = 'platform_staff';
+public const ROLE_PROPRIETOR = 'proprietor';
+public const ROLE_PRINCIPAL = 'principal';
+public const ROLE_OPERATOR = 'operator';
+public const ROLE_BURSAR = 'bursar';
+public const ROLE_CLASS_TEACHER = 'class_teacher';
+public const ROLE_SUBJECT_TEACHER = 'subject_teacher';
+public const ROLE_TEACHER = 'teacher';
+public const ROLE_PARENT = 'parent';
+public const ROLE_STUDENT = 'student';
+
 public const SUPER_ADMIN_PERMISSION_MAP = [
     'owner' => ['dashboard', 'billing', 'finance', 'support', 'sales', 'marketing', 'content', 'settings', 'audit', 'staff'],
     'operations' => ['dashboard', 'support', 'billing', 'audit'],
@@ -73,6 +86,25 @@ public const SUPER_ADMIN_PERMISSION_MAP = [
     'sales_manager' => ['dashboard', 'sales', 'marketing', 'audit'],
 ];
 
+public static function normalizeRole(?string $role): string
+{
+    $r = strtolower(str_replace([' ', '-'], '_', trim((string) $role)));
+    return match ($r) {
+        'superadmin', 'super_admin' => 'super_admin',
+        'platformstaff', 'platform_staff' => 'platform_staff',
+        'admin', 'owner', 'proprietor', 'school_owner' => 'proprietor',
+        'principal', 'head_teacher', 'headmaster', 'headmistress' => 'principal',
+        'operator', 'registrar', 'secretary', 'admin_officer' => 'operator',
+        'bursar', 'accountant' => 'bursar',
+        'class_teacher', 'form_master', 'form_teacher' => 'class_teacher',
+        'subject_teacher' => 'subject_teacher',
+        'teacher' => 'teacher',
+        'parent', 'guardian' => 'parent',
+        'student', 'pupil' => 'student',
+        'sales_representative', 'sales_rep', 'salesrep' => 'sales_representative',
+        default => $r,
+    };
+}
 
 public function scopeForSchool(Builder $query, ?int $schoolId): Builder
 {
@@ -85,14 +117,90 @@ public function scopeForSchool(Builder $query, ?int $schoolId): Builder
 
 public function scopeWithRole(Builder $query, string $role): Builder
 {
+    $norm = self::normalizeRole($role);
+    if ($norm === 'proprietor') {
+        return $query->whereIn(\Illuminate\Support\Facades\DB::raw('LOWER(role)'), ['admin', 'owner', 'proprietor', 'school_owner']);
+    }
+    if ($norm === 'teacher') {
+        return $query->whereIn(\Illuminate\Support\Facades\DB::raw('LOWER(role)'), ['teacher', 'class_teacher', 'subject_teacher']);
+    }
+    if ($norm === 'super_admin') {
+        return $query->whereIn(\Illuminate\Support\Facades\DB::raw('LOWER(role)'), ['super-admin', 'super_admin', 'superadmin']);
+    }
+
     return $query->whereRaw('LOWER(role) = ?', [strtolower($role)]);
 }
 
 public function isSuperAdminUser(): bool
 {
-    $role = strtolower(str_replace([' ', '-', '_'], '', (string) $this->role));
+    $norm = self::normalizeRole($this->role);
+    return in_array($norm, ['super_admin', 'platform_staff'], true);
+}
 
-    return in_array($role, ['superadmin', 'platformstaff'], true);
+public function isProprietor(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'proprietor';
+}
+
+public function isPrincipal(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'principal';
+}
+
+public function isOperator(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'operator';
+}
+
+public function isBursar(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'bursar';
+}
+
+public function isTeacher(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return in_array($norm, ['teacher', 'class_teacher', 'subject_teacher'], true);
+}
+
+public function isClassTeacher(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    if ($norm === 'class_teacher') {
+        return true;
+    }
+    if ($norm === 'teacher') {
+        return $this->levelEnrollment()->exists();
+    }
+    return false;
+}
+
+public function isSubjectTeacher(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    if ($norm === 'subject_teacher') {
+        return true;
+    }
+    if ($norm === 'teacher') {
+        return $this->subjectenroll()->exists() || ! $this->levelEnrollment()->exists();
+    }
+    return false;
+}
+
+public function isParent(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'parent';
+}
+
+public function isStudent(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return $norm === 'student';
 }
 
 public function superAdminTypeLabel(): string
@@ -222,7 +330,45 @@ public function thirdtermresults()
 
     public function hasRole($role)
     {
-        return $this->role === $role;
+        if (empty($role)) {
+            return false;
+        }
+
+        if (is_array($role)) {
+            return collect($role)->contains(fn ($r) => $this->hasRole($r));
+        }
+
+        if (strcasecmp((string) $this->role, (string) $role) === 0) {
+            return true;
+        }
+
+        $myNorm = self::normalizeRole($this->role);
+        $targetNorm = self::normalizeRole($role);
+
+        if ($myNorm === $targetNorm) {
+            return true;
+        }
+
+        // 'Admin' / 'proprietor' equivalence
+        if (in_array($targetNorm, ['admin', 'proprietor'], true) && in_array($myNorm, ['admin', 'proprietor'], true)) {
+            return true;
+        }
+
+        // 'Teacher' matches 'class_teacher', 'subject_teacher', 'teacher'
+        if (in_array($targetNorm, ['teacher', 'class_teacher', 'subject_teacher'], true) && in_array($myNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
+            return true;
+        }
+
+        // 'Super-Admin' matches 'super_admin'
+        if (in_array($targetNorm, ['super_admin', 'superadmin'], true) && in_array($myNorm, ['super_admin', 'superadmin'], true)) {
+            return true;
+        }
+
+        try {
+            return $this->roles()->whereRaw('LOWER(name) = ?', [strtolower((string) $role)])->exists();
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     public function getNameAttribute($value)
@@ -246,17 +392,17 @@ public function thirdtermresults()
 
     public function getIsTeacherAttribute()
     {
-        return $this->hasRole('Teacher');
+        return $this->hasRole('Teacher') || $this->isClassTeacher() || $this->isSubjectTeacher();
     }
 
     public function getIsAdminAttribute()
     {
-        return $this->hasRole('Admin');
+        return $this->hasRole('Admin') || $this->isProprietor();
     }
 
     public function getIsStudentAttribute()
     {
-        return $this->hasRole('Student');
+        return $this->hasRole('Student') || $this->isStudent();
     }
     
 public function parentAccount()

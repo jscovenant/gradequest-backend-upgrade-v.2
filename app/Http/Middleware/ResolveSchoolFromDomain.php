@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\SchoolDomain;
+use App\Models\SchoolSetting;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -11,11 +12,13 @@ class ResolveSchoolFromDomain
 {
     public function handle(Request $request, Closure $next): Response
     {
-        $host = strtolower(trim($request->getHost(), '. '));
+        $rawHost = strtolower(trim($request->getHost(), '. '));
+        $host = preg_replace('/^www\./', '', $rawHost);
 
         if ($request->is('api/offline-cbt*')
-            || in_array($host, ['localhost', '127.0.0.1', '::1'], true)
-            || filter_var($host, FILTER_VALIDATE_IP)
+            || in_array($rawHost, ['localhost', '127.0.0.1', '::1'], true)
+            || filter_var($rawHost, FILTER_VALIDATE_IP)
+            || in_array($rawHost, $this->platformHosts(), true)
             || in_array($host, $this->platformHosts(), true)
         ) {
             return $next($request);
@@ -23,16 +26,28 @@ class ResolveSchoolFromDomain
 
         $schoolDomain = SchoolDomain::query()
             ->with('school')
-            ->where('domain', $host)
+            ->where(function ($q) use ($rawHost, $host) {
+                $q->where('domain', $rawHost)
+                  ->orWhere('domain', $host);
+            })
             ->where('status', 'active')
             ->first();
 
-        if (! $schoolDomain?->school) {
+        $school = $schoolDomain?->school;
+
+        if (! $school) {
+            $school = SchoolSetting::query()
+                ->where('custom_domain', $rawHost)
+                ->orWhere('custom_domain', $host)
+                ->first();
+        }
+
+        if (! $school) {
             abort(404, 'Domain not recognised.');
         }
 
-        app()->instance('current_school', $schoolDomain->school);
-        $request->attributes->set('school', $schoolDomain->school);
+        app()->instance('current_school', $school);
+        $request->attributes->set('school', $school);
 
         return $next($request);
     }

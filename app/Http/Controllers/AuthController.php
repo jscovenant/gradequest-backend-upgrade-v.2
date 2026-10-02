@@ -135,14 +135,19 @@ public function login(Request $request)
         'reg_no'    => $user->reg_no,
         'school_id' => $user->school_id,
         'role'      => $user->role,
+        'normalized_role' => User::normalizeRole($user->role),
         'photo_url' => $user->photo
             ? asset('uploads/users/' . $user->photo)
             : asset('img/profile.png'),
         'school'    => $user->schoolsetting ? [
+            'id'   => $user->schoolsetting->id,
             'name' => $user->schoolsetting->school_name,
             'logo' => $user->schoolsetting->logo
                 ? asset($user->schoolsetting->logo)
                 : asset('img/school-default.png'),
+            'category' => $user->schoolsetting->category ?? null,
+            'primary_color' => $user->schoolsetting->primary_color ?? '#0F2744',
+            'secondary_color' => $user->schoolsetting->secondary_color ?? '#D97706',
         ] : null,
         'must_change_password' => (bool) $user->force_password_change,
         'super_admin_type' => $user->super_admin_type,

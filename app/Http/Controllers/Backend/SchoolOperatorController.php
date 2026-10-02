@@ -23,8 +23,7 @@ class SchoolOperatorController extends Controller
 
         $operators = User::where('school_id', $schoolId)
             ->where(function ($q) {
-                $q->whereRaw('LOWER(role) = ?', ['operator'])
-                  ->orWhere('role', 'Operator');
+                $q->whereIn(\Illuminate\Support\Facades\DB::raw('LOWER(role)'), ['operator', 'principal', 'head_teacher', 'headteacher']);
             })
             ->orderBy('created_at', 'desc')
             ->get([
@@ -48,7 +47,7 @@ class SchoolOperatorController extends Controller
     }
 
     /**
-     * Create / Register a new School Operator
+     * Create / Register a new School Administrator (Operator or Principal)
      */
     public function store(Request $request)
     {
@@ -59,25 +58,53 @@ class SchoolOperatorController extends Controller
             'surname' => 'required|string|max:100',
             'email' => 'required|email|unique:users,email',
             'phone' => 'nullable|string|max:25',
+            'role' => 'nullable|string|in:operator,principal,Operator,Principal',
             'operator_title' => 'nullable|string|max:100',
         ]);
 
-        $randomPassword = Str::random(8);
-        $title = $validated['operator_title'] ?: 'Desk Officer / School Operator';
+        $rawRole = strtolower($validated['role'] ?? 'operator');
+        $role = $rawRole === 'principal' ? 'principal' : 'operator';
+        $defaultTitle = $role === 'principal' ? 'Principal / Head Teacher' : 'Desk Officer / School Operator';
+        $title = !empty($validated['operator_title']) ? $validated['operator_title'] : $defaultTitle;
 
-        $operator = User::create([
+        $randomPassword = Str::random(8);
+
+        $userPayload = [
             'firstname' => $validated['firstname'],
             'surname' => $validated['surname'],
             'email' => $validated['email'],
             'phone' => $validated['phone'] ?? null,
-            'role' => 'Operator',
+            'role' => $role,
             'operator_title' => $title,
             'school_id' => $admin->school_id,
             'password' => Hash::make($randomPassword),
             'default_password' => $randomPassword,
             'status' => 1,
             'force_password_change' => true,
-        ]);
+        ];
+
+        if ($role === 'principal') {
+            $userPayload['teacher_status'] = 'active';
+        }
+
+        $operator = User::create($userPayload);
+
+        // If principal, automatically enroll into school classes for academic broadsheet visibility
+        if ($role === 'principal') {
+            try {
+                $classes = \Illuminate\Support\Facades\DB::table('student_classes')
+                    ->where('school_id', $admin->school_id)
+                    ->pluck('id');
+                foreach ($classes as $clsId) {
+                    \Illuminate\Support\Facades\DB::table('teacher_enrollments')->updateOrInsert(
+                        ['user_id' => $operator->id, 'level_id' => $clsId],
+                        ['enroll' => 1, 'school_id' => $admin->school_id, 'created_at' => now(), 'updated_at' => now()]
+                    );
+                }
+            } catch (\Throwable $e) {
+                Log::warning("Could not auto-enroll principal {$operator->id}: " . $e->getMessage());
+            }
+        }
 
         // Send welcome email with login credentials
         try {
@@ -91,9 +118,11 @@ class SchoolOperatorController extends Controller
             Log::warning("Could not email operator credentials to {$operator->email}: " . $e->getMessage());
         }
 
+        $roleLabel = $role === 'principal' ? 'Principal / Head Teacher' : 'School Operator';
+
         return response()->json([
             'status' => 'success',
-            'message' => "School Operator {$operator->firstname} {$operator->surname} registered successfully.",
+            'message' => "{$roleLabel} {$operator->firstname} {$operator->surname} registered successfully.",
             'operator' => $operator,
             'temporary_password' => $randomPassword,
         ], 201);
@@ -115,18 +144,45 @@ class SchoolOperatorController extends Controller
             'surname' => 'required|string|max:100',
             'phone' => 'nullable|string|max:25',
             'operator_title' => 'nullable|string|max:100',
+            'role' => 'nullable|string|in:operator,principal,Operator,Principal',
         ]);
 
-        $operator->update([
+        $updatePayload = [
             'firstname' => $validated['firstname'],
             'surname' => $validated['surname'],
             'phone' => $validated['phone'] ?? $operator->phone,
             'operator_title' => $validated['operator_title'] ?? $operator->operator_title,
-        ]);
+        ];
+
+        if (!empty($validated['role'])) {
+            $newRole = strtolower($validated['role']);
+            $updatePayload['role'] = $newRole;
+            $updatePayload['normalized_role'] = $newRole;
+            if ($newRole === 'principal') {
+                $updatePayload['teacher_status'] = 'active';
+
+                // Auto-enroll if changing to principal
+                try {
+                    $classes = \Illuminate\Support\Facades\DB::table('student_classes')
+                        ->where('school_id', $schoolId)
+                        ->pluck('id');
+                    foreach ($classes as $clsId) {
+                        \Illuminate\Support\Facades\DB::table('teacher_enrollments')->updateOrInsert(
+                            ['user_id' => $operator->id, 'level_id' => $clsId],
+                            ['enroll' => 1, 'school_id' => $schoolId, 'created_at' => now(), 'updated_at' => now()]
+                        );
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning("Could not auto-enroll updated principal {$operator->id}: " . $e->getMessage());
+                }
+            }
+        }
+
+        $operator->update($updatePayload);
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Operator details updated successfully.',
+            'message' => 'Staff details updated successfully.',
             'operator' => $operator,
         ]);
     }

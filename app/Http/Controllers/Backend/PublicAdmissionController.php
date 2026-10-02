@@ -371,17 +371,21 @@ class PublicAdmissionController extends Controller
         }
 
         if (! $school) {
-            $host = strtolower(trim($request->getHost(), '. '));
-            $domainRecord = SchoolDomain::where('domain', $host)->where('status', 'active')->first();
+            $rawHost = strtolower(trim($request->getHost(), '. '));
+            $host = preg_replace('/^www\./', '', $rawHost);
+            $domainRecord = SchoolDomain::whereIn('domain', [$rawHost, $host])->where('status', 'active')->first();
             if ($domainRecord) {
                 $school = SchoolSetting::find($domainRecord->school_id);
-            } elseif ($hostSetting = SchoolSetting::where('custom_domain', $host)->first()) {
+            } elseif ($hostSetting = SchoolSetting::whereIn('custom_domain', [$rawHost, $host])->first()) {
                 $school = $hostSetting;
             }
         }
 
         if (! $school) {
-            $school = SchoolSetting::first();
+            $rawHost = strtolower(trim($request->getHost(), '. '));
+            if (in_array($rawHost, ['localhost', '127.0.0.1', '::1'], true) || app()->environment('testing')) {
+                $school = SchoolSetting::first();
+            }
         }
 
         return $school;

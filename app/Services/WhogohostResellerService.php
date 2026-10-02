@@ -225,6 +225,7 @@ class WhogohostResellerService
         $params = [
             'domain' => $domain,
             'regperiod' => max(1, $years),
+            'paymentmethod' => config('services.whogohost.payment_method', 'banktransfer'),
             'addons' => [
                 'dnsmanagement' => 1,
                 'emailforwarding' => 0,

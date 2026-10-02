@@ -11,10 +11,13 @@ use App\Models\ActivityLog;
 use App\Models\SchoolBillingAuditLog;
 use App\Models\SchoolBankAccount;
 use App\Mail\MarketingEmail;
+use App\Models\SchoolDomain;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class SuperAdminController extends Controller
 {
@@ -787,11 +790,290 @@ class SuperAdminController extends Controller
             })
             ->count();
 
+        // Total Gross Merchandise Value (Tuition processed across all schools)
+        $gmv = (float) DB::table('payments')->where('status', 'success')->sum('amount');
+
+        // Total Technology Royalty Fees collected across platform payments
+        $techFeesEarned = (float) DB::table('payments')->where('status', 'success')->sum('platform_fee');
+
+        $totalSchools = SchoolSetting::count();
+
+        $splitReadySchools = SchoolBankAccount::where('is_active', true)
+            ->where(function ($q) {
+                $q->whereNotNull('paystack_subaccount_code')
+                  ->orWhereNotNull('monnify_subaccount_code')
+                  ->orWhereNotNull('flutterwave_subaccount_code');
+            })
+            ->distinct('school_id')
+            ->count('school_id');
+
+        $onlinePayEnabledSchools = SchoolSetting::where('online_payment_enabled', true)->count();
+
         return response()->json([
             'status' => 'success',
             'data' => $monthlyRevenue,
             'total_active_students' => $totalActiveStudents,
+            'total_schools' => $totalSchools,
+            'gmv' => $gmv,
+            'tech_fees_earned' => $techFeesEarned,
+            'gateway_split_health' => [
+                'total_schools' => $totalSchools,
+                'split_ready_schools' => $splitReadySchools,
+                'online_payment_enabled_schools' => $onlinePayEnabledSchools,
+                'split_health_percentage' => $totalSchools > 0 ? round(($splitReadySchools / $totalSchools) * 100, 1) : 100,
+            ],
         ]);
+    }
+
+    /**
+     * Dedicated SaaS School Onboarding Engine (3-Step Wizard)
+     * Step 1: School Identity & Branding
+     * Step 2: Financial Gateway Split Configuration (Paystack/Flutterwave/Monnify)
+     * Step 3: Lead Administrator Provisioning (Proprietor/Principal)
+     */
+    public function onboardSchool(Request $request)
+    {
+        $user = $request->user();
+        if (!$user || !$user->isSuperAdminUser()) {
+            return response()->json(['message' => 'Unauthorized. Super Admin access required.'], 403);
+        }
+
+        $validated = $request->validate([
+            // Step 1: School Identity & Branding
+            'school_name' => 'required|string|max:255',
+            'school_code' => 'nullable|string|max:50',
+            'prefix' => 'nullable|string|max:20',
+            'category' => 'nullable|string|in:nursery,primary,junior_secondary,senior_secondary,all_through',
+            'school_subdomain' => 'nullable|string|max:100',
+            'custom_domain' => 'nullable|string|max:190',
+            'primary_color' => 'nullable|string|max:20',
+            'secondary_color' => 'nullable|string|max:20',
+            'address' => 'nullable|string|max:255',
+            'phone' => 'nullable|string|max:30',
+            'email' => 'nullable|email|max:190',
+            'logo' => 'nullable|image|max:3072',
+            'stamp' => 'nullable|image|max:3072',
+            'principal_signature' => 'nullable|image|max:3072',
+
+            // Step 2: Financial Gateway Split Configuration
+            'bank_name' => 'nullable|string|max:120',
+            'bank_code' => 'nullable|string|max:30',
+            'account_number' => 'nullable|string|max:30',
+            'account_name' => 'nullable|string|max:150',
+            'paystack_subaccount_code' => 'nullable|string|max:100',
+            'flutterwave_subaccount_code' => 'nullable|string|max:100',
+            'monnify_subaccount_code' => 'nullable|string|max:100',
+            'tech_royalty_fee' => 'nullable|numeric|min:0|max:50000',
+            'platform_fee_bearer' => 'nullable|in:school,parent',
+            'bank_charge_bearer' => 'nullable|in:parent,school',
+            'bank_charge_amount' => 'nullable|numeric|min:0',
+            'active_payment_gateway' => 'nullable|string|in:paystack,monnify,wema_alat',
+            'online_payment_enabled' => 'nullable|boolean',
+            'active_edition_tier' => 'nullable|string|in:standard_cbt,basic_result,annual_full_session',
+
+            // Step 3: Lead Administrator Provisioning
+            'lead_admin_role' => 'nullable|string|in:proprietor,principal,Admin',
+            'admin_firstname' => 'required|string|max:100',
+            'admin_surname' => 'required|string|max:100',
+            'admin_email' => 'required|email|max:190|unique:users,email',
+            'admin_phone' => 'required|string|max:30',
+            'admin_password' => 'nullable|string|min:8',
+        ]);
+
+        DB::beginTransaction();
+        try {
+            // Auto generate unique 10-digit registration number
+            do {
+                $regNo = (string) random_int(1000000000, 9999999999);
+            } while (User::where('reg_no', $regNo)->exists());
+
+            // Subdomain generation/formatting
+            $subdomain = Str::slug($validated['school_subdomain'] ?: $validated['school_name']);
+            if (SchoolSetting::where('school_subdomain', $subdomain)->exists()) {
+                $subdomain .= '-' . random_int(100, 999);
+            }
+
+            // Create school setting
+            $schoolData = [
+                'school_name' => trim($validated['school_name']),
+                'category' => $validated['category'] ?? 'all_through',
+                'prefix' => $validated['prefix'] ?? ($validated['school_code'] ?? strtoupper(substr(preg_replace('/[^A-Za-z0-9]/', '', $validated['school_name']), 0, 4))),
+                'school_subdomain' => $subdomain,
+                'custom_domain' => !empty($validated['custom_domain']) ? strtolower(trim(preg_replace('#^https?://#', '', $validated['custom_domain']))) : null,
+                'primary_color' => $validated['primary_color'] ?: '#0F2744',
+                'secondary_color' => $validated['secondary_color'] ?: '#D97706',
+                'address' => $validated['address'] ?? 'Nigeria',
+                'phone' => $validated['phone'] ?? $validated['admin_phone'],
+                'email' => $validated['email'] ?? $validated['admin_email'],
+                'active_edition_tier' => $validated['active_edition_tier'] ?? 'standard_cbt',
+                'active_payment_gateway' => $validated['active_payment_gateway'] ?? 'paystack',
+                'online_payment_enabled' => $validated['online_payment_enabled'] ?? true,
+                'platform_fee_bearer' => $validated['platform_fee_bearer'] ?? 'school',
+                'tech_royalty_fee' => $validated['tech_royalty_fee'] ?? 500.00,
+                'bank_charge_bearer' => $validated['bank_charge_bearer'] ?? 'parent',
+                'bank_charge_amount' => $validated['bank_charge_amount'] ?? 200.00,
+            ];
+
+            // Upload files if provided
+            $destPath = public_path('uploads/schools');
+            if (!file_exists($destPath)) {
+                @mkdir($destPath, 0755, true);
+            }
+
+            if ($request->hasFile('logo')) {
+                $logoFile = $request->file('logo');
+                $logoName = 'logo_' . time() . '_' . Str::slug(pathinfo($logoFile->getClientOriginalName(), PATHINFO_FILENAME)) . '.' . $logoFile->getClientOriginalExtension();
+                $logoFile->move($destPath, $logoName);
+                $schoolData['logo'] = 'uploads/schools/' . $logoName;
+            }
+
+            if ($request->hasFile('stamp')) {
+                $stampFile = $request->file('stamp');
+                $stampName = 'stamp_' . time() . '_' . Str::slug(pathinfo($stampFile->getClientOriginalName(), PATHINFO_FILENAME)) . '.' . $stampFile->getClientOriginalExtension();
+                $stampFile->move($destPath, $stampName);
+                $schoolData['stamp'] = 'uploads/schools/' . $stampName;
+            }
+
+            if ($request->hasFile('principal_signature')) {
+                $sigFile = $request->file('principal_signature');
+                $sigName = 'sig_' . time() . '_' . Str::slug(pathinfo($sigFile->getClientOriginalName(), PATHINFO_FILENAME)) . '.' . $sigFile->getClientOriginalExtension();
+                $sigFile->move($destPath, $sigName);
+                $schoolData['principal_signature'] = 'uploads/schools/' . $sigName;
+            }
+
+            $school = SchoolSetting::create($schoolData);
+
+            // Register Custom Domain if provided
+            if (!empty($schoolData['custom_domain'])) {
+                $cleanDomain = rtrim(strtolower($schoolData['custom_domain']), '/');
+                $naked = preg_replace('/^www\./', '', $cleanDomain);
+                
+                SchoolDomain::firstOrCreate(
+                    ['domain' => $naked],
+                    ['school_id' => $school->id, 'status' => 'active', 'verification_status' => 'verified']
+                );
+                SchoolDomain::firstOrCreate(
+                    ['domain' => 'www.' . $naked],
+                    ['school_id' => $school->id, 'status' => 'active', 'verification_status' => 'verified']
+                );
+            }
+
+            // Create Subaccount with Paystack if bank info provided and no subaccount code given
+            $paystackCode = $validated['paystack_subaccount_code'] ?? null;
+            if (!$paystackCode && !empty($validated['bank_code']) && !empty($validated['account_number']) && config('services.paystack.secret')) {
+                try {
+                    $subRes = Http::withToken(config('services.paystack.secret'))
+                        ->post('https://api.paystack.co/subaccount', [
+                            'business_name' => $school->school_name,
+                            'settlement_bank' => $validated['bank_code'],
+                            'account_number' => $validated['account_number'],
+                            'percentage_charge' => 0,
+                        ]);
+                    if ($subRes->successful() && $subRes->json('status')) {
+                        $paystackCode = $subRes->json('data.subaccount_code');
+                    }
+                } catch (\Throwable $subErr) {
+                    Log::warning("Paystack auto-subaccount creation on onboard: " . $subErr->getMessage());
+                }
+            }
+
+            // Provision School Bank Account if account number provided
+            $bankAccount = null;
+            if (!empty($validated['account_number']) && !empty($validated['bank_name'])) {
+                $bankAccount = SchoolBankAccount::create([
+                    'school_id' => $school->id,
+                    'bank_name' => $validated['bank_name'],
+                    'bank_code' => $validated['bank_code'] ?? '000',
+                    'account_name' => $validated['account_name'] ?? $school->school_name,
+                    'account_number' => $validated['account_number'],
+                    'paystack_subaccount_code' => $paystackCode,
+                    'flutterwave_subaccount_code' => $validated['flutterwave_subaccount_code'] ?? null,
+                    'monnify_subaccount_code' => $validated['monnify_subaccount_code'] ?? null,
+                    'preferred_gateway' => $validated['active_payment_gateway'] ?? 'paystack',
+                    'online_payment_enabled' => $schoolData['online_payment_enabled'],
+                    'currency' => 'NGN',
+                    'is_active' => true,
+                    'sort_order' => 1,
+                ]);
+            }
+
+            // Step 3: Provision Lead Administrator
+            $plainPassword = $validated['admin_password'] ?: Str::random(10);
+            $leadRole = $validated['lead_admin_role'] ?? 'proprietor';
+            if ($leadRole === 'Admin') {
+                $leadRole = 'proprietor';
+            }
+
+            $adminUser = User::create([
+                'firstname' => trim($validated['admin_firstname']),
+                'surname' => trim($validated['admin_surname']),
+                'email' => strtolower(trim($validated['admin_email'])),
+                'phone' => trim($validated['admin_phone']),
+                'password' => Hash::make($plainPassword),
+                'default_password' => $plainPassword,
+                'force_password_change' => true,
+                'role' => $leadRole,
+                'reg_no' => $regNo,
+                'school_id' => $school->id,
+                'status' => 1,
+            ]);
+
+            // Assign role
+            $adminUser->assignRole($leadRole);
+
+            // Connect user to school setting
+            $school->user_id = $adminUser->id;
+            $school->save();
+
+            // Provision default academic structure (classes, terms, sessions)
+            try {
+                \App\Services\Students\StudentExcelImportService::provisionDefaultAcademicStructure($school->id);
+            } catch (\Throwable $pe) {
+                Log::warning("Could not provision default academic structure for school {$school->id}: " . $pe->getMessage());
+            }
+
+            // Log activity
+            try {
+                ActivityLog::create([
+                    'user_id' => $user->id,
+                    'school_id' => $school->id,
+                    'action' => 'onboard_school',
+                    'description' => "Super Admin onboarded new school: {$school->school_name} (Lead Admin: {$adminUser->email})",
+                    'ip_address' => $request->ip(),
+                    'user_agent' => $request->userAgent(),
+                ]);
+            } catch (\Throwable) {}
+
+            DB::commit();
+
+            return response()->json([
+                'status' => 'success',
+                'message' => "School '{$school->school_name}' successfully onboarded.",
+                'school' => $school->fresh(),
+                'lead_admin' => [
+                    'id' => $adminUser->id,
+                    'name' => $adminUser->name,
+                    'email' => $adminUser->email,
+                    'phone' => $adminUser->phone,
+                    'role' => $adminUser->role,
+                    'reg_no' => $adminUser->reg_no,
+                    'temporary_password' => $plainPassword,
+                ],
+                'split_gateway' => [
+                    'subaccount_code' => $paystackCode,
+                    'tech_royalty_fee' => $school->tech_royalty_fee ?? 500.00,
+                    'bank_account' => $bankAccount,
+                ],
+            ], 201);
+
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('SuperAdmin onboardSchool failed: ' . $e->getMessage(), ['trace' => $e->getTraceAsString()]);
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Failed to onboard school: ' . $e->getMessage(),
+            ], 500);
+        }
     }
 
     public function deleteMultiple(Request $request)

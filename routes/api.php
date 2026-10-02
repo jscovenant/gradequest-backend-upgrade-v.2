@@ -375,6 +375,7 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::get('/mail/admin-users', [SuperAdminController::class, 'mailAdminUsers'])->middleware('superadmin.access:marketing,owner');
     
     Route::get('/monthly-revenue-stats', [SuperAdminController::class, 'monthlyRevenueStats'])->middleware('superadmin.access:finance,billing,owner');
+    Route::post('/superadmin/schools/onboard', [SuperAdminController::class, 'onboardSchool'])->middleware('superadmin.access:owner,support,billing');
     Route::post('/platform-logs/delete-multiple', [SuperAdminController::class, 'deleteMultiple'])->middleware('superadmin.access:owner');
     Route::get('/superadmin/platform-staff', [PlatformStaffController::class, 'index'])->middleware('superadmin.access:staff,owner');
     Route::post('/superadmin/platform-staff', [PlatformStaffController::class, 'store'])->middleware('superadmin.access:owner');
