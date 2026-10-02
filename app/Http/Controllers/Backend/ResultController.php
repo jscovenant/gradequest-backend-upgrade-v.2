@@ -1282,7 +1282,10 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
             ], 404);
         }
 
-        if (!$request->query('class_id') && $student->level_id) {
+        $requestedClassId = $request->filled('class_id') ? (int) $request->query('class_id') : null;
+        if ($requestedClassId) {
+            $classId = $requestedClassId;
+        } elseif (!$request->query('class_id') && $student->level_id) {
             $classId = (int) $student->level_id;
         }
 
@@ -1312,8 +1315,8 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
                 ])->first();
             }
 
-            // 2. Intelligent Auto-Resolution: If not found in requested class, find any class where result exists for this session & term
-            if (!$average) {
+            // 2. Intelligent Auto-Resolution: If not found in requested class, find any class where result exists for this session & term (only if class was not explicitly filtered)
+            if (!$average && !$requestedClassId) {
                 $average = \App\Models\Average::where([
                     'user_id' => $student->id,
                     'school_id' => $auth->school_id,
@@ -1326,8 +1329,8 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
                 }
             }
 
-            // 3. Intelligent Fallback: If no result in requested session/term, auto-resolve to student's latest recorded session and term
-            if (!$average) {
+            // 3. Intelligent Fallback: If no result in requested session/term, auto-resolve to student's latest recorded session and term (only if class was not explicitly filtered)
+            if (!$average && !$requestedClassId) {
                 $latestAverage = \App\Models\Average::where('user_id', $student->id)
                     ->where('school_id', $auth->school_id)
                     ->orderByDesc('id')
@@ -1426,6 +1429,12 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
             'background_color' => $templateSetting?->background_color ?? $school?->background_color ?? '#ffffff',
         ];
 
+        if ($average) {
+            $average->load('class');
+        }
+        $resolvedClassId = $average?->class_id ? (int) $average->class_id : $classId;
+        $resolvedClassName = $average?->class?->name ?? ($classes->firstWhere('id', $resolvedClassId)?->name ?? $student->level?->name);
+
         return response()->json([
             'student' => $student,
             'student_photo_base64' => $photoBase64,
@@ -1435,7 +1444,8 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
             'subjects' => $subjects,
             'current_session' => $currentSession,
             'current_term' => $currentTerm,
-            'current_class_id' => $classId,
+            'current_class_id' => $resolvedClassId,
+            'class_name' => $resolvedClassName,
             'average' => $average,
             'results' => $existingResults,
             'affective_ratings' => $affectiveRatings,
