@@ -1076,12 +1076,15 @@ Route::get('/teachers/view/{id}', [TeacherController::class, 'viewTeacher']);
 
 
     Route::get('/fees/structure/{sectionId}/{sessionId}', [FeePaymentController::class, 'getFeeStructure']);
-     Route::get('/students/search', [StudentController::class, 'search']); 
+    Route::get('/fees/classes-with-students', [FeePaymentController::class, 'getClassesWithStudents']);
+    Route::get('/students/search', [StudentController::class, 'search']); 
     Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee'])
         ->middleware('subscription.feature:fee_management'); 
-  Route::get('/fees/student/details', [FeePaymentController::class, 'studentFeeDetails']);
+    Route::post('/fees/class-assign', [FeePaymentController::class, 'assignClassFees'])
+        ->middleware('subscription.feature:fee_management');
+    Route::get('/fees/student/details', [FeePaymentController::class, 'studentFeeDetails']);
 
-   Route::post('/fees/fetch-types', [FeePaymentController::class, 'fetchFeeTypes'])
+    Route::post('/fees/fetch-types', [FeePaymentController::class, 'fetchFeeTypes'])
         ->name('fees.fetch.types');
 
    Route::get('/students/{studentId}/fees', [FeePaymentController::class, 'showAssignedFees']);

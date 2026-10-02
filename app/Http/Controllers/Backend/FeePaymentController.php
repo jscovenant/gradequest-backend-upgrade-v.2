@@ -3,7 +3,7 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
-use App\Models\{FeeType, StudentFee, Payment, PaymentReceipt, User, Section};
+use App\Models\{FeeType, StudentFee, Payment, PaymentReceipt, User, Section, StudentClass};
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use App\Services\FeePaymentService;
@@ -26,59 +26,182 @@ class FeePaymentController extends Controller
         return response()->json($feeTypes);
     }
 
-    // ✅ Fetch available fee types after selecting student, section, session, and term
-  public function fetchFeeTypes(Request $request)
-{
-    $request->validate([
-        'student_id' => 'required|exists:users,id',
-        'section_id' => 'required|exists:sections,id',
-        'session_id' => 'required|exists:academic_sessions,id',
-        'term_id' => 'required|exists:terms,id',
-    ]);
+    /**
+     * Get classes with their sections and enrolled students for collective fee assignment
+     */
+    public function getClassesWithStudents(Request $request)
+    {
+        $schoolId = Auth::user()->school_id;
 
-    $schoolId = Auth::user()->school_id;
+        $classes = StudentClass::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->with('section:id,name')
+            ->with(['students' => function ($q) use ($schoolId) {
+                $q->where('school_id', $schoolId)
+                  ->whereRaw('LOWER(role) = ?', ['student'])
+                  ->select('id', 'firstname', 'surname', 'reg_no', 'level_id', 'section_id')
+                  ->orderBy('firstname')
+                  ->orderBy('surname');
+            }])
+            ->orderBy('name')
+            ->get();
 
-    // ✅ Ensure the student belongs to the same school
-    $student = User::where('school_id', $schoolId)->find($request->student_id);
-    if (!$student) {
-        return response()->json(['message' => 'Student not found or unauthorized'], 404);
+        return response()->json([
+            'classes' => $classes,
+        ]);
     }
 
-    // ✅ Fetch all fee types for that section/session/term/school
-    $feeTypes = FeeType::where('school_id', $schoolId)
-        ->where('section_id', $request->section_id)
-        ->where('session_id', $request->session_id)
-        ->where('term_id', $request->term_id)
-        ->select('id', 'name', 'amount')
-        ->get();
+    /**
+     * Bulk assign fee types collectively to all or selected students in a class
+     */
+    public function assignClassFees(Request $request)
+    {
+        $schoolId = Auth::user()->school_id;
 
-    // ✅ Return clear response if no fee types exist
-    if ($feeTypes->isEmpty()) {
+        $request->validate([
+            'class_id' => 'required|exists:student_classes,id',
+            'section_id' => 'nullable|exists:sections,id',
+            'session_id' => 'required|exists:academic_sessions,id',
+            'term_id' => 'required|exists:terms,id',
+            'fee_type_ids' => 'required|array|min:1',
+            'fee_type_ids.*' => 'exists:fee_types,id',
+            'student_ids' => 'nullable|array',
+            'student_ids.*' => 'exists:users,id',
+        ]);
+
+        $class = StudentClass::where('school_id', $schoolId)->findOrFail($request->class_id);
+        $sectionId = $request->section_id ?: $class->section_id;
+
+        $studentsQuery = User::where('school_id', $schoolId)
+            ->where('level_id', $class->id)
+            ->whereRaw('LOWER(role) = ?', ['student']);
+
+        if (!empty($request->student_ids) && is_array($request->student_ids)) {
+            $studentsQuery->whereIn('id', $request->student_ids);
+        }
+
+        $students = $studentsQuery->get();
+
+        if ($students->isEmpty()) {
+            return response()->json(['message' => 'No active students found in this class to assign fees.'], 404);
+        }
+
+        $feeTypes = FeeType::whereIn('id', $request->fee_type_ids)
+            ->where('school_id', $schoolId)
+            ->get();
+
+        if ($feeTypes->isEmpty()) {
+            return response()->json(['message' => 'No valid fee types found.'], 404);
+        }
+
+        $createdCount = 0;
+        $skippedCount = 0;
+        $billedStudentCount = 0;
+
+        foreach ($students as $student) {
+            $assignedForStudent = false;
+            $studentSecId = $sectionId ?: $student->section_id;
+
+            foreach ($feeTypes as $fee) {
+                $exists = StudentFee::where([
+                    'school_id'   => $schoolId,
+                    'student_id'  => $student->id,
+                    'session_id'  => $request->session_id,
+                    'term_id'     => $request->term_id,
+                    'fee_type_id' => $fee->id,
+                ])->exists();
+
+                if ($exists) {
+                    $skippedCount++;
+                    continue;
+                }
+
+                StudentFee::create([
+                    'school_id'    => $schoolId,
+                    'student_id'   => $student->id,
+                    'section_id'   => $studentSecId ?: $fee->section_id,
+                    'session_id'   => $request->session_id,
+                    'term_id'      => $request->term_id,
+                    'fee_type_id'  => $fee->id,
+                    'total_amount' => $fee->amount,
+                    'amount_paid'  => 0,
+                    'balance'      => $fee->amount,
+                    'status'       => 'unpaid',
+                ]);
+
+                $createdCount++;
+                $assignedForStudent = true;
+            }
+
+            if ($assignedForStudent) {
+                $billedStudentCount++;
+            }
+        }
+
+        $msg = "Successfully assigned fees to {$billedStudentCount} student(s) in {$class->name} ({$createdCount} fee records created).";
+        if ($skippedCount > 0) {
+            $msg .= " Note: {$skippedCount} existing fee assignments were preserved to prevent duplicates.";
+        }
+
         return response()->json([
-            'message' => 'No fee types found for the selected section, session, and term.',
-            'student' => [
+            'status' => 'success',
+            'message' => $msg,
+            'created_count' => $createdCount,
+            'skipped_count' => $skippedCount,
+            'students_count' => $students->count(),
+            'billed_students' => $billedStudentCount,
+        ]);
+    }
+
+    // ✅ Fetch available fee types after selecting student/class, section, session, and term
+    public function fetchFeeTypes(Request $request)
+    {
+        $request->validate([
+            'student_id' => 'nullable|exists:users,id',
+            'section_id' => 'nullable|exists:sections,id',
+            'class_id' => 'nullable|exists:student_classes,id',
+            'session_id' => 'required|exists:academic_sessions,id',
+            'term_id' => 'required|exists:terms,id',
+        ]);
+
+        $schoolId = Auth::user()->school_id;
+
+        $student = null;
+        if ($request->filled('student_id')) {
+            $student = User::where('school_id', $schoolId)->find($request->student_id);
+        }
+
+        $sectionId = $request->section_id;
+        if (!$sectionId && $request->filled('class_id')) {
+            $sectionId = StudentClass::where('school_id', $schoolId)->where('id', $request->class_id)->value('section_id');
+        }
+
+        $query = FeeType::where('school_id', $schoolId)
+            ->where('session_id', $request->session_id)
+            ->where('term_id', $request->term_id);
+
+        if ($sectionId) {
+            $query->where(function ($q) use ($sectionId) {
+                $q->where('section_id', $sectionId)
+                  ->orWhereNull('section_id')
+                  ->orWhere('section_id', 0);
+            });
+        }
+
+        $feeTypes = $query->select('id', 'name', 'amount', 'section_id')->get();
+
+        return response()->json([
+            'message' => 'Fee types retrieved successfully.',
+            'fee_types' => $feeTypes,
+            'student' => $student ? [
                 'id' => $student->id,
                 'name' => "{$student->firstname} {$student->surname}",
                 'reg_no' => $student->reg_no,
-            ],
-            'fee_types' => [],
-        ], 404);
+            ] : null,
+        ]);
     }
 
-    // ✅ Normal success response
-    return response()->json([
-        'message' => 'Fee types retrieved successfully.',
-        'student' => [
-            'id' => $student->id,
-            'name' => "{$student->firstname} {$student->surname}",
-            'reg_no' => $student->reg_no,
-        ],
-        'fee_types' => $feeTypes,
-    ]);
-}
-
-
- /**
+    /**
      * Display all fees assigned to a specific student.
      */
     public function showAssignedFees($studentId)

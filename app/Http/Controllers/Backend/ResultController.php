@@ -1246,7 +1246,7 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
         $currentTerm = $request->query('term') ?: ($terms->first()?->name ?? 'First Term');
         $classId = $request->query('class_id') ? (int) $request->query('class_id') : ($classes->first()?->id ?? null);
 
-        $regNo = trim((string) $request->query('reg_no', ''));
+        $regNo = trim((string) ($request->query('reg_no') ?: $request->query('search') ?: $request->query('q') ?: ''));
         if (!$regNo) {
             return response()->json([
                 'student' => null,
@@ -1263,7 +1263,11 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
         $student = User::where('school_id', $auth->school_id)
             ->where(function ($q) use ($regNo) {
                 $q->where('reg_no', $regNo)
-                  ->orWhere('id', is_numeric($regNo) ? (int)$regNo : 0);
+                  ->orWhere('id', is_numeric($regNo) ? (int)$regNo : 0)
+                  ->orWhere('firstname', 'like', "%{$regNo}%")
+                  ->orWhere('surname', 'like', "%{$regNo}%")
+                  ->orWhereRaw("CONCAT(firstname, ' ', surname) LIKE ?", ["%{$regNo}%"])
+                  ->orWhereRaw("CONCAT(surname, ' ', firstname) LIKE ?", ["%{$regNo}%"]);
             })
             ->whereRaw('LOWER(role) = ?', ['student'])
             ->with(['level', 'department', 'section'])
