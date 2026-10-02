@@ -285,19 +285,25 @@ public function getCurrentSessionAndTerm()
 {
     $schoolId = Auth::user()->school_id;
 
-    // 🔹 Get latest active session (only needed columns)
+    // 🔹 Get active/current session (prioritizing explicitly marked current session)
     $session = AcademicSession::where('school_id', $schoolId)
         ->whereNull('archived_at')
-        ->where('status', 'Active')
-        ->orderByDesc('id')
+        ->where('is_current', 1)
         ->select('name', 'start_date', 'end_date')
-        ->first();
+        ->first()
+        ?: AcademicSession::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->where('status', 'Active')
+            ->orderByDesc('id')
+            ->select('name', 'start_date', 'end_date')
+            ->first();
 
-    // 🔹 Get latest active term (only needed columns)
+    // 🔹 Get active term
     $term = Term::where('school_id', $schoolId)
         ->whereNull('archived_at')
         ->where('status', 'Active')
-        ->orderByDesc('id')
+        ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+        ->orderBy('id')
         ->select('name')
         ->first();
 

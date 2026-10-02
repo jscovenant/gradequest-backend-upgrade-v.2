@@ -205,8 +205,23 @@ public function findByAdmissionNo(string $admissionNo)
         return response()->json(['message' => 'Student not found'], 404);
     }
 
-    $term = Term::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
-    $session = AcademicSession::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
+    $term = Term::where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
+        ->where('status', 'Active')
+        ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+        ->orderBy('id')
+        ->first()
+        ?? Term::where('school_id', $auth->school_id)->whereNull('archived_at')->latest()->first();
+
+    $session = AcademicSession::where('school_id', $auth->school_id)
+        ->whereNull('archived_at')
+        ->where('is_current', 1)
+        ->first()
+        ?? AcademicSession::where('school_id', $auth->school_id)
+            ->whereNull('archived_at')
+            ->where('status', 'Active')
+            ->orderByDesc('id')
+            ->first();
 
     $subjects = app(\App\Services\Results\SubjectService::class)->subjectsForDepartment(
         (int) $auth->school_id,

@@ -71,8 +71,9 @@ public function studentClasses(Request $request)
 
         $sessions = AcademicSession::where('school_id', $schoolId)
             ->whereNull('archived_at')
+            ->orderByDesc('is_current')
             ->orderByDesc('id')
-            ->get(['id', 'name']); // if column is "session", change to ->get(['id','session as name'])
+            ->get(['id', 'name', 'is_current']);
 
         return response()->json($sessions);
     }
