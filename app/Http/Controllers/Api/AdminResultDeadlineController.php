@@ -30,6 +30,35 @@ class AdminResultDeadlineController extends Controller
             ], 422);
         }
 
+        $term = $request->filled('term') ? $request->string('term')->toString() : null;
+        $session = $request->filled('session') ? $request->string('session')->toString() : null;
+
+        // Auto-ensure result batches exist for any classes that have records in averages table
+        if ($term && $session) {
+            $classesWithResults = \App\Models\Average::where('school_id', $schoolId)
+                ->where('session', $session)
+                ->where('term', $term)
+                ->select('class_id')
+                ->distinct()
+                ->pluck('class_id');
+
+            foreach ($classesWithResults as $cId) {
+                if ($cId) {
+                    ResultBatch::firstOrCreate(
+                        [
+                            'school_id' => $schoolId,
+                            'class_id' => $cId,
+                            'term' => $term,
+                            'session' => $session,
+                        ],
+                        [
+                            'status' => 'approved',
+                        ]
+                    );
+                }
+            }
+        }
+
         $query = ResultBatch::query()
             ->where('school_id', $schoolId);
 
@@ -37,12 +66,12 @@ class AdminResultDeadlineController extends Controller
             $query->where('status', $request->string('status')->toString());
         }
 
-        if ($request->filled('term')) {
-            $query->where('term', $request->string('term')->toString());
+        if ($term) {
+            $query->where('term', $term);
         }
 
-        if ($request->filled('session')) {
-            $query->where('session', $request->string('session')->toString());
+        if ($session) {
+            $query->where('session', $session);
         }
 
         $batches = $query
@@ -66,7 +95,22 @@ class AdminResultDeadlineController extends Controller
             ->whereIn('id', $classIds)
             ->pluck('name', 'id');
 
-        $items = $batches->map(function ($batch) use ($classMap) {
+        $items = $batches->map(function ($batch) use ($classMap, $schoolId) {
+            $totalStudents = \App\Models\User::where('school_id', $schoolId)
+                ->where('level_id', $batch->class_id)
+                ->whereRaw('LOWER(role) = ?', ['student'])
+                ->count();
+
+            $completedStudents = \App\Models\Average::where('school_id', $schoolId)
+                ->where('class_id', $batch->class_id)
+                ->where('session', $batch->session)
+                ->where('term', $batch->term)
+                ->count();
+
+            if ($completedStudents === 0) {
+                $completedStudents = \App\Models\StudentResultV2::where('batch_id', $batch->id)->count();
+            }
+
             return [
                 'id' => $batch->id,
                 'school_id' => $batch->school_id,
@@ -74,10 +118,14 @@ class AdminResultDeadlineController extends Controller
                 'class_name' => $classMap[$batch->class_id] ?? "Class {$batch->class_id}",
                 'term' => $batch->term,
                 'session' => $batch->session,
-                'status' => $batch->status,
+                'status' => $batch->status ?: ($completedStudents > 0 ? 'approved' : 'draft'),
                 'submission_deadline' => optional($batch->submission_deadline)?->toDateString(),
                 'created_at' => optional($batch->created_at)?->toDateTimeString(),
                 'updated_at' => optional($batch->updated_at)?->toDateTimeString(),
+                'review' => [
+                    'total_students' => $totalStudents,
+                    'completed_students' => $completedStudents,
+                ],
             ];
         });
 

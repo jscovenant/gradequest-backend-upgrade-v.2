@@ -1326,7 +1326,30 @@ private function findLegacyColumnPolicyViolation(array $rows, array $policy): ?s
                 }
             }
 
-            if ($average) {
+            // 3. Intelligent Fallback: If no result in requested session/term, auto-resolve to student's latest recorded session and term
+            if (!$average) {
+                $latestAverage = \App\Models\Average::where('user_id', $student->id)
+                    ->where('school_id', $auth->school_id)
+                    ->orderByDesc('id')
+                    ->first();
+
+                if ($latestAverage) {
+                    $average = $latestAverage;
+                    $currentSession = $average->session;
+                    $currentTerm = $average->term;
+                    if ($average->class_id) {
+                        $classId = (int) $average->class_id;
+                    }
+                    $termModel = match (strtolower($currentTerm)) {
+                        'first term', 'firstterm' => \App\Models\FirstTermResult::class,
+                        'second term', 'secondterm' => \App\Models\SecondTermResult::class,
+                        'third term', 'thirdterm' => \App\Models\ThirdTermResult::class,
+                        default => null,
+                    };
+                }
+            }
+
+            if ($average && $termModel) {
                 $existingResults = $termModel::with('subject')
                     ->where('average_id', $average->id)
                     ->get();
