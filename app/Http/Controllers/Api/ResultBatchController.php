@@ -596,16 +596,31 @@ public function resultForm(int $batchId, int $studentId)
     if ($currentIndex !== false) {
         $previousTerms = $termNames->slice(0, $currentIndex)->values()->all();
     }
+    if (empty($previousTerms)) {
+        if (strcasecmp($currentTerm, 'Third Term') === 0 || str_contains(strtolower($currentTerm), 'third')) {
+            $previousTerms = ['First Term', 'Second Term'];
+        } elseif (strcasecmp($currentTerm, 'Second Term') === 0 || str_contains(strtolower($currentTerm), 'second')) {
+            $previousTerms = ['First Term'];
+        }
+    }
+
+    // Map student's current subjects by normalized name for robust matching
+    $currentSubjectNameToId = [];
+    foreach ($subjects as $s) {
+        $currentSubjectNameToId[strtolower(trim((string) $s->name))] = (int) $s->id;
+    }
 
     $carryOverPreview = [];
     foreach ($previousTerms as $tName) {
+        $tLower = strtolower(trim((string) $tName));
+
+        // 1. Search Result Batches (V2)
         $rows = DB::table('result_batches as rb')
             ->join('student_results_v2 as sr', 'sr.batch_id', '=', 'rb.id')
             ->join('subject_results_v2 as subr', 'subr.student_result_id', '=', 'sr.id')
             ->where('rb.school_id', $schoolId)
-            ->where('rb.class_id', $batch->class_id)
             ->where('rb.session', $batch->session)
-            ->where('rb.term', $tName)
+            ->whereRaw('LOWER(rb.term) = ?', [$tLower])
             ->where('sr.user_id', $student->id)
             ->select(['subr.subject_id', 'subr.total'])
             ->get();
@@ -616,6 +631,49 @@ public function resultForm(int $batchId, int $studentId)
             if ($total !== null) {
                 $carryOverPreview[$sid] ??= [];
                 $carryOverPreview[$sid][$tName] = $total;
+            }
+        }
+
+        // 2. Fallback to Legacy Tables (first_term_results, second_term_results)
+        if (str_contains($tLower, 'first')) {
+            $legacyFirst = DB::table('first_term_results as f')
+                ->leftJoin('subjects as sub', 'sub.id', '=', 'f.subject_id')
+                ->where('f.user_id', $student->id)
+                ->where('f.school_id', $schoolId)
+                ->select(['f.subject_id', 'sub.name as subject_name', 'f.total'])
+                ->get();
+
+            foreach ($legacyFirst as $lr) {
+                $tot = is_null($lr->total) ? null : (float) $lr->total;
+                if ($tot === null) continue;
+
+                $normName = strtolower(trim((string) $lr->subject_name));
+                $targetSid = $currentSubjectNameToId[$normName] ?? (int) $lr->subject_id;
+
+                if (!isset($carryOverPreview[$targetSid][$tName])) {
+                    $carryOverPreview[$targetSid] ??= [];
+                    $carryOverPreview[$targetSid][$tName] = $tot;
+                }
+            }
+        } elseif (str_contains($tLower, 'second')) {
+            $legacySecond = DB::table('second_term_results as s')
+                ->leftJoin('subjects as sub', 'sub.id', '=', 's.subject_id')
+                ->where('s.user_id', $student->id)
+                ->where('s.school_id', $schoolId)
+                ->select(['s.subject_id', 'sub.name as subject_name', 's.total'])
+                ->get();
+
+            foreach ($legacySecond as $lr) {
+                $tot = is_null($lr->total) ? null : (float) $lr->total;
+                if ($tot === null) continue;
+
+                $normName = strtolower(trim((string) $lr->subject_name));
+                $targetSid = $currentSubjectNameToId[$normName] ?? (int) $lr->subject_id;
+
+                if (!isset($carryOverPreview[$targetSid][$tName])) {
+                    $carryOverPreview[$targetSid] ??= [];
+                    $carryOverPreview[$targetSid][$tName] = $tot;
+                }
             }
         }
     }
@@ -715,13 +773,16 @@ private function resultColumnPolicy(int $schoolId, int $classId, string $term): 
         $columns = array_merge($columns, is_array($rule['columns'] ?? null) ? $rule['columns'] : []);
     }
 
+    $isCumulativeTerm = str_contains(strtolower($term), 'third') || str_contains(strtolower($term), 'second');
+
     return [
         'section_id' => $sectionId,
         'section_name' => $class?->section?->name,
         'term' => $term,
         'columns' => $columns,
         'carry_over_allowed' => (bool) (
-            ($columns['show_first_term'] ?? false)
+            $isCumulativeTerm
+            || ($columns['show_first_term'] ?? false)
             || ($columns['show_second_term'] ?? false)
             || ($columns['show_cumulative_total'] ?? false)
             || ($columns['show_cumulative_average'] ?? false)

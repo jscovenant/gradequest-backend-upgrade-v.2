@@ -1117,13 +1117,16 @@ private function resultColumnPolicy(int $schoolId, int $classId, string $term): 
         $columns = array_merge($columns, is_array($rule['columns'] ?? null) ? $rule['columns'] : []);
     }
 
+    $isCumulativeTerm = str_contains(strtolower($term), 'third') || str_contains(strtolower($term), 'second');
+
     return [
         'section_id' => $sectionId,
         'section_name' => $class?->section?->name,
         'term' => $term,
         'columns' => $columns,
         'carry_over_allowed' => (bool) (
-            ($columns['show_first_term'] ?? false)
+            $isCumulativeTerm
+            || ($columns['show_first_term'] ?? false)
             || ($columns['show_second_term'] ?? false)
             || ($columns['show_cumulative_total'] ?? false)
             || ($columns['show_cumulative_average'] ?? false)
@@ -1133,6 +1136,13 @@ private function resultColumnPolicy(int $schoolId, int $classId, string $term): 
 
 private function findCarryOverPolicyViolation(array $rows, array $policy): ?string
 {
+    $term = strtolower(trim((string) ($policy['term'] ?? '')));
+
+    // For Third Term and Second Term, cumulative assessments are standard practice and allowed
+    if (str_contains($term, 'third') || str_contains($term, 'second')) {
+        return null;
+    }
+
     $columns = $policy['columns'] ?? [];
 
     foreach ($rows as $row) {
