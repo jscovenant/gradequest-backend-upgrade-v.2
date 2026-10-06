@@ -97,10 +97,33 @@ class StudentExcelImportService
             $rowErrors = [];
             $rowWarnings = [];
 
-            $firstname = trim((string) ($row['firstname'] ?? ''));
-            $surname = trim((string) ($row['surname'] ?? ''));
-            $thirdName = trim((string) ($row['third_name'] ?? ''));
-            $gender = $this->normalizeGender($row['gender'] ?? '');
+            $firstname = trim((string) ($row['firstname'] ?? $row['first_name'] ?? $row['student_firstname'] ?? ''));
+            $surname = trim((string) ($row['surname'] ?? $row['last_name'] ?? $row['lastname'] ?? $row['student_surname'] ?? ''));
+            $thirdName = trim((string) ($row['third_name'] ?? $row['middle_name'] ?? $row['middlename'] ?? $row['other_name'] ?? $row['other_names'] ?? ''));
+
+            // Fallback for full name column
+            if ($firstname === '' && $surname === '' && !empty($row['name'] ?? $row['full_name'] ?? $row['fullname'] ?? $row['student_name'])) {
+                $rawFullName = trim((string) ($row['name'] ?? $row['full_name'] ?? $row['fullname'] ?? $row['student_name']));
+                $parts = preg_split('/\s+/', $rawFullName);
+                if (count($parts) === 1) {
+                    $surname = $parts[0];
+                    $firstname = $parts[0];
+                } elseif (count($parts) === 2) {
+                    $surname = $parts[0];
+                    $firstname = $parts[1];
+                } else {
+                    $surname = $parts[0];
+                    $firstname = $parts[1];
+                    $thirdName = implode(' ', array_slice($parts, 2));
+                }
+            }
+
+            // Skip completely blank rows
+            if ($firstname === '' && $surname === '' && empty($row['admission_no']) && empty($row['class'])) {
+                continue;
+            }
+
+            $gender = $this->normalizeGender($row['gender'] ?? $row['sex'] ?? '');
             $admissionNo = strtoupper(trim((string) ($row['admission_no'] ?? '')));
             $email = trim((string) ($row['email'] ?? ''));
 
@@ -177,18 +200,29 @@ class StudentExcelImportService
         }
 
         $readyCount = collect($readyRows)->where('status', 'ready')->count();
-        $remainingSlots = $admin->remainingStudentSlots();
-        if ($remainingSlots !== null && $readyCount > $remainingSlots) {
-            $errors[] = "This file has {$readyCount} valid student(s), but your current plan only allows {$remainingSlots} more active student(s).";
+        $isSuperAdmin = $admin && (
+            in_array(strtolower((string) $admin->role), ['superadmin', 'super-admin', 'super_admin', 'platform_staff', 'platformstaff'], true)
+            || (method_exists($admin, 'isSuperAdminUser') && $admin->isSuperAdminUser())
+        );
+
+        if (! $isSuperAdmin) {
+            $remainingSlots = $admin ? $admin->remainingStudentSlots() : null;
+            if ($remainingSlots !== null && $readyCount > $remainingSlots) {
+                $errors[] = "This file has {$readyCount} valid student(s), but your current plan only allows {$remainingSlots} more active student(s).";
+            }
         }
 
         return [
             'summary' => [
+                'total' => count($mappedRows),
                 'total_rows' => count($mappedRows),
+                'ready' => $readyCount,
                 'ready_rows' => $readyCount,
+                'errors' => count($errors),
                 'errors_count' => count($errors),
+                'warnings' => count($warnings),
                 'warnings_count' => count($warnings),
-                'can_import' => count($errors) === 0 && $readyCount > 0,
+                'can_import' => $readyCount > 0,
             ],
             'rows' => $readyRows,
             'errors' => $errors,
@@ -201,11 +235,15 @@ class StudentExcelImportService
         $schoolId = $explicitSchoolId ?: (int) $admin?->school_id;
         $preview = $this->preview($admin, $file, $schoolId);
 
-        if (! ($preview['summary']['can_import'] ?? false)) {
+        $readyRows = collect($preview['rows'])->where('status', 'ready');
+
+        if ($readyRows->isEmpty()) {
             return [
                 'imported' => 0,
                 'preview' => $preview,
-                'message' => 'Import was not completed because the file still has errors.',
+                'message' => !empty($preview['errors'])
+                    ? 'Import failed: ' . implode('; ', array_slice($preview['errors'], 0, 3))
+                    : 'No valid student rows found in the uploaded file.',
             ];
         }
 
@@ -213,9 +251,14 @@ class StudentExcelImportService
         $autoAdmission = (int) ($settings?->auto_admission ?? 0) === 1;
         $created = [];
 
-        DB::transaction(function () use ($preview, $admin, $schoolId, $settings, $autoAdmission, &$created) {
-            foreach (collect($preview['rows'])->where('status', 'ready') as $row) {
-                if ($admin && ! $admin->isSuperAdminUser()) {
+        DB::transaction(function () use ($readyRows, $admin, $schoolId, $settings, $autoAdmission, &$created) {
+            $isSuperAdmin = $admin && (
+                in_array(strtolower((string) $admin->role), ['superadmin', 'super-admin', 'super_admin', 'platform_staff', 'platformstaff'], true)
+                || (method_exists($admin, 'isSuperAdminUser') && $admin->isSuperAdminUser())
+            );
+
+            foreach ($readyRows as $row) {
+                if ($admin && ! $isSuperAdmin) {
                     try {
                         $admin->assertCanAddStudents();
                     } catch (SubscriptionLimitExceededException $e) {
@@ -461,8 +504,8 @@ class StudentExcelImportService
     {
         $value = strtolower(trim((string) $value));
         return match ($value) {
-            'm', 'male' => 'Male',
-            'f', 'female' => 'Female',
+            'm', 'male', 'boy' => 'Male',
+            'f', 'female', 'girl' => 'Female',
             default => '',
         };
     }
@@ -482,7 +525,46 @@ class StudentExcelImportService
     private function normalizeHeader($value): string
     {
         $value = strtolower(trim((string) $value));
-        $value = str_replace(['admission number', 'admission no', 'reg no', 'registration no', 'middle name'], ['admission_no', 'admission_no', 'admission_no', 'admission_no', 'third_name'], $value);
+        $value = str_replace(
+            ['first name', 'student first name', 'given name'],
+            'firstname',
+            $value
+        );
+        $value = str_replace(
+            ['last name', 'surname', 'family name'],
+            'surname',
+            $value
+        );
+        $value = str_replace(
+            ['middle name', 'other name', 'other names', 'third name'],
+            'third_name',
+            $value
+        );
+        $value = str_replace(
+            ['admission number', 'admission no', 'admission_no', 'reg no', 'registration no', 'student id', 'matric no', 'reg_no'],
+            'admission_no',
+            $value
+        );
+        $value = str_replace(
+            ['phone number', 'phone no', 'mobile', 'telephone', 'parent phone', 'guardian phone'],
+            'phone',
+            $value
+        );
+        $value = str_replace(
+            ['date of birth', 'birth date', 'dob'],
+            'dob',
+            $value
+        );
+        $value = str_replace(
+            ['home address', 'residential address', 'contact address'],
+            'address',
+            $value
+        );
+        $value = str_replace(
+            ['sex', 'gender'],
+            'gender',
+            $value
+        );
         $value = preg_replace('/[^a-z0-9]+/', '_', $value) ?: '';
         return trim($value, '_');
     }

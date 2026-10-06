@@ -448,12 +448,26 @@ class SuperAdminSchoolSetupController extends Controller
                 ->where('status', 1)
                 ->count();
 
+            if (($result['imported'] ?? 0) === 0) {
+                return response()->json([
+                    'message' => $result['message'] ?? 'No valid students could be imported from the file.',
+                    'imported' => 0,
+                    'total_students' => $newCount,
+                    'details' => $result,
+                ], 422);
+            }
+
+            $successMsg = "Successfully imported {$result['imported']} students for {$school->school_name}.";
+            if (!empty($result['skipped_errors'])) {
+                $successMsg .= " ({$result['skipped_errors']} invalid row(s) were skipped).";
+            }
+
             return response()->json([
-                'message' => "Successfully imported {$result['imported']} students for {$school->school_name}.",
-                'imported' => $result['imported'] ?? 0,
+                'message' => $successMsg,
+                'imported' => $result['imported'],
                 'total_students' => $newCount,
                 'details' => $result,
-            ], ($result['imported'] ?? 0) > 0 ? 201 : 422);
+            ], 201);
         } catch (\InvalidArgumentException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         }
