@@ -10,6 +10,7 @@ use App\Models\AcademicSession; // or Session (adjust if needed)
 use App\Models\Department;
 use App\Models\Section;
 use App\Models\TeacherEnrollment;
+use Illuminate\Support\Facades\Schema;
 
 class FilterSetupController extends Controller
 {
@@ -27,12 +28,21 @@ public function studentClasses(Request $request)
         ->whereNull('archived_at')
         ->orderBy('name');
 
-    // ✅ If Teacher: only classes assigned to the teacher
-    if ($user->role === 'Teacher') {
+    // ✅ If Teacher: strictly only classes assigned to this teacher
+    $roleNorm = strtolower((string) ($user->role ?? ''));
+    if (in_array($roleNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $enrolledLevelIds = TeacherEnrollment::where('school_id', $schoolId)
-            ->where('user_id', $user->id)
+            ->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id);
+                if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                    $q->orWhere('teacher_id', $user->id);
+                }
+            })
             ->where('enroll', '1')
             ->pluck('level_id')
+            ->filter()
+            ->unique()
+            ->values()
             ->toArray();
 
         $query->whereIn('id', $enrolledLevelIds);

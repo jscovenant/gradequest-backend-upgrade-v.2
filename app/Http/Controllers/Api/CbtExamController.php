@@ -641,6 +641,14 @@ Fruits | 4 | 200',
 
         if ($user) {
             $this->access->ensureCanUse($user, 'offline');
+            $role = strtolower((string) ($user->role ?? ''));
+            abort_unless(
+                in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true),
+                403,
+                'Only school administrators can download the offline CBT package or app.'
+            );
+        } else {
+            abort(401, 'Unauthenticated.');
         }
 
         $candidates = [

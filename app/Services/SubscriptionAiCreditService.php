@@ -17,7 +17,7 @@ class SubscriptionAiCreditService
     {
         $admin = User::query()
             ->where('school_id', $schoolId)
-            ->where('role', 'Admin')
+            ->whereIn('role', ['Admin', 'admin', 'proprietor', 'Proprietor', 'owner', 'Owner'])
             ->first();
 
         if (! $admin) {
@@ -59,7 +59,7 @@ class SubscriptionAiCreditService
 
             $admin = User::query()
                 ->where('school_id', $schoolId)
-                ->where('role', 'Admin')
+                ->whereIn('role', ['Admin', 'admin', 'proprietor', 'Proprietor', 'owner', 'Owner'])
                 ->first();
 
             return SubscriptionAiUsage::query()->create([
@@ -135,7 +135,7 @@ class SubscriptionAiCreditService
             ]);
         }
 
-        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
             $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
                 ->where('school_id', $schoolId)
                 ->where('user_id', $user->id)
@@ -171,7 +171,7 @@ class SubscriptionAiCreditService
                 ]);
             }
 
-            if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+            if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
                 $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
                     ->where('school_id', $schoolId)
                     ->where('user_id', $user->id)
@@ -212,7 +212,7 @@ class SubscriptionAiCreditService
     {
         $staffMembers = User::query()
             ->where('school_id', $schoolId)
-            ->whereIn('role', ['Teacher', 'teacher', 'Staff', 'staff', 'Principal', 'principal', 'Admin', 'admin'])
+            ->whereIn('role', ['Teacher', 'teacher', 'class_teacher', 'Class_Teacher', 'Class Teacher', 'subject_teacher', 'Subject_Teacher', 'Subject Teacher', 'Staff', 'staff', 'Principal', 'principal', 'Admin', 'admin'])
             ->get();
 
         $allocations = \App\Models\SchoolStaffAiCreditAllocation::query()
@@ -338,7 +338,7 @@ class SubscriptionAiCreditService
         $policy = $this->policy();
 
         $userAllocation = null;
-        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'principal', 'super-admin'], true)) {
+        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
             $alloc = \App\Models\SchoolStaffAiCreditAllocation::query()
                 ->where('school_id', $schoolId)
                 ->where('user_id', $user->id)

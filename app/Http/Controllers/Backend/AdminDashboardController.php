@@ -327,9 +327,9 @@ public function parentDetails(Request $request)
     $parent = Auth::user();
 
     // Ensure only a parent can access this
-  if (!$parent->role || $parent->role !== 'Parent') {
-    return response()->json(['message' => 'Unauthorized'], 403);
-}
+    if (!$parent || (!$parent->isParent() && strcasecmp((string) $parent->role, 'parent') !== 0)) {
+        return response()->json(['message' => 'Unauthorized'], 403);
+    }
 
 
     // Fetch children linked to this parent (with student info)

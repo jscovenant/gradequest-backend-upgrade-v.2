@@ -222,27 +222,31 @@ class WhogohostResellerService
             $i++;
         }
 
+        $isNg = str_ends_with($domain, '.ng');
+        $contactDetails = [
+            'firstname' => $contact['firstname'] ?? 'School',
+            'lastname' => $contact['lastname'] ?? 'Admin',
+            'fullname' => trim(($contact['firstname'] ?? 'School') . ' ' . ($contact['lastname'] ?? 'Admin')),
+            'companyname' => $contact['company'] ?? ($contact['companyname'] ?? 'SchoolProfit Education'),
+            'email' => $contact['email'] ?? $this->email,
+            'address1' => $contact['address1'] ?? '12 Allen Avenue, Ikeja',
+            'city' => $contact['city'] ?? 'Ikeja',
+            'state' => $contact['state'] ?? 'Lagos',
+            'postcode' => $contact['postcode'] ?? '100001',
+            'country' => $contact['country'] ?? 'NG',
+            'phonenumber' => $contact['phonenumber'] ?? '+234.8030000000',
+        ];
+
         $params = [
             'domain' => $domain,
             'regperiod' => max(1, $years),
             'paymentmethod' => config('services.whogohost.payment_method', 'banktransfer'),
-            'addons' => [
-                'dnsmanagement' => 1,
-                'emailforwarding' => 0,
-                'idprotection' => 1,
-            ],
             'nameservers' => $nsPayload,
             'contacts' => [
-                'firstname' => $contact['firstname'] ?? 'School',
-                'lastname' => $contact['lastname'] ?? 'Admin',
-                'companyname' => $contact['company'] ?? ($contact['companyname'] ?? 'SchoolProfit Education'),
-                'email' => $contact['email'] ?? $this->email,
-                'address1' => $contact['address1'] ?? '12 Allen Avenue, Ikeja',
-                'city' => $contact['city'] ?? 'Ikeja',
-                'state' => $contact['state'] ?? 'Lagos',
-                'postcode' => $contact['postcode'] ?? '100001',
-                'country' => $contact['country'] ?? 'NG',
-                'phonenumber' => $contact['phonenumber'] ?? '+234.8030000000',
+                'registrant' => $contactDetails,
+                'admin' => $contactDetails,
+                'tech' => $contactDetails,
+                'billing' => $contactDetails,
             ],
         ];
 
@@ -422,8 +426,9 @@ class WhogohostResellerService
                 ->post($endpoint, $nsPayload);
 
             $data = $response->json();
+            $resultStatus = strtolower((string) ($data['result'] ?? ($data['status'] ?? '')));
             return [
-                'success' => $response->successful() && (($data['result'] ?? '') === 'success'),
+                'success' => $response->successful() && in_array($resultStatus, ['success', 'true', 'ok'], true),
                 'message' => $data['message'] ?? ($data['error'] ?? 'Nameservers updated.'),
                 'raw' => $data,
             ];

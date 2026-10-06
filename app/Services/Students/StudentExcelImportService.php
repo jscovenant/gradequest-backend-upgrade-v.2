@@ -75,9 +75,9 @@ class StudentExcelImportService
         );
     }
 
-    public function preview(User $admin, UploadedFile $file): array
+    public function preview(?User $admin, UploadedFile $file, ?int $explicitSchoolId = null): array
     {
-        $schoolId = (int) $admin->school_id;
+        $schoolId = $explicitSchoolId ?: (int) $admin?->school_id;
         $rows = $this->readRows($file);
         $mappedRows = $this->mapRows($rows);
         $errors = [];
@@ -141,12 +141,11 @@ class StudentExcelImportService
             }
 
             $class = $this->resolveOrCreateClass($schoolId, $classes, $row['class'] ?? null);
-            $section = $this->resolveOrCreateSection($schoolId, $sections, $row['section'] ?? null);
-            $department = $this->resolveOrCreateDepartment($schoolId, $departments, $row['department'] ?? null);
+            $section = $this->resolveOrCreateSection($schoolId, $sections, $row['section'] ?? null, $class);
+            $department = $this->resolveDepartment($schoolId, $departments, $row['department'] ?? null);
 
             if (! $class) $rowErrors[] = 'Class was not found. Use class name or ID exactly as saved.';
-            if (! $section) $rowErrors[] = 'Section was not found. Use section name or ID exactly as saved.';
-            if (! $department) $rowErrors[] = 'Department was not found. Use department name or ID exactly as saved.';
+            if (! $section && ! $class?->section_id) $rowErrors[] = 'Section was not found. Use section name or ID exactly as saved.';
 
             $readyRows[] = [
                 'row' => $rowNumber,
@@ -197,9 +196,10 @@ class StudentExcelImportService
         ];
     }
 
-    public function import(User $admin, UploadedFile $file): array
+    public function import(?User $admin, UploadedFile $file, ?int $explicitSchoolId = null): array
     {
-        $preview = $this->preview($admin, $file);
+        $schoolId = $explicitSchoolId ?: (int) $admin?->school_id;
+        $preview = $this->preview($admin, $file, $schoolId);
 
         if (! ($preview['summary']['can_import'] ?? false)) {
             return [
@@ -209,17 +209,18 @@ class StudentExcelImportService
             ];
         }
 
-        $schoolId = (int) $admin->school_id;
         $settings = SchoolSetting::where('id', $schoolId)->first();
         $autoAdmission = (int) ($settings?->auto_admission ?? 0) === 1;
         $created = [];
 
         DB::transaction(function () use ($preview, $admin, $schoolId, $settings, $autoAdmission, &$created) {
             foreach (collect($preview['rows'])->where('status', 'ready') as $row) {
-                try {
-                    $admin->assertCanAddStudents();
-                } catch (SubscriptionLimitExceededException $e) {
-                    throw $e;
+                if ($admin && ! $admin->isSuperAdminUser()) {
+                    try {
+                        $admin->assertCanAddStudents();
+                    } catch (SubscriptionLimitExceededException $e) {
+                        throw $e;
+                    }
                 }
 
                 $regNo = $row['admission_no'] ?: $this->generateAdmissionNo($settings);
@@ -387,11 +388,14 @@ class StudentExcelImportService
         }
     }
 
-    private function resolveOrCreateSection(int $schoolId, Collection &$sections, $value)
+    private function resolveOrCreateSection(int $schoolId, Collection &$sections, $value, ?StudentClass $class = null)
     {
         $val = trim((string) $value);
         if ($val === '') {
-            $val = $sections->first()?->name ?? 'Junior';
+            if ($class && $class->section_id) {
+                return $sections->firstWhere('id', $class->section_id);
+            }
+            return $sections->first();
         }
 
         $found = $sections->first(fn ($item) => (string) $item->id === $val)
@@ -420,11 +424,11 @@ class StudentExcelImportService
         }
     }
 
-    private function resolveOrCreateDepartment(int $schoolId, Collection &$departments, $value)
+    private function resolveDepartment(int $schoolId, Collection &$departments, $value)
     {
         $val = trim((string) $value);
-        if ($val === '') {
-            $val = $departments->first()?->name ?? 'General';
+        if ($val === '' || in_array(strtolower($val), ['none', 'n/a', 'na', 'null', 'general'], true)) {
+            return null;
         }
 
         $found = $departments->first(fn ($item) => (string) $item->id === $val)
@@ -449,7 +453,7 @@ class StudentExcelImportService
             $departments->push($created);
             return $created;
         } catch (\Throwable) {
-            return $departments->first();
+            return null;
         }
     }
 
@@ -466,9 +470,10 @@ class StudentExcelImportService
     private function generateAdmissionNo(?SchoolSetting $settings): string
     {
         $prefix = (string) ($settings?->prefix ?? 'GQ');
+        $surfix = (string) ($settings?->surfix ?? '');
 
         do {
-            $regNo = $prefix . random_int(100000, 999999);
+            $regNo = $prefix . random_int(100000, 999999) . $surfix;
         } while (User::where('reg_no', $regNo)->exists());
 
         return $regNo;

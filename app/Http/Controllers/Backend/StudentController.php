@@ -360,8 +360,8 @@ if (strtolower((string) $request->input('role')) === 'student') {
         'religion'      => 'nullable|string|max:255',
         'nationality'   => 'nullable|string|max:255',
         'level_id'       => 'required|integer',
-        'section_id'     => 'required|integer',
-        'department_id'  => 'required|integer',
+        'section_id'     => 'nullable|integer',
+        'department_id'  => 'nullable|integer',
         'reg_no'         => [
             Rule::requiredIf($schoolSetting->auto_admission == 0),
             'nullable',
@@ -375,7 +375,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
     if ($schoolSetting->auto_admission == 1) {
         do {
             $regNo = random_int(100000, 999999);
-            $finalRegNo = "{$schoolSetting->prefix}{$regNo}";
+            $finalRegNo = "{$schoolSetting->prefix}{$regNo}" . ($schoolSetting->surfix ? "{$schoolSetting->surfix}" : "");
         } while (User::where('reg_no', $finalRegNo)->exists());
     } else {
         $finalRegNo = strtoupper(trim($request->reg_no));
@@ -403,6 +403,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
 
     // âœ… Step 5: Create student
     $randomPassword = Str::random(8);
+    $class = StudentClass::where('school_id', $auth->school_id)->find($request->level_id);
 
     $user = new User();
     $user->firstname         = $request->firstname;
@@ -413,8 +414,8 @@ if (strtolower((string) $request->input('role')) === 'student') {
     $user->dob               = $request->dob;
     $user->address           = $request->address;
     $user->level_id          = $request->level_id;
-    $user->section_id        = $request->section_id;
-    $user->department_id     = $request->department_id;
+    $user->section_id        = $request->filled('section_id') ? (int) $request->section_id : ($class?->section_id ? (int) $class->section_id : null);
+    $user->department_id     = $request->filled('department_id') ? (int) $request->department_id : null;
     $user->blood_group       = $request->blood_group;
     $user->religion          = $request->religion;
     $user->nationality       = $request->nationality;
@@ -491,8 +492,8 @@ if (strtolower((string) $request->input('role')) === 'student') {
             'blood_group' => 'nullable|string',
             'religion' => 'nullable|string',
             'nationality' => 'nullable|string',
-            'section_id' => 'required|integer',
-            'department_id' => 'required|integer',
+            'section_id' => 'nullable|integer',
+            'department_id' => 'nullable|integer',
             'email' => 'nullable|email',
             'reg_no' => 'nullable|string', 
         ]);
@@ -511,12 +512,14 @@ if (strtolower((string) $request->input('role')) === 'student') {
         $student->address = $request->address;
         $student->email = $request->email;
         $student->sex = $request->sex;
-         $student->blood_group       = $request->blood_group;
+        $student->blood_group       = $request->blood_group;
         $student->religion          = $request->religion;
         $student->nationality       = $request->nationality;
+        
+        $class = StudentClass::where('school_id', $auth->school_id)->find($request->level_id);
         $student->level_id = $request->level_id;
-        $student->section_id = $request->section_id;
-        $student->department_id = $request->department_id; 
+        $student->section_id = $request->filled('section_id') ? (int) $request->section_id : ($class?->section_id ? (int) $class->section_id : $student->section_id);
+        $student->department_id = $request->filled('department_id') ? (int) $request->department_id : null; 
         $student->phone = $request->phone;
         $student->status = "1";
         $student->student_status = $request->student_status ?? $student->student_status ?? 'active';
@@ -822,17 +825,11 @@ public function updateStudentLifecycleStatus(Request $request, $id)
         ->orderBy('name')
         ->get();
 
-    // Admin can promote from any class
-    if (strtolower($user->role) === 'admin') {
-        return response()->json([
-            'user_role' => $user->role,
-            'from_classes' => $allClasses,
-            'all_classes' => $allClasses,
-        ]);
-    }
+    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
 
     // Teacher: only assigned classes as FROM
-    if (strtolower($user->role) === 'teacher') {
+    if ($isTeacherRole) {
         $enrolledLevelIds = TeacherEnrollment::where('user_id', $user->id)
             ->where('school_id', $schoolId)
             ->where('enroll', '1')
@@ -852,10 +849,10 @@ public function updateStudentLifecycleStatus(Request $request, $id)
         ]);
     }
 
-    // Default fallback (optional)
+    // Administrators, School Operators, Principals, and Proprietors can promote from any class
     return response()->json([
         'user_role' => $user->role,
-        'from_classes' => [],
+        'from_classes' => $allClasses,
         'all_classes' => $allClasses,
     ]);
 }
@@ -873,8 +870,11 @@ public function getStudentsByClass(Request $request)
 
     $classId = (int) $request->class_id;
 
+    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+
     // TEACHER restriction: class_id must be among enrolled classes
-    if (strtolower($user->role) === 'teacher') {
+    if ($isTeacherRole) {
         $allowed = TeacherEnrollment::where('user_id', $user->id)
             ->where('school_id', $schoolId)
             ->where('enroll', '1')
@@ -888,7 +888,7 @@ public function getStudentsByClass(Request $request)
         }
     }
 
-    // Admin is allowed for all classes in same school
+    // Admin, Operator, Principal is allowed for all classes in same school
     $students = User::where('school_id', $schoolId)
         ->withRole('student')
         ->where('level_id', $classId)
@@ -925,8 +925,11 @@ public function promoteStudents(Request $request)
     $toClass   = (int) $request->to_class;
     $studentIds = $request->student_ids;
 
+    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+
     // TEACHER restriction: must be assigned to from_class
-    if (strtolower($user->role) === 'teacher') {
+    if ($isTeacherRole) {
         $allowed = TeacherEnrollment::where('user_id', $user->id)
             ->where('school_id', $schoolId)
             ->where('enroll', '1')
@@ -977,9 +980,12 @@ public function promoteStudents(Request $request)
         ->filter()
         ->values();
 
-    if ($blockedStudents->isNotEmpty()) {
+    $blockedIds = $blockedStudents->pluck('id')->map(fn ($id) => (int) $id)->all();
+    $clearedIds = array_values(array_filter($studentIds, fn ($id) => ! in_array((int) $id, $blockedIds, true)));
+
+    if (empty($clearedIds)) {
         return response()->json([
-            'message' => 'Access denied. Please settle all outstanding fees for the selected student(s) before promotion.',
+            'message' => 'Access denied. The selected student(s) have unpaid platform fees and cannot be promoted.',
             'reason' => 'student_outstanding_billing_required',
             'blocked_students' => $blockedStudents,
         ], 402);
@@ -988,8 +994,21 @@ public function promoteStudents(Request $request)
     User::where('school_id', $schoolId)
         ->withRole('student')
         ->where('level_id', $fromClass)
-        ->whereIn('id', $studentIds)
+        ->whereIn('id', $clearedIds)
         ->update(['level_id' => $toClass]);
+
+    $promotedCount = count($clearedIds);
+
+    if ($blockedStudents->isNotEmpty()) {
+        $blockedCount = $blockedStudents->count();
+
+        return response()->json([
+            'message' => "{$promotedCount} student(s) promoted successfully. {$blockedCount} student(s) were held back because their platform fees are unpaid.",
+            'promoted_count' => $promotedCount,
+            'blocked_count' => $blockedCount,
+            'blocked_students' => $blockedStudents,
+        ]);
+    }
 
     return response()->json(['message' => 'Students promoted successfully']);
 }

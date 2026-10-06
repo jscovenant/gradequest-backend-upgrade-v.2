@@ -30,6 +30,7 @@ class CbtOfflineLicenseController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $this->ensureAdminOnly($request->user());
         $this->access->ensureCanUse($request->user(), 'offline');
 
         return response()->json([
@@ -42,6 +43,7 @@ class CbtOfflineLicenseController extends Controller
 
     public function generate(Request $request): JsonResponse
     {
+        $this->ensureAdminOnly($request->user());
         $this->access->ensureCanUse($request->user(), 'offline');
 
         $data = $request->validate([
@@ -92,6 +94,7 @@ class CbtOfflineLicenseController extends Controller
 
     public function revoke(Request $request, CbtOfflineLicense $license): JsonResponse
     {
+        $this->ensureAdminOnly($request->user());
         abort_unless((int) $license->school_id === (int) $request->user()->school_id, 403);
         $this->access->ensureCanUse($request->user(), 'offline');
 
@@ -105,6 +108,7 @@ class CbtOfflineLicenseController extends Controller
 
     public function exportBundle(Request $request, CbtOfflineLicense $license): StreamedResponse
     {
+        $this->ensureAdminOnly($request->user());
         abort_unless((int) $license->school_id === (int) $request->user()->school_id, 403);
         $this->access->ensureCanUse($request->user(), 'offline');
         $this->ensureLicenseIsUsable($license);
@@ -138,6 +142,7 @@ class CbtOfflineLicenseController extends Controller
 
     public function syncResults(Request $request, CbtOfflineLicense $license): JsonResponse
     {
+        $this->ensureAdminOnly($request->user());
         abort_unless((int) $license->school_id === (int) $request->user()->school_id, 403);
         $this->access->ensureCanUse($request->user(), 'offline');
         $this->ensureLicenseIsUsable($license);
@@ -512,5 +517,16 @@ class CbtOfflineLicenseController extends Controller
         );
 
         return ! $feeBlock;
+    }
+
+    private function ensureAdminOnly(?User $user): void
+    {
+        abort_unless($user, 401, 'Unauthenticated.');
+        $role = strtolower((string) ($user->role ?? ''));
+        abort_unless(
+            in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true),
+            403,
+            'Only school administrators can access or download offline CBT packages.'
+        );
     }
 }

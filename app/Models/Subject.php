@@ -17,6 +17,13 @@ class Subject extends Model
         'archived_at' => 'datetime',
     ];
 
+    protected $appends = ['subject_code'];
+
+    public function getSubjectCodeAttribute(): ?string
+    {
+        return $this->subject_id;
+    }
+
     public function subjectenroll()
     {
         return $this->hasOne(SubjectEnroll::class);

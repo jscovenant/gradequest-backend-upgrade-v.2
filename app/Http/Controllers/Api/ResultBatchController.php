@@ -22,6 +22,7 @@ use App\Services\Results\SubjectService;
 use App\Services\SchoolBillingService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use App\Models\TeacherEnrollment;
 
 /**
@@ -74,17 +75,23 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
         return response()->json(['message' => 'School not found for this user. Please contact admin.'], 422);
     }
 
-    // Ã¢Å“â€¦ Teacher can only resolve batch for assigned class(es)
-    if ($user->role === 'Teacher') {
+    // ✅ Teacher can only resolve batch for assigned class(es)
+    $roleNorm = strtolower((string) ($user->role ?? ''));
+    if (in_array($roleNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $allowed = TeacherEnrollment::where('school_id', $schoolId)
-            ->where('user_id', $user->id)
+            ->where(function ($q) use ($user) {
+                $q->where('user_id', $user->id);
+                if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                    $q->orWhere('teacher_id', $user->id);
+                }
+            })
             ->where('enroll', '1')
             ->where('level_id', $classId)
             ->exists();
 
         if (!$allowed) {
             return response()->json([
-                'message' => 'You are not allowed to create a batch for this class.'
+                'message' => 'You are only allowed to enter or upload results for your assigned class(es).'
             ], 403);
         }
     }
@@ -368,37 +375,42 @@ private function ensureCanEnterBatchResults(Request $request, ResultBatch $batch
   $this->ensureSameSchool($request, $batch);
 
   $user = $request->user();
-  $role = strtolower((string) $user->role);
+  $role = strtolower((string) ($user->role ?? ''));
 
-  if (in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+  if (in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin', 'proprietor', 'owner'], true)) {
     return;
   }
 
-  abort_if($role !== 'teacher', 403, 'Only authorized school staff can upload results.');
+  abort_if(! in_array($role, ['teacher', 'class_teacher', 'subject_teacher'], true), 403, 'Only authorized school staff can enter or upload results.');
 
   $assigned = TeacherEnrollment::query()
     ->where('school_id', (int) $batch->school_id)
-    ->where('user_id', (int) $user->id)
+    ->where(function ($q) use ($user) {
+        $q->where('user_id', (int) $user->id);
+        if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+            $q->orWhere('teacher_id', (int) $user->id);
+        }
+    })
     ->where('enroll', '1')
     ->where('level_id', (int) $batch->class_id)
     ->exists();
 
-  abort_if(! $assigned, 403, 'You can only upload results for students in your assigned class.');
+  abort_if(! $assigned, 403, 'You can only enter or upload results for students in your assigned class.');
 }
 
 private function ensureCanManageResultPublication(Request $request, ResultBatch $batch): void
 {
   $this->ensureSameSchool($request, $batch);
 
-  $role = strtolower((string) $request->user()->role);
-  abort_if(! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true), 403, 'Only the admin or principal can approve and publish results.');
+  $role = strtolower(str_replace([' ', '-'], '_', trim((string) $request->user()->role)));
+  abort_if(! in_array($role, ['admin', 'owner', 'proprietor', 'school_owner', 'school_admin', 'principal', 'head_teacher', 'headmaster', 'headmistress', 'super_admin', 'platform_staff'], true), 403, 'Only the administrator, proprietor or principal can approve and publish results.');
 }
 
 private function batchReviewSummary(ResultBatch $batch): array
 {
   $totalStudents = User::query()
     ->where('school_id', $batch->school_id)
-    ->where('role', 'Student')
+    ->whereRaw('LOWER(role) = ?', ['student'])
     ->where('level_id', $batch->class_id)
     ->count();
 
@@ -406,14 +418,14 @@ private function batchReviewSummary(ResultBatch $batch): array
     ->join('users as u', 'u.id', '=', 'sr.user_id')
     ->where('sr.batch_id', $batch->id)
     ->where('u.school_id', $batch->school_id)
-    ->where('u.role', 'Student')
+    ->whereRaw('LOWER(u.role) = ?', ['student'])
     ->where('u.level_id', $batch->class_id)
-    ->distinct('user_id')
+    ->distinct('sr.user_id')
     ->count('sr.user_id');
 
   $missingStudents = User::query()
     ->where('users.school_id', $batch->school_id)
-    ->where('users.role', 'Student')
+    ->whereRaw('LOWER(users.role) = ?', ['student'])
     ->where('users.level_id', $batch->class_id)
     ->leftJoin('student_results_v2 as sr', function ($join) use ($batch) {
       $join->on('sr.user_id', '=', 'users.id')

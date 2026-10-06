@@ -24,8 +24,9 @@ class AiCreditPurchaseController extends Controller
     public function quote(Request $request): JsonResponse
     {
         $user = $request->user();
-        $isAdmin = in_array(strtolower((string) ($user?->role ?? '')), ['admin', 'super-admin', 'principal'], true);
-        $canPurchase = in_array(strtolower((string) ($user?->role ?? '')), ['admin', 'super-admin', 'principal', 'teacher', 'staff', 'bursar'], true);
+        $role = strtolower((string) ($user?->role ?? ''));
+        $isAdmin = in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true);
+        $canPurchase = in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher', 'teacher', 'class_teacher', 'subject_teacher', 'staff', 'bursar', 'accountant'], true);
         $quantity = max(1, (int) $request->query('quantity', 1));
         $unitPrice = $this->unitPrice();
         $walletBalance = $isAdmin ? (float) (Wallet::where('user_id', $user->id)->value('balance') ?? 0) : null;
@@ -47,7 +48,7 @@ class AiCreditPurchaseController extends Controller
         $user = $request->user();
         $role = strtolower((string) ($user?->role ?? ''));
         abort_unless(
-            in_array($role, ['admin', 'super-admin', 'principal'], true),
+            in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true),
             403,
             'Only school administrators can purchase AI credits using the school wallet. Teachers and staff should purchase credits via online payment (Paystack).'
         );
@@ -199,7 +200,7 @@ class AiCreditPurchaseController extends Controller
 
             // If buyer is teacher or non-admin staff, allocate directly to their personal quota
             $buyer = \App\Models\User::find($locked->user_id);
-            if ($buyer && ! in_array(strtolower((string) ($buyer->role ?? '')), ['admin', 'super-admin', 'principal'], true)) {
+            if ($buyer && ! in_array(strtolower((string) ($buyer->role ?? '')), ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true)) {
                 $allocation = SchoolStaffAiCreditAllocation::query()
                     ->firstOrNew([
                         'school_id' => $locked->school_id,
@@ -237,6 +238,6 @@ class AiCreditPurchaseController extends Controller
     private function assertCanPurchaseCredits(Request $request): void
     {
         $role = strtolower((string) ($request->user()?->role ?? ''));
-        abort_unless(in_array($role, ['admin', 'super-admin', 'principal', 'teacher', 'staff', 'bursar'], true), 403, 'Unauthorized to purchase AI credits.');
+        abort_unless(in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher', 'teacher', 'class_teacher', 'subject_teacher', 'staff', 'bursar', 'accountant'], true), 403, 'Unauthorized to purchase AI credits.');
     }
 }

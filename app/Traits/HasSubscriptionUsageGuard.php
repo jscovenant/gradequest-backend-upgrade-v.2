@@ -119,7 +119,8 @@ trait HasSubscriptionUsageGuard
             // Fallback
         }
 
-        return false;
+        // 6. Registered tenant school is active for core student and school management
+        return true;
     }
 
     /**

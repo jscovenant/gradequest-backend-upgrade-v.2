@@ -614,7 +614,8 @@ class AiLessonPlanController extends Controller
 
     private function isTeacher($auth): bool
     {
-        return strtolower((string) ($auth->role ?? '')) === 'teacher';
+        $role = strtolower((string) ($auth->role ?? ''));
+        return in_array($role, ['teacher', 'class_teacher', 'subject_teacher', 'staff'], true);
     }
 
     private function verifiedYoutubeLinks(array $links): array
@@ -632,7 +633,10 @@ class AiLessonPlanController extends Controller
 
     private function authorizeTeacherOrAdmin($auth): void
     {
-        abort_unless($auth && in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'teacher', 'principal'], true), 403, 'Unauthorized.');
+        $role = strtolower((string) ($auth->role ?? ''));
+        abort_unless($auth && in_array($role, [
+            'admin', 'owner', 'proprietor', 'teacher', 'class_teacher', 'subject_teacher', 'principal', 'headteacher', 'head_teacher', 'staff'
+        ], true), 403, 'Unauthorized.');
     }
 
     private function authorizeSchoolResource(Request $request, int $schoolId): void

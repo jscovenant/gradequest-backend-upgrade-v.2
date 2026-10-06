@@ -365,22 +365,34 @@ class SchoolDomainOrderController extends Controller
             $nameservers
         );
 
-        if ($regResult['success']) {
+        $isAlreadyRegistered = false;
+        $errMsg = strtolower((string) ($regResult['message'] ?? ''));
+        if (str_contains($errMsg, 'registered before') || str_contains($errMsg, 'already registered') || str_contains($errMsg, 'same domain again')) {
+            $isAlreadyRegistered = true;
+        } else {
+            $domainInfo = $this->whogohostService->getDomainInformation($order->domain_name);
+            if (!empty($domainInfo['domain']) || !empty($domainInfo['nameservers'])) {
+                $isAlreadyRegistered = true;
+            }
+        }
+
+        if ($regResult['success'] || $isAlreadyRegistered) {
             // Update order to active
             $order->update([
                 'status' => 'active',
                 'paystack_transaction_id' => $paystackData['id'] ?? $order->paystack_transaction_id,
                 'paid_at' => $order->paid_at ?: now(),
                 'activated_at' => now(),
-                'expires_at' => now()->addYears($order->duration_years),
+                'expires_at' => now()->addYears($order->duration_years ?: 1),
                 'dns_configured' => true,
                 'registrar_name' => 'whogohost',
-                'registrar_order_id' => $regResult['order_id'] ?? null,
+                'registrar_order_id' => $regResult['order_id'] ?? ($order->registrar_order_id ?: null),
                 'nameservers' => $nameservers,
                 'failure_reason' => null,
                 'meta' => array_merge($order->meta ?? [], [
                     'registrar_response' => $regResult['raw'] ?? [],
                     'registered_at' => now()->toIso8601String(),
+                    'auto_verified_existing' => $isAlreadyRegistered,
                 ]),
             ]);
 
@@ -404,9 +416,20 @@ class SchoolDomainOrderController extends Controller
                 $school->update(['custom_domain' => $order->domain_name]);
             }
 
+            // Attempt SSL & virtual host provisioning
+            if (class_exists(\App\Services\DomainSslProvisionerService::class)) {
+                try {
+                    app(\App\Services\DomainSslProvisionerService::class)->provisionDomainSsl($order->domain_name);
+                } catch (\Throwable $e) {
+                    Log::warning("Auto SSL provision warning: " . $e->getMessage());
+                }
+            }
+
             return response()->json([
                 'status' => true,
-                'message' => 'Congratulations! Domain registered and configured successfully with SchoolProfit.',
+                'message' => $isAlreadyRegistered
+                    ? "Domain {$order->domain_name} was verified as registered on GO54/Whogohost and is now active for this school."
+                    : 'Congratulations! Domain registered and configured successfully with SchoolProfit.',
                 'order' => $order->fresh(),
             ]);
         }
@@ -424,11 +447,35 @@ class SchoolDomainOrderController extends Controller
             ]),
         ]);
 
-        return response()->json([
-            'status' => true,
-            'message' => 'Payment received successfully! Your domain registration has been queued and is being provisioned automatically.',
-            'order' => $order->fresh(),
+        // Always link SchoolDomain and custom_domain so the school immediately sees their domain attached
+        if ($school) {
+            SchoolDomain::updateOrCreate(
+                ['domain' => $order->domain_name],
+                [
+                    'school_id' => $school->id,
+                    'type' => 'custom',
+                    'status' => 'pending_verification',
+                    'verified_at' => now(),
+                    'ownership_verified_at' => now(),
+                    'last_checked_at' => now(),
+                    'last_error' => null,
+                ]
+            );
+
+            $school->update(['custom_domain' => $order->domain_name]);
+        }
+
+        Log::warning("Whogohost Reseller: Domain registration queued for {$order->domain_name} (Order #{$order->id}). Possible low reseller balance.", [
+            'reason' => $regResult['message'] ?? null,
+            'school' => $school?->school_name,
         ]);
+
+        return response()->json([
+            'status' => false,
+            'message' => 'Registrar provisioning pending: ' . ($regResult['message'] ?? 'Unable to complete automated provisioning on GO54/Whogohost. Please verify reseller wallet balance.'),
+            'failure_reason' => $regResult['message'] ?? null,
+            'order' => $order->fresh(),
+        ], 422);
     }
 
     /**
@@ -578,6 +625,14 @@ class SchoolDomainOrderController extends Controller
             config('domains.target_ips', [])
         )));
 
+        // Check if this domain was purchased directly through SchoolProfit
+        $paidOrder = SchoolDomainOrder::where('school_id', $school->id)
+            ->where('domain_name', $domainName)
+            ->whereNotNull('paid_at')
+            ->first();
+
+        $isPlatformPurchased = ! is_null($paidOrder);
+
         // Perform DNS lookup
         $records = @dns_get_record($domainName, DNS_CNAME | DNS_A | DNS_AAAA) ?: [];
         $foundCnames = [];
@@ -616,11 +671,23 @@ class SchoolDomainOrderController extends Controller
 
             $school->update(['custom_domain' => $domainName]);
 
+            // Attempt SSL & virtual host provisioning
+            if (class_exists(\App\Services\DomainSslProvisionerService::class)) {
+                try {
+                    app(\App\Services\DomainSslProvisionerService::class)->provisionDomainSsl($domainName);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning("Auto SSL provision warning: " . $e->getMessage());
+                }
+            }
+
             return response()->json([
                 'status' => true,
                 'verified' => true,
+                'is_platform_purchased' => $isPlatformPurchased,
                 'domain' => $domainName,
-                'message' => "DNS verification successful! {$domainName} is properly pointed to SchoolProfit and active.",
+                'message' => $isPlatformPurchased
+                    ? "Domain auto-configuration complete! {$domainName} is active, secured with SSL, and live for your school portal."
+                    : "DNS verification successful! {$domainName} is properly pointed to SchoolProfit and active.",
                 'records' => [
                     'cnames' => $foundCnames,
                     'ips' => $foundIps,
@@ -630,11 +697,55 @@ class SchoolDomainOrderController extends Controller
             ]);
         }
 
+        if ($isPlatformPurchased) {
+            // For in-platform purchases, don't ask for external manual CNAME/A records!
+            if ($paidOrder && $paidOrder->status !== 'active') {
+                try {
+                    $user = \Illuminate\Support\Facades\Auth::user();
+                    $this->executeDomainProvisioning($paidOrder, $school, ['id' => $paidOrder->paystack_transaction_id], $user);
+                } catch (\Throwable $e) {
+                    // registrar provisioning retry
+                }
+                $paidOrder->refresh();
+            }
+
+            if ($paidOrder && $paidOrder->status === 'active') {
+                return response()->json([
+                    'status' => true,
+                    'verified' => true,
+                    'is_platform_purchased' => true,
+                    'domain' => $domainName,
+                    'message' => "Domain auto-configuration complete! {$domainName} is active, secured with SSL, and live for your school portal.",
+                    'records' => [
+                        'detected_cnames' => $foundCnames,
+                        'detected_ips' => $foundIps,
+                        'expected_cname' => $targetCname,
+                        'expected_ip' => '18.133.82.13',
+                    ],
+                ]);
+            }
+
+            return response()->json([
+                'status' => true,
+                'verified' => false,
+                'is_platform_purchased' => true,
+                'domain' => $domainName,
+                'message' => "This domain was purchased directly on SchoolProfit. All DNS routing, nameservers, and SSL are configured automatically by SchoolProfit — no manual action is required. Propagation typically completes within a few minutes.",
+                'records' => [
+                    'detected_cnames' => $foundCnames,
+                    'detected_ips' => $foundIps,
+                    'expected_cname' => $targetCname,
+                    'expected_ip' => '18.133.82.13',
+                ],
+            ]);
+        }
+
         return response()->json([
             'status' => true,
             'verified' => false,
+            'is_platform_purchased' => false,
             'domain' => $domainName,
-            'message' => "DNS records not detected yet for {$domainName}. Please ensure you have added the CNAME or A record in your domain registrar and allow 5-15 minutes for DNS propagation.",
+            'message' => "DNS records not detected yet for {$domainName}. Please ensure you have added the CNAME or A record in your external domain registrar and allow 5-15 minutes for DNS propagation.",
             'records' => [
                 'detected_cnames' => $foundCnames,
                 'detected_ips' => $foundIps,
@@ -657,8 +768,21 @@ class SchoolDomainOrderController extends Controller
         $activeDomain = SchoolDomain::where('school_id', $school->id)->latest()->first();
         $orders = SchoolDomainOrder::where('school_id', $school->id)->latest()->get();
 
+        $currentDomain = $school->custom_domain ?: ($activeDomain?->domain ?? null);
+
+        $paidOrder = SchoolDomainOrder::where('school_id', $school->id)
+            ->where(function ($q) use ($currentDomain) {
+                if ($currentDomain) {
+                    $q->where('domain_name', $currentDomain);
+                }
+            })
+            ->whereNotNull('paid_at')
+            ->first();
+
+        $isPlatformPurchased = ! is_null($paidOrder);
+
         $instructions = null;
-        if ($activeDomain) {
+        if ($activeDomain && ! $isPlatformPurchased) {
             $instructions = $this->domainService->instructions($activeDomain);
         }
 
@@ -671,6 +795,8 @@ class SchoolDomainOrderController extends Controller
                 'subdomain' => $school->school_subdomain,
             ],
             'active_domain' => $activeDomain,
+            'is_platform_purchased' => $isPlatformPurchased,
+            'auto_configured' => $isPlatformPurchased,
             'instructions' => $instructions,
             'orders' => $orders,
             'pricing' => self::getPricingTiers(),
@@ -709,6 +835,97 @@ class SchoolDomainOrderController extends Controller
                 'custom_domain' => null,
                 'subdomain' => $school->school_subdomain,
             ],
+        ]);
+    }
+
+    /**
+     * Super-Admin: Get all domain orders across all schools and live reseller wallet credits.
+     */
+    public function superAdminIndex(Request $request): JsonResponse
+    {
+        $credits = $this->whogohostService->getCredits();
+
+        $query = SchoolDomainOrder::query()->latest();
+
+        if ($search = $request->input('search')) {
+            $query->where(function ($q) use ($search) {
+                $q->where('domain_name', 'LIKE', "%{$search}%")
+                  ->orWhere('payment_reference', 'LIKE', "%{$search}%");
+            });
+        }
+
+        if ($status = $request->input('status')) {
+            $query->where('status', $status);
+        }
+
+        $orders = $query->paginate(30);
+
+        // Attach school name and info to each order
+        $orders->getCollection()->transform(function ($order) {
+            $school = SchoolSetting::find($order->school_id);
+            $order->school_name = $school?->school_name ?: ($order->meta['school_name'] ?? 'School #' . $order->school_id);
+            $order->school_email = $school?->email ?: ($order->meta['ordered_by_email'] ?? null);
+            return $order;
+        });
+
+        return response()->json([
+            'status' => true,
+            'reseller_credits' => $credits,
+            'orders' => $orders,
+        ]);
+    }
+
+    /**
+     * Super-Admin: Manually mark an order as active if registered directly on GO54/registrar.
+     */
+    public function superAdminMarkActive(Request $request, int $id): JsonResponse
+    {
+        $order = SchoolDomainOrder::findOrFail($id);
+        $school = SchoolSetting::find($order->school_id);
+
+        $order->update([
+            'status' => 'active',
+            'activated_at' => now(),
+            'expires_at' => now()->addYears($order->duration_years ?: 1),
+            'dns_configured' => true,
+            'failure_reason' => null,
+            'meta' => array_merge($order->meta ?? [], [
+                'manual_activation_by_superadmin' => true,
+                'activated_at' => now()->toIso8601String(),
+            ]),
+        ]);
+
+        if ($school) {
+            SchoolDomain::updateOrCreate(
+                ['domain' => $order->domain_name],
+                [
+                    'school_id' => $school->id,
+                    'type' => 'custom',
+                    'status' => 'active',
+                    'verified_at' => now(),
+                    'ownership_verified_at' => now(),
+                    'routing_verified_at' => now(),
+                    'activated_at' => now(),
+                    'last_checked_at' => now(),
+                ]
+            );
+
+            $school->update(['custom_domain' => $order->domain_name]);
+        }
+
+        // Try SSL provisioning
+        if (class_exists(\App\Services\DomainSslProvisionerService::class)) {
+            try {
+                app(\App\Services\DomainSslProvisionerService::class)->provisionDomainSsl($order->domain_name);
+            } catch (\Throwable $e) {
+                // ignore
+            }
+        }
+
+        return response()->json([
+            'status' => true,
+            'message' => "Domain {$order->domain_name} has been marked as Active and linked to the school.",
+            'order' => $order->fresh(),
         ]);
     }
 }

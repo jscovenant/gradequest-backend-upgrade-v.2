@@ -372,19 +372,24 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
         return response()->json(['message' => 'This student does not belong to the selected result batch class.'], 403);
     }
 
-    $role = strtolower((string) $authUser->role);
-    if ($role === 'teacher') {
+    $role = strtolower((string) ($authUser->role ?? ''));
+    if (in_array($role, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $assigned = TeacherEnrollment::query()
             ->where('school_id', (int) $batchRow->school_id)
-            ->where('user_id', (int) $authUser->id)
+            ->where(function ($q) use ($authUser) {
+                $q->where('user_id', (int) $authUser->id);
+                if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                    $q->orWhere('teacher_id', (int) $authUser->id);
+                }
+            })
             ->where('enroll', '1')
             ->where('level_id', (int) $batchRow->class_id)
             ->exists();
 
         if (! $assigned) {
-            return response()->json(['message' => 'You can only save results for students in your assigned class.'], 403);
+            return response()->json(['message' => 'You can only enter or upload results for students in your assigned class.'], 403);
         }
-    } elseif (! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+    } elseif (! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin', 'proprietor', 'owner'], true)) {
         return response()->json(['message' => 'Only authorized school staff can save results.'], 403);
     }
 

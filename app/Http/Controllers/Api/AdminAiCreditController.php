@@ -12,8 +12,9 @@ class AdminAiCreditController extends Controller
     public function summary(Request $request, SubscriptionAiCreditService $service): JsonResponse
     {
         $auth = $request->user();
+        $role = strtolower((string) ($auth->role ?? ''));
 
-        if (! in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'teacher', 'principal', 'staff', 'bursar'], true)) {
+        if (! in_array($role, ['admin', 'owner', 'proprietor', 'teacher', 'class_teacher', 'subject_teacher', 'principal', 'headteacher', 'head_teacher', 'staff', 'bursar', 'accountant'], true)) {
             return response()->json(['message' => 'Unauthorized.'], 403);
         }
 
@@ -26,8 +27,9 @@ class AdminAiCreditController extends Controller
     public function staffAllocations(Request $request, SubscriptionAiCreditService $service): JsonResponse
     {
         $auth = $request->user();
+        $role = strtolower((string) ($auth->role ?? ''));
 
-        if (! in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'principal'], true)) {
+        if (! in_array($role, ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher'], true)) {
             return response()->json(['message' => 'Unauthorized. Only school administrators can manage AI credit allocations.'], 403);
         }
 
@@ -40,8 +42,9 @@ class AdminAiCreditController extends Controller
     public function allocateStaff(Request $request, SubscriptionAiCreditService $service): JsonResponse
     {
         $auth = $request->user();
+        $role = strtolower((string) ($auth->role ?? ''));
 
-        if (! in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'principal'], true)) {
+        if (! in_array($role, ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher'], true)) {
             return response()->json(['message' => 'Unauthorized. Only school administrators can allocate AI credits.'], 403);
         }
 
@@ -71,8 +74,9 @@ class AdminAiCreditController extends Controller
     public function bulkAllocateStaff(Request $request, SubscriptionAiCreditService $service): JsonResponse
     {
         $auth = $request->user();
+        $role = strtolower((string) ($auth->role ?? ''));
 
-        if (! in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'principal'], true)) {
+        if (! in_array($role, ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher'], true)) {
             return response()->json(['message' => 'Unauthorized. Only school administrators can allocate AI credits.'], 403);
         }
 
@@ -101,8 +105,9 @@ class AdminAiCreditController extends Controller
     public function revokeStaff(Request $request, int $userId, SubscriptionAiCreditService $service): JsonResponse
     {
         $auth = $request->user();
+        $role = strtolower((string) ($auth->role ?? ''));
 
-        if (! in_array(strtolower((string) ($auth->role ?? '')), ['admin', 'principal'], true)) {
+        if (! in_array($role, ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher'], true)) {
             return response()->json(['message' => 'Unauthorized. Only school administrators can revoke AI credit allocations.'], 403);
         }
 

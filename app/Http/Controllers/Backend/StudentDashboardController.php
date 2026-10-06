@@ -14,7 +14,7 @@ class StudentDashboardController extends Controller
     {
         $student = Auth::user();
 
-        if (!$student || $student->role !== 'Student') {
+        if (!$student || (!$student->isStudent() && strcasecmp((string) $student->role, 'student') !== 0)) {
             return response()->json(['message' => 'Unauthorized'], 403);
         }
 
@@ -24,10 +24,8 @@ class StudentDashboardController extends Controller
         // =========================
         // Profile / Class / Level
         // =========================
-        // If your users table has level_id or class_id, adapt accordingly.
-        // We'll attempt to derive "class" from student_classes if your schema uses it.
         $classInfo = DB::table('student_classes')
-            ->where('id', $student->level_id ?? null) // adjust if you store class on user
+            ->where('id', $student->level_id ?? null)
             ->first();
 
         // =========================
@@ -54,96 +52,131 @@ class StudentDashboardController extends Controller
             ->where('user_id', $studentId)
             ->count();
 
+        if ($subjectsCount === 0) {
+            try {
+                $subjects = app(\App\Services\Results\SubjectService::class)->subjectsForStudent($student);
+                $subjectsCount = $subjects->count();
+            } catch (\Throwable $e) {
+                if ($student->department_id) {
+                    $subjectsCount = DB::table('subjects')
+                        ->where('school_id', $schoolId)
+                        ->where('department_id', $student->department_id)
+                        ->count();
+                }
+                if ($subjectsCount === 0) {
+                    $subjectsCount = DB::table('subjects')
+                        ->where('school_id', $schoolId)
+                        ->count();
+                }
+            }
+        }
+
         // =========================
-        // Attendance (simple: present/absent counts)
-        // NOTE: adjust columns if your attendances table differs
-        // Common columns: user_id, attendance_status/status/att_status, created_at
-        // We'll assume:
-        //   attendances.user_id = student_id
-        //   attendances.att_status = 'present'|'absent'
-        // If your column name differs, update here.
+        // Attendance
         // =========================
-      
         $attendanceAgg = DB::table('attendances')
-    ->where('student_id', $studentId)
-    ->where('school_id', $schoolId) // good multi-tenant safety
-    ->selectRaw("
-        SUM(status = 'present') as present_days,
-        SUM(status = 'absent') as absent_days,
-        SUM(status = 'late') as late_days,
-        SUM(status = 'excused') as excused_days
-    ")
-    ->first();
+            ->where('student_id', $studentId)
+            ->where('school_id', $schoolId)
+            ->selectRaw("
+                SUM(status = 'present') as present_days,
+                SUM(status = 'absent') as absent_days,
+                SUM(status = 'late') as late_days,
+                SUM(status = 'excused') as excused_days
+            ")
+            ->first();
 
-$presentDays = (int) ($attendanceAgg->present_days ?? 0);
-$absentDays  = (int) ($attendanceAgg->absent_days ?? 0);
-$lateDays    = (int) ($attendanceAgg->late_days ?? 0);
-$excusedDays = (int) ($attendanceAgg->excused_days ?? 0);
+        $presentDays = (int) ($attendanceAgg->present_days ?? 0);
+        $absentDays  = (int) ($attendanceAgg->absent_days ?? 0);
+        $lateDays    = (int) ($attendanceAgg->late_days ?? 0);
+        $excusedDays = (int) ($attendanceAgg->excused_days ?? 0);
 
-$totalMarked = $presentDays + $absentDays + $lateDays + $excusedDays;
+        $totalMarked = $presentDays + $absentDays + $lateDays + $excusedDays;
+        $effectivePresent = $presentDays + $lateDays;
 
-// you can decide whether "late" counts as present or not.
-// Most schools count late as present:
-$effectivePresent = $presentDays + $lateDays;
+        $attendanceRate = $totalMarked > 0
+            ? round(($effectivePresent / $totalMarked) * 100, 1)
+            : 0;
 
-$attendanceRate = $totalMarked > 0
-    ? round(($effectivePresent / $totalMarked) * 100, 1)
-    : 0;
+        // Fallback to averages attendance if attendances table is empty
+        if ($attendanceRate == 0) {
+            $latestAvgAttendance = DB::table('averages')
+                ->where('user_id', $studentId)
+                ->where('school_id', $schoolId)
+                ->orderByDesc('id')
+                ->first();
+            if ($latestAvgAttendance) {
+                $present = (float) ($latestAvgAttendance->no_present ?? 0);
+                $absent = (float) ($latestAvgAttendance->no_absent ?? 0);
+                $open = (float) ($latestAvgAttendance->school_open ?? ($present + $absent));
+                if ($open > 0) {
+                    $attendanceRate = round(($present / $open) * 100, 1);
+                } elseif (($present + $absent) > 0) {
+                    $attendanceRate = round(($present / ($present + $absent)) * 100, 1);
+                }
+            }
+        }
 
         // =========================
         // Result availability / performance chart
-        // Using subject_results_v2 as the source of scores.
-        // We’ll group by term+session and compute AVG(effective_total or total).
-        // Adjust column names if needed:
-        // - term, session, effective_total
         // =========================
-       $perfRows = DB::table('subject_results_v2 as sr')
-    ->join('student_results_v2 as r', 'r.id', '=', 'sr.student_result_id')
-    ->join('result_batches as b', 'b.id', '=', 'r.batch_id')
-    ->where('r.user_id', $studentId)
-    ->selectRaw("
-        CONCAT(b.session, ' - ', b.term) as label,
-        AVG(COALESCE(NULLIF(sr.total, ''), 0) + 0) as average
-    ")
-    ->groupBy('label')
-    ->orderByRaw('MIN(r.created_at) DESC')
-    ->limit(6)
-    ->get()
-    ->reverse()
-    ->values();
+        $perfRows = DB::table('subject_results_v2 as sr')
+            ->join('student_results_v2 as r', 'r.id', '=', 'sr.student_result_id')
+            ->join('result_batches as b', 'b.id', '=', 'r.batch_id')
+            ->where('r.user_id', $studentId)
+            ->selectRaw("
+                CONCAT(b.session, ' - ', b.term) as label,
+                AVG(COALESCE(NULLIF(sr.total, ''), 0) + 0) as average
+            ")
+            ->groupBy('label')
+            ->orderByRaw('MIN(r.created_at) DESC')
+            ->limit(6)
+            ->get()
+            ->reverse()
+            ->values();
+
+        $legacyAverages = DB::table('averages')
+            ->where('user_id', $studentId)
+            ->where('school_id', $schoolId)
+            ->orderBy('id', 'asc')
+            ->get();
+
+        $legacyPerf = $legacyAverages->map(function ($a) {
+            return [
+                'label' => trim(($a->session ?? '') . ' - ' . ($a->term ?? '')),
+                'average' => (float) ($a->total_average ?? 0),
+            ];
+        })->filter(fn($x) => !empty($x['label']))->values();
+
+        if ($perfRows->isEmpty() && $legacyPerf->isNotEmpty()) {
+            $perfRows = $legacyPerf;
+        }
+
         // =========================
-        // "Result checks" access analytics
-        // If you log actions in activity_logs, we can chart by weekday.
-        // We'll assume activity_logs has: user_id, action, created_at
-        // action might be 'result_view' or similar.
-        // If you don’t have such logs, frontend can still render with fallback.
+        // Result checks access analytics
         // =========================
-      
         $accessRows = DB::table('activity_logs')
-    ->where('user_id', $studentId)
-    ->where('school_id', $schoolId)
-    ->whereIn('action', ['result_view', 'view_result', 'result_checked'])
-    ->where('created_at', '>=', now()->subDays(7))
-    ->selectRaw("DAYNAME(created_at) as day_name, COUNT(*) as total")
-    ->groupBy('day_name')
-    ->get();
+            ->where('user_id', $studentId)
+            ->where('school_id', $schoolId)
+            ->whereIn('action', ['result_view', 'view_result', 'result_checked'])
+            ->where('created_at', '>=', now()->subDays(7))
+            ->selectRaw("DAYNAME(created_at) as day_name, COUNT(*) as total")
+            ->groupBy('day_name')
+            ->get();
 
-// Normalize to Mon..Sun
-$dayOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-$accessMap = [];
-foreach ($accessRows as $r) {
-    $accessMap[$r->day_name] = (int) $r->total;
-}
+        $dayOrder = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+        $accessMap = [];
+        foreach ($accessRows as $r) {
+            $accessMap[$r->day_name] = (int) $r->total;
+        }
 
-$accessLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-$accessData = [];
-foreach ($dayOrder as $dayName) {
-    $accessData[] = $accessMap[$dayName] ?? 0;
-}
+        $accessLabels = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+        $accessData = [];
+        foreach ($dayOrder as $dayName) {
+            $accessData[] = $accessMap[$dayName] ?? 0;
+        }
 
         // =========================
-        // Unread notifications (Laravel notifications table)
-        // columns: notifiable_id, read_at, created_at, data(json)
+        // Unread notifications
         // =========================
         $unreadCount = DB::table('notifications')
             ->where('notifiable_id', $studentId)
@@ -157,29 +190,34 @@ foreach ($dayOrder as $dayName) {
             ->get(['id', 'type', 'data', 'read_at', 'created_at']);
 
         // =========================
-        // Next timetable class (basic)
-        // timetables table varies a lot; we try:
-        // - school_id
-        // - class_id or level_id
-        // - day / day_name
-        // - start_time
-        // - subject_name/subject_id
-        // Adjust as needed once you show your timetables columns.
+        // Next timetable class
         // =========================
-       
-        $todayName = now()->format('l'); // Monday, Tuesday...
-$classId = $student->level_id ?? null; // your users table uses level_id as class reference
+        $classId = (int) ($student->level_id ?? 0);
+        $todayName = now()->format('l');
+        $schoolDays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+        $targetDay = in_array($todayName, $schoolDays) ? $todayName : 'Monday';
 
-$nextClass = null;
-
-if ($classId) {
-    $nextClass = DB::table('timetables')
-        ->where('school_id', $schoolId)
-        ->where('class_id', $classId)
-        ->where('day', $todayName)
-        ->orderBy('period_number', 'asc')
-        ->first();
-}
+        $nextClass = null;
+        if ($classId) {
+            $tt = DB::table('timetables')
+                ->where('school_id', $schoolId)
+                ->where('class_id', $classId)
+                ->where('day', $targetDay)
+                ->orderBy('period_number', 'asc')
+                ->first();
+            if ($tt) {
+                $nextClass = [
+                    'id' => $tt->id,
+                    'subject_name' => $tt->subject,
+                    'subject' => $tt->subject,
+                    'period_number' => $tt->period_number,
+                    'day' => $tt->day,
+                    'start_time' => 'Period ' . $tt->period_number . ($todayName !== $targetDay ? ' (' . $tt->day . ')' : ''),
+                    'end_time' => '',
+                    'venue' => $classInfo?->name ?? 'Classroom',
+                ];
+            }
+        }
 
         // =========================
         // Core stats cards
@@ -188,14 +226,22 @@ if ($classId) {
             ->where('user_id', $studentId)
             ->count();
 
-       $averageAllTime = DB::table('subject_results_v2 as sr')
-    ->join('student_results_v2 as r', 'r.id', '=', 'sr.student_result_id')
-    ->join('result_batches as b', 'b.id', '=', 'r.batch_id')
-    ->where('r.user_id', $studentId)
-    ->where('b.school_id', $schoolId)
-    ->avg(DB::raw("COALESCE(sr.cumulative_average, COALESCE(NULLIF(sr.total,''),0) + 0)"));
+        if ($resultsCount === 0) {
+            $resultsCount = $legacyAverages->count();
+        }
+
+        $averageAllTime = DB::table('subject_results_v2 as sr')
+            ->join('student_results_v2 as r', 'r.id', '=', 'sr.student_result_id')
+            ->join('result_batches as b', 'b.id', '=', 'r.batch_id')
+            ->where('r.user_id', $studentId)
+            ->where('b.school_id', $schoolId)
+            ->avg(DB::raw("COALESCE(sr.cumulative_average, COALESCE(NULLIF(sr.total,''),0) + 0)"));
 
         $averageAllTime = $averageAllTime ? round((float) $averageAllTime, 1) : 0;
+
+        if ($averageAllTime == 0 && $legacyAverages->isNotEmpty()) {
+            $averageAllTime = round((float) $legacyAverages->avg('total_average'), 1);
+        }
 
         $currentSession = DB::table('academic_sessions')
             ->where('school_id', $schoolId)
@@ -241,14 +287,53 @@ if ($classId) {
                     'position' => $studentResult?->position,
                     'updated_at' => $studentResult?->updated_at ?? $batch->updated_at,
                 ];
+            }
+        }
+
+        // Fallback to legacy averages if no v2 current result
+        if (!$currentResult || !$currentResult['has_result']) {
+            $legacyCurrent = null;
+            if ($currentSession && $currentTerm) {
+                $legacyCurrent = DB::table('averages')
+                    ->where('school_id', $schoolId)
+                    ->where('user_id', $studentId)
+                    ->where('session', $currentSession->name)
+                    ->where('term', $currentTerm->name)
+                    ->first();
+            }
+            if (!$legacyCurrent) {
+                $legacyCurrent = DB::table('averages')
+                    ->where('school_id', $schoolId)
+                    ->where('user_id', $studentId)
+                    ->orderByDesc('id')
+                    ->first();
+            }
+
+            if ($legacyCurrent) {
+                $currentResult = [
+                    'batch_id' => null,
+                    'school_id' => $schoolId,
+                    'student_id' => $studentId,
+                    'class_id' => (int) ($legacyCurrent->class_id ?? $classId),
+                    'class_name' => $classInfo?->name,
+                    'term' => $legacyCurrent->term ?? ($currentTerm?->name ?? 'Current Term'),
+                    'session' => $legacyCurrent->session ?? ($currentSession?->name ?? 'Current Session'),
+                    'status' => 'published',
+                    'is_published' => true,
+                    'has_result' => true,
+                    'average' => $legacyCurrent->total_average,
+                    'grade' => $legacyCurrent->total_grade,
+                    'position' => $legacyCurrent->position,
+                    'updated_at' => $legacyCurrent->updated_at,
+                ];
             } else {
                 $currentResult = [
                     'school_id' => $schoolId,
                     'student_id' => $studentId,
                     'class_id' => $classId,
                     'class_name' => $classInfo?->name,
-                    'term' => $currentTerm->name,
-                    'session' => $currentSession->name,
+                    'term' => $currentTerm?->name ?? 'Current Term',
+                    'session' => $currentSession?->name ?? 'Current Session',
                     'status' => 'not_started',
                     'is_published' => false,
                     'has_result' => false,
@@ -256,6 +341,10 @@ if ($classId) {
             }
         }
 
+        // =========================
+        // Latest published result
+        // =========================
+        $latestPublishedResultPayload = null;
         $latestPublishedResultQuery = DB::table('student_results_v2 as sr')
             ->join('result_batches as b', 'b.id', '=', 'sr.batch_id')
             ->where('sr.user_id', $studentId)
@@ -300,22 +389,42 @@ if ($classId) {
 
         $latestPublishedResult = $latestPublishedResultQuery->first();
 
-        $latestPublishedResultPayload = $latestPublishedResult ? [
-            'batch_id' => $latestPublishedResult->batch_id,
-            'school_id' => $latestPublishedResult->school_id,
-            'student_id' => $latestPublishedResult->student_id,
-            'class_id' => $latestPublishedResult->class_id,
-            'class_name' => $latestPublishedResult->class_name ?? null,
-            'term' => $latestPublishedResult->term,
-            'session' => $latestPublishedResult->session,
-            'status' => $latestPublishedResult->status,
-            'is_published' => true,
-            'has_result' => true,
-            'average' => $latestPublishedResult->average,
-            'grade' => $latestPublishedResult->grade,
-            'position' => $latestPublishedResult->position,
-            'updated_at' => $latestPublishedResult->published_at ?? $latestPublishedResult->updated_at,
-        ] : null;
+        if ($latestPublishedResult) {
+            $latestPublishedResultPayload = [
+                'batch_id' => $latestPublishedResult->batch_id,
+                'school_id' => $latestPublishedResult->school_id,
+                'student_id' => $latestPublishedResult->student_id,
+                'class_id' => $latestPublishedResult->class_id,
+                'class_name' => $latestPublishedResult->class_name ?? null,
+                'term' => $latestPublishedResult->term,
+                'session' => $latestPublishedResult->session,
+                'status' => $latestPublishedResult->status,
+                'is_published' => true,
+                'has_result' => true,
+                'average' => $latestPublishedResult->average,
+                'grade' => $latestPublishedResult->grade,
+                'position' => $latestPublishedResult->position,
+                'updated_at' => $latestPublishedResult->published_at ?? $latestPublishedResult->updated_at,
+            ];
+        } elseif ($legacyAverages->isNotEmpty()) {
+            $latestLegacy = $legacyAverages->last();
+            $latestPublishedResultPayload = [
+                'batch_id' => null,
+                'school_id' => $schoolId,
+                'student_id' => $studentId,
+                'class_id' => (int) ($latestLegacy->class_id ?? $classId),
+                'class_name' => $classInfo?->name,
+                'term' => $latestLegacy->term,
+                'session' => $latestLegacy->session,
+                'status' => 'published',
+                'is_published' => true,
+                'has_result' => true,
+                'average' => $latestLegacy->total_average,
+                'grade' => $latestLegacy->total_grade,
+                'position' => $latestLegacy->position,
+                'updated_at' => $latestLegacy->updated_at,
+            ];
+        }
 
         return response()->json([
             'student' => [

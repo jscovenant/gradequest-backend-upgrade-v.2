@@ -327,11 +327,12 @@ class TeacherDashboardController extends Controller
         }
 
         if ($pendingCount > 0) {
+            $firstPendingId = $pendingBatches->first()['id'] ?? null;
             $actions[] = [
                 'priority' => 'medium',
                 'label' => 'Complete pending results',
                 'description' => "{$pendingCount} result batch(es) still need entry or computation.",
-                'route' => '/results/upload',
+                'route' => $firstPendingId ? "/students/results/add?batchId={$firstPendingId}" : '/students/results/add',
                 'icon' => 'file-earmark-text',
             ];
         }

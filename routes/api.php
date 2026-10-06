@@ -15,6 +15,7 @@ use App\Http\Controllers\Backend\StudentController;
 use App\Http\Controllers\Backend\SubjectController;
 use App\Http\Controllers\Backend\SubjectOfferingController;
 use App\Http\Controllers\Backend\SuperAdminController;
+use App\Http\Controllers\Backend\SuperAdminSchoolSetupController;
 use App\Http\Controllers\Backend\PlatformStaffController;
 use App\Http\Controllers\Backend\SalesRepresentativeController;
 use App\Http\Controllers\Backend\SalesPayoutController;
@@ -376,6 +377,25 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     
     Route::get('/monthly-revenue-stats', [SuperAdminController::class, 'monthlyRevenueStats'])->middleware('superadmin.access:finance,billing,owner');
     Route::post('/superadmin/schools/onboard', [SuperAdminController::class, 'onboardSchool'])->middleware('superadmin.access:owner,support,billing');
+
+    // Super-Admin / Operational Manager White-Glove School Setup & Student Import
+    Route::prefix('/superadmin/schools/{schoolId}')->middleware('superadmin.access:owner,support,operations,billing')->group(function () {
+        Route::get('/setup-data', [SuperAdminSchoolSetupController::class, 'getSetupData']);
+        Route::post('/branding', [SuperAdminSchoolSetupController::class, 'updateBranding']);
+        Route::post('/apply-preset', [SuperAdminSchoolSetupController::class, 'applyPreset']);
+        Route::post('/sections', [SuperAdminSchoolSetupController::class, 'storeSection']);
+        Route::delete('/sections/{sectionId}', [SuperAdminSchoolSetupController::class, 'deleteSection']);
+        Route::post('/departments', [SuperAdminSchoolSetupController::class, 'storeDepartment']);
+        Route::delete('/departments/{departmentId}', [SuperAdminSchoolSetupController::class, 'deleteDepartment']);
+        Route::post('/classes', [SuperAdminSchoolSetupController::class, 'storeClass']);
+        Route::delete('/classes/{classId}', [SuperAdminSchoolSetupController::class, 'deleteClass']);
+        Route::post('/subjects', [SuperAdminSchoolSetupController::class, 'storeSubject']);
+        Route::post('/seed-curriculum', [SuperAdminSchoolSetupController::class, 'seedCurriculum']);
+        Route::delete('/subjects/{subjectId}', [SuperAdminSchoolSetupController::class, 'deleteSubject']);
+        Route::get('/student-template', [SuperAdminSchoolSetupController::class, 'downloadStudentTemplate']);
+        Route::post('/preview-students', [SuperAdminSchoolSetupController::class, 'previewStudents']);
+        Route::post('/import-students', [SuperAdminSchoolSetupController::class, 'importStudents']);
+    });
     Route::post('/platform-logs/delete-multiple', [SuperAdminController::class, 'deleteMultiple'])->middleware('superadmin.access:owner');
     Route::get('/superadmin/platform-staff', [PlatformStaffController::class, 'index'])->middleware('superadmin.access:staff,owner');
     Route::post('/superadmin/platform-staff', [PlatformStaffController::class, 'store'])->middleware('superadmin.access:owner');
@@ -431,6 +451,9 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::delete('/superadmin/billing-temporary-access/{temporaryAccess}', [GradequestBillingPolicyController::class, 'revokeTemporaryAccess'])->middleware('superadmin.access:billing,owner');
     Route::get('/superadmin/billing/audit-activity/{schoolId}', [GradequestBillingPolicyController::class, 'auditActivity'])->middleware('superadmin.access:billing,finance,owner');
     Route::post('/superadmin/billing/waive-dormant-terms', [GradequestBillingPolicyController::class, 'waiveDormantTerms'])->middleware('superadmin.access:billing,owner');
+    Route::get('/superadmin/domain-orders', [\App\Http\Controllers\Backend\SchoolDomainOrderController::class, 'superAdminIndex'])->middleware('superadmin.access:billing,finance,owner');
+    Route::post('/superadmin/domain-orders/{id}/retry-provision', [\App\Http\Controllers\Backend\SchoolDomainOrderController::class, 'retryProvisioning'])->middleware('superadmin.access:billing,owner');
+    Route::post('/superadmin/domain-orders/{id}/mark-active', [\App\Http\Controllers\Backend\SchoolDomainOrderController::class, 'superAdminMarkActive'])->middleware('superadmin.access:billing,owner');
     Route::get('/superadmin/twilio-whatsapp/status', [SuperAdminTwilioController::class, 'status'])->middleware('superadmin.access:support,owner');
     Route::post('/superadmin/twilio-whatsapp/test', [SuperAdminTwilioController::class, 'test'])->middleware('superadmin.access:support,owner');
     

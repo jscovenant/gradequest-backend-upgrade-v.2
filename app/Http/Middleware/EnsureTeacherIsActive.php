@@ -12,7 +12,7 @@ class EnsureTeacherIsActive
     {
         $user = $request->user();
 
-        if ($user && strtolower((string) $user->role) === 'teacher') {
+        if ($user && in_array(strtolower((string) $user->role), ['teacher', 'class_teacher', 'subject_teacher', 'staff'], true)) {
             $teacherStatus = strtolower((string) ($user->teacher_status ?? 'active'));
 
             if ($teacherStatus !== 'active') {

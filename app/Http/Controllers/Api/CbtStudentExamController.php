@@ -265,7 +265,7 @@ class CbtStudentExamController extends Controller
         $student = $request->user();
 
         abort_unless((int) $exam->school_id === (int) $student->school_id, 403);
-        abort_unless($student->role === 'Student', 403, 'Only students can take CBT exams.');
+        abort_unless($student->isStudent() || strcasecmp((string) $student->role, 'student') === 0, 403, 'Only students can take CBT exams.');
         abort_unless($exam->status === 'published', 422, 'This CBT exam is not available.');
         abort_if($exam->starts_at && $exam->starts_at->isFuture(), 422, 'This CBT exam has not started.');
         abort_if($exam->ends_at && $exam->ends_at->isPast(), 422, 'This CBT exam has ended.');

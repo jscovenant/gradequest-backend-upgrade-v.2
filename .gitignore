@@ -28,6 +28,8 @@ pnpm-debug.log*
 
 # Server / cPanel junk
 backend.zip
+*.zip
+*.tar.gz
 cookies.txt
 php.ini
 .user.ini

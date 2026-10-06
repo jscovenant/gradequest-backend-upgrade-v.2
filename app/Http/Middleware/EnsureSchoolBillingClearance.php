@@ -21,32 +21,11 @@ class EnsureSchoolBillingClearance
             return $next($request);
         }
 
-        if ($this->isAllowedWhenOutstanding($request)) {
-            return $next($request);
-        }
-
-        $status = $this->billing->schoolCrudClearanceStatus((int) $user->school_id);
-
-        if ($status['allowed']) {
-            return $next($request);
-        }
-
-        return response()->json([
-            'message' => $status['message'],
-            'reason' => 'outstanding_billing_required',
-            'billing' => [
-                'status' => $status['status'],
-                'blocked_invoices' => $status['blocked_invoices'],
-                'blocked_entitlements' => $status['blocked_entitlements'],
-                'sample_students' => $status['sample_students'],
-                'allowed_actions' => [
-                    'Add new student',
-                    'Create academic session',
-                    'Create term',
-                    'Settle outstanding fees',
-                ],
-            ],
-        ], 402);
+        // School-level CRUD and administrative operations (e.g. subjects, levels, classes,
+        // adding students, sessions, terms) are never locked down due to individual student platform fee arrears.
+        // Access revocation is strictly and exclusively enforced per-student at individual academic
+        // touchpoints (CBT examinations, report card viewing, and individual promotion holdback).
+        return $next($request);
     }
 
     private function isAllowedWhenOutstanding(Request $request): bool
