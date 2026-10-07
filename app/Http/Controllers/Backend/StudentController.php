@@ -814,147 +814,193 @@ public function updateStudentLifecycleStatus(Request $request, $id)
 
 
 
-  public function getClasses()
-{
-    $user = Auth::user();
-    $schoolId = $user->school_id;
+    public function getClasses()
+    {
+        $user = Auth::user();
+        $schoolId = $user->school_id;
 
-    $allClasses = StudentClass::where('school_id', $schoolId)
-        ->whereNull('archived_at')
-        ->select('id', 'name')
-        ->orderBy('name')
-        ->get();
+        $classStudentCountQuery = function ($q) use ($schoolId) {
+            $q->where('school_id', $schoolId)
+                ->withRole('student')
+                ->where('status', 1)
+                ->where(function ($sub) {
+                    $sub->whereNull('student_status')->orWhere('student_status', 'active');
+                });
+        };
 
-    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
-    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
-
-    // Teacher: only assigned classes as FROM
-    if ($isTeacherRole) {
-        $enrolledLevelIds = TeacherEnrollment::where('user_id', $user->id)
-            ->where('school_id', $schoolId)
-            ->where('enroll', '1')
-            ->pluck('level_id');
-
-        $fromClasses = StudentClass::where('school_id', $schoolId)
+        $allClasses = StudentClass::where('school_id', $schoolId)
             ->whereNull('archived_at')
-            ->whereIn('id', $enrolledLevelIds)
+            ->withCount(['students as students_count' => $classStudentCountQuery])
             ->select('id', 'name')
             ->orderBy('name')
             ->get();
 
+        $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+        $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+
+        // Teacher: only assigned classes as FROM
+        if ($isTeacherRole) {
+            $enrolledLevelIds = TeacherEnrollment::where('user_id', $user->id)
+                ->where('school_id', $schoolId)
+                ->where('enroll', '1')
+                ->pluck('level_id');
+
+            $fromClasses = StudentClass::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->whereIn('id', $enrolledLevelIds)
+                ->withCount(['students as students_count' => $classStudentCountQuery])
+                ->select('id', 'name')
+                ->orderBy('name')
+                ->get();
+
+            return response()->json([
+                'user_role' => $user->role,
+                'from_classes' => $fromClasses,
+                'all_classes' => $allClasses, // Teacher can promote TO any class
+            ]);
+        }
+
+        // Administrators, School Operators, Principals, and Proprietors can promote from any class
         return response()->json([
             'user_role' => $user->role,
-            'from_classes' => $fromClasses,
-            'all_classes' => $allClasses, // Teacher can promote TO any class
+            'from_classes' => $allClasses,
+            'all_classes' => $allClasses,
         ]);
     }
 
-    // Administrators, School Operators, Principals, and Proprietors can promote from any class
-    return response()->json([
-        'user_role' => $user->role,
-        'from_classes' => $allClasses,
-        'all_classes' => $allClasses,
-    ]);
-}
 
 
+    public function getStudentsByClass(Request $request)
+    {
+        $user = Auth::user();
+        $schoolId = $user->school_id;
 
-public function getStudentsByClass(Request $request)
-{
-    $user = Auth::user();
-    $schoolId = $user->school_id;
+        $request->validate([
+            'class_id' => 'required|integer',
+        ]);
 
-    $request->validate([
-        'class_id' => 'required|integer|exists:student_classes,id',
-    ]);
+        $classId = (int) $request->class_id;
 
-    $classId = (int) $request->class_id;
-
-    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
-    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
-
-    // TEACHER restriction: class_id must be among enrolled classes
-    if ($isTeacherRole) {
-        $allowed = TeacherEnrollment::where('user_id', $user->id)
+        // Strict school validation: verify class exists in this school and is not archived
+        $classExists = StudentClass::where('id', $classId)
             ->where('school_id', $schoolId)
-            ->where('enroll', '1')
+            ->whereNull('archived_at')
+            ->exists();
+
+        if (!$classExists) {
+            return response()->json([
+                'message' => 'The selected class was not found, is archived, or does not belong to your school.',
+            ], 404);
+        }
+
+        $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+        $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+
+        // TEACHER restriction: class_id must be among enrolled classes
+        if ($isTeacherRole) {
+            $allowed = TeacherEnrollment::where('user_id', $user->id)
+                ->where('school_id', $schoolId)
+                ->where('enroll', '1')
+                ->where('level_id', $classId)
+                ->exists();
+
+            if (!$allowed) {
+                return response()->json([
+                    'message' => 'You are not allowed to load students from this class.',
+                ], 403);
+            }
+        }
+
+        // Only return ACTIVE students in this school and class
+        $students = User::where('school_id', $schoolId)
+            ->withRole('student')
             ->where('level_id', $classId)
-            ->exists();
+            ->where('status', 1)
+            ->where(function ($q) {
+                $q->whereNull('student_status')->orWhere('student_status', 'active');
+            })
+            ->with('level')
+            ->orderBy('surname')
+            ->orderBy('firstname')
+            ->get()
+            ->map(function ($s) {
+                return [
+                    'id' => $s->id,
+                    'reg_no' => $s->reg_no,
+                    'firstname' => $s->firstname,
+                    'surname' => $s->surname,
+                    'class_name' => $s->level->name ?? '',
+                ];
+            });
 
-        if (!$allowed) {
-            return response()->json([
-                'message' => 'You are not allowed to load students from this class.',
-            ], 403);
-        }
+        return response()->json($students);
     }
 
-    // Admin, Operator, Principal is allowed for all classes in same school
-    $students = User::where('school_id', $schoolId)
-        ->withRole('student')
-        ->where('level_id', $classId)
-        ->with('level')
-        ->get()
-        ->map(function ($s) {
-            return [
-                'id' => $s->id,
-                'reg_no' => $s->reg_no,
-                'firstname' => $s->firstname,
-                'surname' => $s->surname,
-                'class_name' => $s->level->name ?? '',
-            ];
-        });
-
-    return response()->json($students);
-}
 
 
+    public function promoteStudents(Request $request)
+    {
+        $user = Auth::user();
+        $schoolId = $user->school_id;
 
-public function promoteStudents(Request $request)
-{
-    $user = Auth::user();
-    $schoolId = $user->school_id;
+        $request->validate([
+            'from_class' => 'required|integer',
+            'to_class' => 'required|integer|different:from_class',
+            'student_ids' => 'required|array|min:1',
+            'student_ids.*' => 'required|integer|exists:users,id',
+        ]);
 
-    $request->validate([
-        'from_class' => 'required|integer|exists:student_classes,id',
-        'to_class' => 'required|integer|exists:student_classes,id|different:from_class',
-        'student_ids' => 'required|array|min:1',
-        'student_ids.*' => 'required|integer|exists:users,id',
-    ]);
+        $fromClass = (int) $request->from_class;
+        $toClass   = (int) $request->to_class;
+        $studentIds = $request->student_ids;
 
-    $fromClass = (int) $request->from_class;
-    $toClass   = (int) $request->to_class;
-    $studentIds = $request->student_ids;
+        // Verify that both from_class and to_class belong to this school and are not archived
+        $validClassIds = StudentClass::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->whereIn('id', [$fromClass, $toClass])
+            ->pluck('id')
+            ->all();
 
-    $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
-    $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+        if (!in_array($fromClass, $validClassIds, true) || !in_array($toClass, $validClassIds, true)) {
+            return response()->json([
+                'message' => 'One or both selected classes are invalid, archived, or do not belong to your school.',
+            ], 422);
+        }
 
-    // TEACHER restriction: must be assigned to from_class
-    if ($isTeacherRole) {
-        $allowed = TeacherEnrollment::where('user_id', $user->id)
-            ->where('school_id', $schoolId)
-            ->where('enroll', '1')
+        $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+        $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
+
+        // TEACHER restriction: must be assigned to from_class
+        if ($isTeacherRole) {
+            $allowed = TeacherEnrollment::where('user_id', $user->id)
+                ->where('school_id', $schoolId)
+                ->where('enroll', '1')
+                ->where('level_id', $fromClass)
+                ->exists();
+
+            if (!$allowed) {
+                return response()->json([
+                    'message' => 'You are not allowed to promote students from this class.',
+                ], 403);
+            }
+        }
+
+        // Safety: ensure students belong to this school, are active, and are in from_class
+        $validCount = User::where('school_id', $schoolId)
+            ->withRole('student')
             ->where('level_id', $fromClass)
-            ->exists();
+            ->where('status', 1)
+            ->where(function ($q) {
+                $q->whereNull('student_status')->orWhere('student_status', 'active');
+            })
+            ->whereIn('id', $studentIds)
+            ->count();
 
-        if (!$allowed) {
+        if ($validCount !== count($studentIds)) {
             return response()->json([
-                'message' => 'You are not allowed to promote students from this class.',
-            ], 403);
+                'message' => 'Some selected students are inactive, not in the selected From Class, or not in your school.',
+            ], 422);
         }
-    }
-
-    // Safety: ensure students belong to this school + are in from_class
-    $validCount = User::where('school_id', $schoolId)
-        ->withRole('student')
-        ->where('level_id', $fromClass)
-        ->whereIn('id', $studentIds)
-        ->count();
-
-    if ($validCount !== count($studentIds)) {
-        return response()->json([
-            'message' => 'Some selected students are not in the selected From Class (or not in your school).',
-        ], 422);
-    }
 
     $billing = app(SchoolBillingService::class);
     $blockedStudents = User::where('school_id', $schoolId)
