@@ -260,6 +260,22 @@ class WhatsAppBroadcastController extends Controller
                 $sessionName
             )->delay(now()->addSeconds($loop++ * 2));
         }
+
+        try {
+            DB::table('broadcasts')->insert([
+                'school_id' => $schoolId,
+                'audience' => 'parents',
+                'channel' => 'whatsapp',
+                'subject' => 'School Announcement',
+                'message' => $request->message,
+                'status' => 'sent',
+                'sent_at' => now(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (\Throwable $e) {
+            // Silently ignore if broadcasts table insert encounters issue
+        }
  
         return response()->json([
             'message' => "{$parents->count()} custom message(s) queued for WhatsApp delivery.",

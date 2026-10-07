@@ -310,8 +310,18 @@ class ParentDashboardController extends Controller
         $month = $request->query('month');
         $year = $request->query('year') ?? date('Y');
 
+        // Find class teacher name for the selected child's class
+        $teacherEnrollment = DB::table('teacher_enrollments as te')
+            ->join('users as u', 'u.id', '=', 'te.user_id')
+            ->where('te.school_id', $schoolId)
+            ->where('te.level_id', $selectedChild->level_id ?? 0)
+            ->where('te.enroll', 1)
+            ->selectRaw("CONCAT(COALESCE(u.firstname,''), ' ', COALESCE(u.surname,'')) as teacher_name")
+            ->first();
+        $classTeacherName = trim($teacherEnrollment->teacher_name ?? '') ?: 'Class Teacher';
+
         $query = DB::table('attendances as a')
-            ->leftJoin('users as t', 't.id', '=', 'a.teacher_id')
+            ->leftJoin('student_classes as sc', 'sc.id', '=', 'a.class_id')
             ->where('a.school_id', $schoolId)
             ->where('a.student_id', $selectedChildId);
 
@@ -324,23 +334,22 @@ class ParentDashboardController extends Controller
                 'a.date',
                 'a.status',
                 'a.remarks',
-                'a.week_number',
                 'a.created_at',
-                't.firstname as teacher_firstname',
-                't.surname as teacher_surname',
+                'sc.name as class_name',
             ])
             ->orderByDesc('a.date')
             ->limit(100)
             ->get()
-            ->map(function ($r) {
+            ->map(function ($r) use ($classTeacherName) {
+                $dateTs = strtotime($r->date);
                 return [
                     'id' => $r->id,
                     'date' => $r->date,
-                    'day' => date('l', strtotime($r->date)),
+                    'day' => date('l', $dateTs),
                     'status' => strtolower($r->status ?? 'present'),
-                    'remarks' => $r->remarks ?? 'Normal class attendance',
-                    'week_number' => $r->week_number ?? 1,
-                    'marked_by' => trim(($r->teacher_firstname ?? '') . ' ' . ($r->teacher_surname ?? '')) ?: 'Class Teacher',
+                    'remarks' => $r->remarks ?: 'Normal class attendance',
+                    'week_number' => (int)date('W', $dateTs),
+                    'marked_by' => $classTeacherName,
                 ];
             });
 
@@ -423,7 +432,7 @@ class ParentDashboardController extends Controller
         $schoolId = (int) $parent->school_id;
         $parentId = (int) $parent->id;
 
-        // Direct notifications from notifications table
+        // 1. Direct notifications from notifications table
         $notifications = DB::table('notifications')
             ->where('notifiable_id', $parentId)
             ->latest('created_at')
@@ -432,7 +441,7 @@ class ParentDashboardController extends Controller
             ->map(function ($n) {
                 $data = is_string($n->data) ? json_decode($n->data, true) : (array)$n->data;
                 return [
-                    'id' => (string)$n->id,
+                    'id' => 'notif_' . (string)$n->id,
                     'title' => $data['title'] ?? 'School Notice',
                     'message' => $data['message'] ?? '',
                     'type' => $data['type'] ?? 'general',
@@ -445,29 +454,124 @@ class ParentDashboardController extends Controller
                 ];
             });
 
-        // Invoice notifications
-        $invoiceNotifs = DB::table('fee_invoice_notifications')
-            ->where('school_id', $schoolId)
-            ->where('parent_id', $parentId)
-            ->latest('created_at')
-            ->limit(15)
-            ->get()
-            ->map(function ($inv) {
+        // 2. Absence Announcements for parent's children
+        $childStudents = DB::table('parent_students as ps')
+            ->join('users as u', 'u.id', '=', 'ps.student_id')
+            ->where('ps.parent_id', $parentId)
+            ->where('u.school_id', $schoolId)
+            ->select(['u.id', 'u.firstname', 'u.surname'])
+            ->get();
+
+        $childIds = $childStudents->pluck('id')->all();
+
+        $absenceNotices = collect();
+        if (!empty($childIds)) {
+            $absences = DB::table('attendances as a')
+                ->join('users as u', 'u.id', '=', 'a.student_id')
+                ->where('a.school_id', $schoolId)
+                ->whereIn('a.student_id', $childIds)
+                ->whereIn('a.status', ['absent', 'excused'])
+                ->select([
+                    'a.id',
+                    'a.student_id',
+                    'a.date',
+                    'a.status',
+                    'a.remarks',
+                    'a.created_at',
+                    'u.firstname',
+                    'u.surname',
+                ])
+                ->orderByDesc('a.date')
+                ->limit(30)
+                ->get();
+
+            $absenceNotices = $absences->map(function ($att) {
+                $childName = trim(($att->surname ?? '') . ' ' . ($att->firstname ?? ''));
+                $dateFormatted = date('M d, Y', strtotime($att->date));
+                $statusUpper = ucfirst(strtolower($att->status));
+                $remarksText = !empty($att->remarks) ? " Reason: {$att->remarks}." : "";
+
                 return [
-                    'id' => 'inv_' . $inv->id,
-                    'title' => 'Fee Invoice & Payment Notice',
-                    'message' => $inv->message ?? 'A fee invoice / payment reminder has been issued for your child.',
+                    'id' => 'abs_' . $att->id,
+                    'title' => "Absence Alert: {$childName} ({$statusUpper})",
+                    'message' => "Notice: Your ward {$childName} was marked {$statusUpper} on {$dateFormatted}.{$remarksText} If you have questions regarding this attendance record, please contact the school administration or class teacher.",
+                    'type' => 'attendance',
+                    'category' => 'notice',
+                    'sender' => 'Attendance Management Office',
+                    'action_url' => '/parent/attendance?child_id=' . $att->student_id,
+                    'is_read' => false,
+                    'date' => date('M d, Y h:i A', strtotime($att->created_at ?? $att->date)),
+                    'time_ago' => \Carbon\Carbon::parse($att->created_at ?? $att->date)->diffForHumans(),
+                ];
+            });
+        }
+
+        // 3. School Broadcasts & Announcements
+        $broadcasts = DB::table('broadcasts')
+            ->where('school_id', $schoolId)
+            ->where(function ($q) {
+                $q->whereNull('audience')
+                  ->orWhereIn(DB::raw('LOWER(audience)'), ['all', 'parents', 'everyone', 'parent']);
+            })
+            ->latest('created_at')
+            ->limit(20)
+            ->get()
+            ->map(function ($b) {
+                return [
+                    'id' => 'bc_' . $b->id,
+                    'title' => $b->subject ?: 'General School Announcement',
+                    'message' => $b->message ?? '',
+                    'type' => 'announcement',
+                    'category' => 'notice',
+                    'sender' => 'School Administration',
+                    'action_url' => null,
+                    'is_read' => false,
+                    'date' => date('M d, Y h:i A', strtotime($b->sent_at ?? $b->created_at)),
+                    'time_ago' => \Carbon\Carbon::parse($b->sent_at ?? $b->created_at)->diffForHumans(),
+                ];
+            });
+
+        // 4. Outstanding fee notices for children
+        $feeNotices = collect();
+        if (!empty($childIds)) {
+            $fees = DB::table('student_fees as sf')
+                ->join('users as u', 'u.id', '=', 'sf.student_id')
+                ->whereIn('sf.student_id', $childIds)
+                ->where('sf.balance', '>', 0)
+                ->select([
+                    'sf.id',
+                    'sf.student_id',
+                    'sf.balance',
+                    'sf.updated_at',
+                    'u.firstname',
+                    'u.surname',
+                ])
+                ->get();
+
+            $feeNotices = $fees->map(function ($f) {
+                $childName = trim(($f->surname ?? '') . ' ' . ($f->firstname ?? ''));
+                return [
+                    'id' => 'fee_' . $f->id,
+                    'title' => "Fee Payment Reminder: {$childName}",
+                    'message' => "An outstanding school fee balance of ₦" . number_format((float)$f->balance, 2) . " is due for {$childName}. Please make payment or upload your payment receipt via the parent portal.",
                     'type' => 'fee',
                     'category' => 'fee_alert',
                     'sender' => 'Bursary Department',
                     'action_url' => '/parent/payments',
-                    'is_read' => (bool)$inv->is_read,
-                    'date' => date('M d, Y h:i A', strtotime($inv->created_at)),
-                    'time_ago' => \Carbon\Carbon::parse($inv->created_at)->diffForHumans(),
+                    'is_read' => false,
+                    'date' => date('M d, Y h:i A', strtotime($f->updated_at ?? now())),
+                    'time_ago' => \Carbon\Carbon::parse($f->updated_at ?? now())->diffForHumans(),
                 ];
             });
+        }
 
-        $combined = $notifications->concat($invoiceNotifs)->sortByDesc('date')->values();
+        $combined = $notifications
+            ->concat($absenceNotices)
+            ->concat($broadcasts)
+            ->concat($feeNotices)
+            ->sortByDesc('date')
+            ->values();
+
         $unreadCount = $combined->where('is_read', false)->count();
 
         return response()->json([
@@ -489,14 +593,19 @@ class ParentDashboardController extends Controller
         $schoolId = (int) $parent->school_id;
 
         $school = DB::table('users')->where('id', $schoolId)->first();
-        $settings = DB::table('settings')->where('school_id', $schoolId)->first();
+        $schoolSetting = DB::table('school_settings')->where('user_id', $schoolId)->first();
 
-        $activeSession = DB::table('sessions')
+        $activeSession = DB::table('academic_sessions')
             ->where('school_id', $schoolId)
-            ->where('status', 'active')
+            ->where(function ($q) {
+                $q->where('is_current', 1)
+                  ->orWhereRaw('LOWER(status) = ?', ['active']);
+            })
+            ->orderByDesc('is_current')
+            ->orderByDesc('id')
             ->first();
 
-        $sessions = DB::table('sessions')
+        $sessions = DB::table('academic_sessions')
             ->where('school_id', $schoolId)
             ->orderByDesc('id')
             ->get();
@@ -506,22 +615,49 @@ class ParentDashboardController extends Controller
             ->orderBy('id')
             ->get();
 
-        $activeTerm = $terms->firstWhere('status', 'active') ?? $terms->first();
+        $activeTerm = $terms->first(function ($t) {
+            return strtolower($t->status ?? '') === 'active';
+        }) ?? $terms->first();
+
+        $schoolName = $schoolSetting->school_name 
+            ?? $school->school_name 
+            ?? trim(($school->firstname ?? '') . ' ' . ($school->surname ?? ''))
+            ?: 'GradeQuest Academy';
+
+        $logo = $schoolSetting->logo ?? $school->photo ?? null;
+        $logoUrl = $logo ? (str_starts_with($logo, 'http') ? $logo : url('uploads/users/' . ltrim($logo, '/'))) : null;
 
         return response()->json([
             'school' => [
-                'name' => $school->school_name ?? $school->name ?? 'GradiosEdu Academy',
-                'email' => $school->email ?? null,
-                'phone' => $school->phone ?? null,
-                'address' => $settings->address ?? $school->address ?? 'School Campus',
-                'logo' => $school->logo ?? $settings->logo ?? null,
-                'motto' => $settings->motto ?? 'Excellence in Education',
+                'name' => $schoolName,
+                'email' => $schoolSetting->email ?? $school->email ?? null,
+                'phone' => $schoolSetting->phone ?? $school->phone ?? null,
+                'address' => $schoolSetting->address ?? $school->address ?? 'Main Campus',
+                'logo' => $logoUrl,
+                'motto' => $schoolSetting->motto ?? 'Excellence in Education',
             ],
             'academic_calendar' => [
                 'current_session' => $activeSession->name ?? date('Y') . '/' . (date('Y') + 1),
                 'current_term' => $activeTerm->name ?? 'First Term',
-                'terms' => $terms,
-                'sessions' => $sessions,
+                'terms' => $terms->map(function ($t) {
+                    return [
+                        'id' => (int)$t->id,
+                        'name' => $t->name,
+                        'start_date' => $t->start_date,
+                        'end_date' => $t->end_date,
+                        'status' => $t->status ?? 'Active',
+                    ];
+                })->values(),
+                'sessions' => $sessions->map(function ($s) {
+                    return [
+                        'id' => (int)$s->id,
+                        'name' => $s->name,
+                        'start_date' => $s->start_date,
+                        'end_date' => $s->end_date,
+                        'status' => $s->status ?? 'Active',
+                        'is_current' => (bool)$s->is_current,
+                    ];
+                })->values(),
             ],
         ]);
     }
