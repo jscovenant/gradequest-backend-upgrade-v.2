@@ -830,8 +830,8 @@ public function updateStudentLifecycleStatus(Request $request, $id)
 
         $allClasses = StudentClass::where('school_id', $schoolId)
             ->whereNull('archived_at')
-            ->withCount(['students as students_count' => $classStudentCountQuery])
             ->select('id', 'name')
+            ->withCount(['students as students_count' => $classStudentCountQuery])
             ->orderBy('name')
             ->get();
 
@@ -848,8 +848,8 @@ public function updateStudentLifecycleStatus(Request $request, $id)
             $fromClasses = StudentClass::where('school_id', $schoolId)
                 ->whereNull('archived_at')
                 ->whereIn('id', $enrolledLevelIds)
-                ->withCount(['students as students_count' => $classStudentCountQuery])
                 ->select('id', 'name')
+                ->withCount(['students as students_count' => $classStudentCountQuery])
                 ->orderBy('name')
                 ->get();
 
