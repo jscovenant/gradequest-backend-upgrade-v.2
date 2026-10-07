@@ -190,11 +190,16 @@ class ParentDashboardController extends Controller
             $bal = (float)($balanceMap->get($sid)->balance ?? 0);
             $rc  = (int)($resultsMap->get($sid)->results_count ?? 0);
 
+            $photo = $c->photo;
+            $photoUrl = $photo
+                ? (str_starts_with($photo, 'http') ? $photo : url('uploads/users/' . ltrim($photo, '/')))
+                : null;
+
             return [
                 'id' => $sid,
                 'name' => trim(($c->surname ?? '') . ' ' . ($c->firstname ?? '')),
                 'reg_no' => $c->reg_no,
-                'photo' => $c->photo,
+                'photo' => $photoUrl,
                 'class' => $c->class_name,
                 'attendance_rate_30d' => $rate,
                 'fee_balance' => $bal,
@@ -280,7 +285,22 @@ class ParentDashboardController extends Controller
                 'sc.name as class_name',
             ])
             ->orderBy('u.surname')
-            ->get();
+            ->get()
+            ->map(function ($c) {
+                $photo = $c->photo;
+                $photoUrl = $photo
+                    ? (str_starts_with($photo, 'http') ? $photo : url('uploads/users/' . ltrim($photo, '/')))
+                    : null;
+                return (object)[
+                    'id' => (int)$c->id,
+                    'firstname' => $c->firstname,
+                    'surname' => $c->surname,
+                    'reg_no' => $c->reg_no,
+                    'photo' => $photoUrl,
+                    'level_id' => $c->level_id,
+                    'class_name' => $c->class_name,
+                ];
+            });
 
         if ($children->isEmpty()) {
             return response()->json([
