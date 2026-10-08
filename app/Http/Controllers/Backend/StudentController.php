@@ -812,6 +812,47 @@ public function updateStudentLifecycleStatus(Request $request, $id)
     ]);
 }
 
+public function bulkUpdateStudentLifecycleStatus(Request $request)
+{
+    $validated = $request->validate([
+        'student_ids' => ['required', 'array', 'min:1'],
+        'student_ids.*' => ['integer'],
+        'student_status' => ['required', Rule::in(['active', 'alumni', 'graduate'])],
+    ]);
+
+    $auth = Auth::user();
+    $targetStatus = $validated['student_status'];
+    $studentIds = array_values(array_unique(array_filter($validated['student_ids'])));
+
+    if ($targetStatus === 'active') {
+        try {
+            $auth->assertCanAddStudents(count($studentIds));
+        } catch (SubscriptionLimitExceededException $e) {
+            return response()->json(['message' => $e->getMessage()], 403);
+        }
+    }
+
+    $affected = User::forSchool($auth->school_id)
+        ->withRole('student')
+        ->whereIn('id', $studentIds)
+        ->update([
+            'student_status' => $targetStatus,
+            'status' => $targetStatus === 'active' ? 1 : 0,
+            'student_status_changed_at' => now(),
+            'student_status_changed_by' => $auth->id,
+        ]);
+
+    return response()->json([
+        'message' => match ($targetStatus) {
+            'alumni' => "Successfully marked {$affected} student(s) as Alumni.",
+            'graduate' => "Successfully marked {$affected} student(s) as Graduate.",
+            default => "Successfully restored {$affected} student(s) to Active.",
+        },
+        'affected_count' => $affected,
+        'student_status' => $targetStatus,
+    ]);
+}
+
 
 
     public function getClasses()

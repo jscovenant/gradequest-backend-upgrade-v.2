@@ -816,6 +816,7 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::post('/students/import', [StudentController::class, 'importStudents'])
         ->middleware('subscription.feature:student_management,students');
     Route::get('/students/show/{id}', [StudentController::class, 'ViewStudent']);
+    Route::patch('/students/bulk-lifecycle-status', [StudentController::class, 'bulkUpdateStudentLifecycleStatus']);
     Route::patch('/students/{id}/lifecycle-status', [StudentController::class, 'updateStudentLifecycleStatus']);
       Route::post('/student/delete/{id}', [StudentController::class, 'DeleteStudent']);
       Route::post('/students/{id}/withdraw', [StudentController::class, 'DeleteStudent']);
@@ -1002,6 +1003,8 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
         ->middleware('subscription.feature:settings_management');
     Route::get('/departments/{id}/subjects', [SubjectController::class, 'getAllSubjects']);
     Route::post('/subjects/assign-section', [SubjectController::class, 'assignSection']);
+    Route::post('/subjects/bulk-archive', [SubjectController::class, 'bulkArchive']);
+    Route::post('/subjects/bulk-restore', [SubjectController::class, 'bulkRestore']);
     Route::get('/subject-offerings', [SubjectOfferingController::class, 'index']);
     Route::post('/subject-offerings', [SubjectOfferingController::class, 'store']);
     Route::get('/students/{student}/subject-overrides', [SubjectOfferingController::class, 'studentOverrides']);

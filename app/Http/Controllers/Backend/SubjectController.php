@@ -318,6 +318,74 @@ class SubjectController extends Controller
         ]);
     }
 
+    public function bulkArchive(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'subject_ids' => ['required', 'array', 'min:1'],
+            'subject_ids.*' => ['integer'],
+        ]);
+
+        $schoolId = (int) Auth::user()->school_id;
+        $subjectIds = array_values(array_unique(array_filter($validated['subject_ids'])));
+
+        $count = Subject::where('school_id', $schoolId)
+            ->whereIn('id', $subjectIds)
+            ->whereNull('archived_at')
+            ->update(['archived_at' => now()]);
+
+        return response()->json([
+            'message' => "Successfully archived {$count} subject(s).",
+            'affected_count' => $count,
+        ]);
+    }
+
+    public function bulkRestore(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'subject_ids' => ['required', 'array', 'min:1'],
+            'subject_ids.*' => ['integer'],
+        ]);
+
+        $schoolId = (int) Auth::user()->school_id;
+        $subjectIds = array_values(array_unique(array_filter($validated['subject_ids'])));
+
+        $archivedSubjects = Subject::where('school_id', $schoolId)
+            ->whereIn('id', $subjectIds)
+            ->whereNotNull('archived_at')
+            ->get();
+
+        $activeNames = Subject::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->pluck('name')
+            ->map(fn ($n) => strtolower(trim($n)))
+            ->toArray();
+
+        $restoredCount = 0;
+        $skippedConflicts = [];
+
+        foreach ($archivedSubjects as $sub) {
+            $normalizedName = strtolower(trim($sub->name));
+            if (in_array($normalizedName, $activeNames)) {
+                $skippedConflicts[] = $sub->name;
+                continue;
+            }
+            $sub->forceFill(['archived_at' => null])->save();
+            $activeNames[] = $normalizedName;
+            $restoredCount++;
+        }
+
+        $msg = "Successfully restored {$restoredCount} subject(s).";
+        if (!empty($skippedConflicts)) {
+            $msg .= " Skipped " . count($skippedConflicts) . " subject(s) because active subjects with the same name already exist (" . implode(', ', array_slice($skippedConflicts, 0, 3)) . (count($skippedConflicts) > 3 ? '...' : '') . ").";
+        }
+
+        return response()->json([
+            'message' => $msg,
+            'restored_count' => $restoredCount,
+            'skipped_conflicts' => $skippedConflicts,
+        ]);
+    }
+
     /**
      * Bulk seed standard Nigerian/WAEC curriculum subjects into the school.
      */
