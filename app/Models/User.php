@@ -216,21 +216,29 @@ public function superAdminTypeLabel(): string
 
 public function superAdminPermissions(): array
 {
+    // If explicit permissions have been toggled and saved for this user, use them directly
+    if (is_array($this->super_admin_permissions)) {
+        return array_values(array_unique(array_filter($this->super_admin_permissions)));
+    }
+
     if (! $this->isSuperAdminUser()) {
         return [];
     }
 
     $type = $this->super_admin_type ?: 'owner';
-    $defaults = self::SUPER_ADMIN_PERMISSION_MAP[$type] ?? self::SUPER_ADMIN_PERMISSION_MAP['owner'];
-    $custom = is_array($this->super_admin_permissions) ? $this->super_admin_permissions : [];
-
-    return array_values(array_unique(array_filter(array_merge($defaults, $custom))));
+    return self::SUPER_ADMIN_PERMISSION_MAP[$type] ?? self::SUPER_ADMIN_PERMISSION_MAP['owner'];
 }
 
 public function hasSuperAdminPermission(string $permission): bool
 {
     if (! $this->isSuperAdminUser()) {
         return false;
+    }
+
+    // Explicit custom permissions check
+    if (is_array($this->super_admin_permissions)) {
+        return in_array('all', $this->super_admin_permissions, true)
+            || in_array($permission, $this->super_admin_permissions, true);
     }
 
     if (strtolower(str_replace([' ', '-', '_'], '', (string) $this->role)) === 'superadmin') {

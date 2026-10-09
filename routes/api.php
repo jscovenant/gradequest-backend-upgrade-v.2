@@ -402,6 +402,15 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
     Route::put('/superadmin/platform-staff/{staff}', [PlatformStaffController::class, 'update'])->middleware('superadmin.access:owner');
     Route::delete('/superadmin/platform-staff/{staff}', [PlatformStaffController::class, 'destroy'])->middleware('superadmin.access:owner');
     Route::post('/superadmin/platform-staff/{staff}/send-login', [PlatformStaffController::class, 'sendLoginDetails'])->middleware('superadmin.access:owner');
+
+    // SuperAdmin User Roles & Permissions Center
+    Route::get('/superadmin/users-permissions', [\App\Http\Controllers\Backend\UserAccessController::class, 'index'])->middleware('superadmin.access:staff,owner');
+    Route::post('/superadmin/users-permissions', [\App\Http\Controllers\Backend\UserAccessController::class, 'store'])->middleware('superadmin.access:owner');
+    Route::patch('/superadmin/users-permissions/{user}/role', [\App\Http\Controllers\Backend\UserAccessController::class, 'updateRole'])->middleware('superadmin.access:owner');
+    Route::patch('/superadmin/users-permissions/{user}/status', [\App\Http\Controllers\Backend\UserAccessController::class, 'toggleStatus'])->middleware('superadmin.access:owner');
+    Route::patch('/superadmin/users-permissions/{user}/permissions', [\App\Http\Controllers\Backend\UserAccessController::class, 'updatePermissions'])->middleware('superadmin.access:owner');
+    Route::patch('/superadmin/users-permissions/{user}/toggle-permission', [\App\Http\Controllers\Backend\UserAccessController::class, 'toggleSinglePermission'])->middleware('superadmin.access:owner');
+    Route::post('/superadmin/users-permissions/{user}/send-login', [\App\Http\Controllers\Backend\UserAccessController::class, 'sendLoginDetails'])->middleware('superadmin.access:owner');
     Route::get('/superadmin/sales-representatives', [SalesRepresentativeController::class, 'index'])->middleware('superadmin.access:sales,finance,owner');
     Route::post('/superadmin/sales-representatives', [SalesRepresentativeController::class, 'store'])->middleware('superadmin.access:sales,owner');
     Route::get('/superadmin/sales-representatives/{salesRepresentative}', [SalesRepresentativeController::class, 'show'])->middleware('superadmin.access:sales,finance,owner');
