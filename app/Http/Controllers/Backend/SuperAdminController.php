@@ -13,6 +13,7 @@ use App\Models\SchoolBankAccount;
 use App\Mail\MarketingEmail;
 use App\Models\SchoolDomain;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -755,44 +756,384 @@ class SuperAdminController extends Controller
     {
         $year = now()->year;
 
-        $subscriptionRevenue = DB::table('sub_payments')
-            ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
-            ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
-            ->where('status', 'successful')
-            ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
-            ->get();
+        // Helper to map a date to Nigerian school terms
+        $getTermFromDate = function ($dateStr) {
+            if (!$dateStr) return '1st Term';
+            $m = (int) date('n', strtotime($dateStr));
+            if ($m >= 9 && $m <= 12) return '1st Term';
+            if ($m >= 1 && $m <= 4) return '2nd Term';
+            return '3rd Term';
+        };
 
-        $onlinePlatformRevenue = DB::table('payments')
-            ->selectRaw("MONTH(created_at) as month_number, DATE_FORMAT(created_at, '%M') as month, SUM(platform_fee) as revenue")
-            ->whereYear('created_at', $year)
-            ->where('status', 'success')
-            ->where('platform_fee', '>', 0)
-            ->groupByRaw("MONTH(created_at), DATE_FORMAT(created_at, '%M')")
-            ->get();
-
-        $offlineInvoiceRevenue = DB::table('gradequest_invoice_payments')
-            ->selectRaw("MONTH(COALESCE(paid_at, created_at)) as month_number, DATE_FORMAT(COALESCE(paid_at, created_at), '%M') as month, SUM(amount) as revenue")
-            ->whereYear(DB::raw('COALESCE(paid_at, created_at)'), $year)
-            ->whereIn('status', ['success', 'successful', 'paid'])
-            ->groupByRaw("MONTH(COALESCE(paid_at, created_at)), DATE_FORMAT(COALESCE(paid_at, created_at), '%M')")
-            ->get();
-
-        $monthlyRevenue = collect()
-            ->merge($subscriptionRevenue)
-            ->merge($onlinePlatformRevenue)
-            ->merge($offlineInvoiceRevenue)
-            ->groupBy('month_number')
-            ->sortKeys()
-            ->map(function ($rows) {
-                $first = $rows->first();
-
+        // 1. Subscriptions (sub_payments)
+        // Strictly exclude GradeQuest School (school_id = 68, gradequestapp@gmail.com, or school_name like %gradequest%)
+        $subscriptions = DB::table('sub_payments')
+            ->leftJoin('users', 'sub_payments.user_id', '=', 'users.id')
+            ->leftJoin('school_settings', 'users.school_id', '=', 'school_settings.id')
+            ->where('sub_payments.status', 'successful')
+            ->where(function ($q) {
+                $q->whereNull('users.school_id')->orWhere('users.school_id', '!=', 68);
+            })
+            ->where(function ($q) {
+                $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+            })
+            ->where(function ($q) {
+                $q->whereNull('users.email')->orWhere('users.email', '!=', 'gradequestapp@gmail.com');
+            })
+            ->selectRaw("
+                sub_payments.id,
+                sub_payments.amount,
+                COALESCE(sub_payments.paid_at, sub_payments.created_at) as trans_date
+            ")
+            ->get()
+            ->map(function ($r) use ($getTermFromDate) {
+                $date = $r->trans_date ?: now()->toDateTimeString();
                 return [
-                    'month' => $first->month,
-                    'revenue' => (float) $rows->sum(fn ($row) => (float) $row->revenue),
+                    'category' => 'subscriptions',
+                    'amount' => (float) $r->amount,
+                    'date' => $date,
+                    'year' => (int) date('Y', strtotime($date)),
+                    'month_number' => (int) date('n', strtotime($date)),
+                    'month' => date('F', strtotime($date)),
+                    'month_year' => date('M Y', strtotime($date)),
+                    'month_key' => date('Y-m', strtotime($date)),
+                    'term' => $getTermFromDate($date),
+                ];
+            });
+
+        // 2. Custom Domain Orders (school_domain_orders)
+        $domainOrders = collect();
+        if (Schema::hasTable('school_domain_orders')) {
+            $domainOrders = DB::table('school_domain_orders')
+                ->leftJoin('school_settings', 'school_domain_orders.school_id', '=', 'school_settings.id')
+                ->whereIn('school_domain_orders.status', ['active', 'paid', 'completed', 'success'])
+                ->where(function ($q) {
+                    $q->whereNull('school_domain_orders.school_id')->orWhere('school_domain_orders.school_id', '!=', 68);
+                })
+                ->where(function ($q) {
+                    $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+                })
+                ->selectRaw("
+                    school_domain_orders.id,
+                    school_domain_orders.amount,
+                    COALESCE(school_domain_orders.paid_at, school_domain_orders.created_at) as trans_date
+                ")
+                ->get()
+                ->map(function ($r) use ($getTermFromDate) {
+                    $date = $r->trans_date ?: now()->toDateTimeString();
+                    return [
+                        'category' => 'domains',
+                        'amount' => (float) $r->amount,
+                        'date' => $date,
+                        'year' => (int) date('Y', strtotime($date)),
+                        'month_number' => (int) date('n', strtotime($date)),
+                        'month' => date('F', strtotime($date)),
+                        'month_year' => date('M Y', strtotime($date)),
+                        'month_key' => date('Y-m', strtotime($date)),
+                        'term' => $getTermFromDate($date),
+                    ];
+                });
+        }
+
+        // 3. Online Platform Tech Royalty Fees on Tuition (payments)
+        $payments = DB::table('payments')
+            ->leftJoin('school_settings', 'payments.school_id', '=', 'school_settings.id')
+            ->where('payments.status', 'success')
+            ->where(function ($q) {
+                $q->whereNull('payments.school_id')->orWhere('payments.school_id', '!=', 68);
+            })
+            ->where(function ($q) {
+                $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+            })
+            ->selectRaw("
+                payments.id,
+                payments.amount as gmv,
+                payments.platform_fee,
+                payments.created_at as trans_date
+            ")
+            ->get()
+            ->map(function ($r) use ($getTermFromDate) {
+                $date = $r->trans_date ?: now()->toDateTimeString();
+                return [
+                    'category' => 'tech_fees',
+                    'amount' => (float) $r->platform_fee,
+                    'gmv' => (float) $r->gmv,
+                    'date' => $date,
+                    'year' => (int) date('Y', strtotime($date)),
+                    'month_number' => (int) date('n', strtotime($date)),
+                    'month' => date('F', strtotime($date)),
+                    'month_year' => date('M Y', strtotime($date)),
+                    'month_key' => date('Y-m', strtotime($date)),
+                    'term' => $getTermFromDate($date),
+                ];
+            });
+
+        // 4. Offline Invoices (gradequest_invoice_payments)
+        $invoices = collect();
+        if (Schema::hasTable('gradequest_invoice_payments')) {
+            $invoices = DB::table('gradequest_invoice_payments')
+                ->leftJoin('school_settings', 'gradequest_invoice_payments.school_id', '=', 'school_settings.id')
+                ->whereIn('gradequest_invoice_payments.status', ['success', 'successful', 'paid'])
+                ->where(function ($q) {
+                    $q->whereNull('gradequest_invoice_payments.school_id')->orWhere('gradequest_invoice_payments.school_id', '!=', 68);
+                })
+                ->where(function ($q) {
+                    $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+                })
+                ->selectRaw("
+                    gradequest_invoice_payments.id,
+                    gradequest_invoice_payments.amount,
+                    COALESCE(gradequest_invoice_payments.paid_at, gradequest_invoice_payments.created_at) as trans_date
+                ")
+                ->get()
+                ->map(function ($r) use ($getTermFromDate) {
+                    $date = $r->trans_date ?: now()->toDateTimeString();
+                    return [
+                        'category' => 'invoices',
+                        'amount' => (float) $r->amount,
+                        'date' => $date,
+                        'year' => (int) date('Y', strtotime($date)),
+                        'month_number' => (int) date('n', strtotime($date)),
+                        'month' => date('F', strtotime($date)),
+                        'month_year' => date('M Y', strtotime($date)),
+                        'month_key' => date('Y-m', strtotime($date)),
+                        'term' => $getTermFromDate($date),
+                    ];
+                });
+        }
+
+        // 5. WhatsApp Credits (whatsapp_credit_purchases)
+        $whatsapp = collect();
+        if (Schema::hasTable('whatsapp_credit_purchases')) {
+            $whatsapp = DB::table('whatsapp_credit_purchases')
+                ->leftJoin('school_settings', 'whatsapp_credit_purchases.school_id', '=', 'school_settings.id')
+                ->whereIn('whatsapp_credit_purchases.status', ['success', 'successful', 'paid'])
+                ->where(function ($q) {
+                    $q->whereNull('whatsapp_credit_purchases.school_id')->orWhere('whatsapp_credit_purchases.school_id', '!=', 68);
+                })
+                ->where(function ($q) {
+                    $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+                })
+                ->selectRaw("
+                    whatsapp_credit_purchases.id,
+                    whatsapp_credit_purchases.amount,
+                    COALESCE(whatsapp_credit_purchases.paid_at, whatsapp_credit_purchases.created_at) as trans_date
+                ")
+                ->get()
+                ->map(function ($r) use ($getTermFromDate) {
+                    $date = $r->trans_date ?: now()->toDateTimeString();
+                    return [
+                        'category' => 'whatsapp_credits',
+                        'amount' => (float) $r->amount,
+                        'date' => $date,
+                        'year' => (int) date('Y', strtotime($date)),
+                        'month_number' => (int) date('n', strtotime($date)),
+                        'month' => date('F', strtotime($date)),
+                        'month_year' => date('M Y', strtotime($date)),
+                        'month_key' => date('Y-m', strtotime($date)),
+                        'term' => $getTermFromDate($date),
+                    ];
+                });
+        }
+
+        // 6. AI Credits (ai_credit_purchases)
+        $aiCredits = collect();
+        if (Schema::hasTable('ai_credit_purchases')) {
+            $aiCredits = DB::table('ai_credit_purchases')
+                ->leftJoin('school_settings', 'ai_credit_purchases.school_id', '=', 'school_settings.id')
+                ->whereIn('ai_credit_purchases.status', ['success', 'successful', 'paid'])
+                ->where(function ($q) {
+                    $q->whereNull('ai_credit_purchases.school_id')->orWhere('ai_credit_purchases.school_id', '!=', 68);
+                })
+                ->where(function ($q) {
+                    $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+                })
+                ->selectRaw("
+                    ai_credit_purchases.id,
+                    ai_credit_purchases.amount,
+                    COALESCE(ai_credit_purchases.paid_at, ai_credit_purchases.created_at) as trans_date
+                ")
+                ->get()
+                ->map(function ($r) use ($getTermFromDate) {
+                    $date = $r->trans_date ?: now()->toDateTimeString();
+                    return [
+                        'category' => 'ai_credits',
+                        'amount' => (float) $r->amount,
+                        'date' => $date,
+                        'year' => (int) date('Y', strtotime($date)),
+                        'month_number' => (int) date('n', strtotime($date)),
+                        'month' => date('F', strtotime($date)),
+                        'month_year' => date('M Y', strtotime($date)),
+                        'month_key' => date('Y-m', strtotime($date)),
+                        'term' => $getTermFromDate($date),
+                    ];
+                });
+        }
+
+        // 7. Admissions (school_admission_payments)
+        $admissions = collect();
+        if (Schema::hasTable('school_admission_payments')) {
+            $admissions = DB::table('school_admission_payments')
+                ->leftJoin('school_settings', 'school_admission_payments.school_id', '=', 'school_settings.id')
+                ->whereIn('school_admission_payments.status', ['success', 'successful', 'paid'])
+                ->where(function ($q) {
+                    $q->whereNull('school_admission_payments.school_id')->orWhere('school_admission_payments.school_id', '!=', 68);
+                })
+                ->where(function ($q) {
+                    $q->whereNull('school_settings.school_name')->orWhere('school_settings.school_name', 'not like', '%gradequest%');
+                })
+                ->selectRaw("
+                    school_admission_payments.id,
+                    COALESCE(school_admission_payments.platform_fee, school_admission_payments.total_amount) as amount,
+                    COALESCE(school_admission_payments.paid_at, school_admission_payments.created_at) as trans_date
+                ")
+                ->get()
+                ->map(function ($r) use ($getTermFromDate) {
+                    $date = $r->trans_date ?: now()->toDateTimeString();
+                    return [
+                        'category' => 'admissions',
+                        'amount' => (float) $r->amount,
+                        'date' => $date,
+                        'year' => (int) date('Y', strtotime($date)),
+                        'month_number' => (int) date('n', strtotime($date)),
+                        'month' => date('F', strtotime($date)),
+                        'month_year' => date('M Y', strtotime($date)),
+                        'month_key' => date('Y-m', strtotime($date)),
+                        'term' => $getTermFromDate($date),
+                    ];
+                });
+        }
+
+        $allTransactions = collect()
+            ->concat($subscriptions)
+            ->concat($domainOrders)
+            ->concat($payments)
+            ->concat($invoices)
+            ->concat($whatsapp)
+            ->concat($aiCredits)
+            ->concat($admissions);
+
+        $totalPlatformIncome = (float) $allTransactions->sum('amount');
+        $totalGmv = (float) $payments->sum('gmv');
+        $techFeesEarned = (float) $payments->sum('amount');
+
+        // Current Year & Current Term Income
+        $currentYear = now()->year;
+        $currentYearIncome = (float) $allTransactions->where('year', $currentYear)->sum('amount');
+        $currentTerm = $getTermFromDate(now()->toDateString());
+        $currentTermIncome = (float) $allTransactions->where('year', $currentYear)->where('term', $currentTerm)->sum('amount');
+
+        // Yearly Breakdown
+        $yearlyBreakdown = $allTransactions
+            ->groupBy('year')
+            ->map(function ($group, $y) {
+                return [
+                    'year' => (int) $y,
+                    'total' => (float) $group->sum('amount'),
+                    'subscriptions' => (float) $group->where('category', 'subscriptions')->sum('amount'),
+                    'domains' => (float) $group->where('category', 'domains')->sum('amount'),
+                    'tech_fees' => (float) $group->where('category', 'tech_fees')->sum('amount'),
+                    'invoices' => (float) $group->where('category', 'invoices')->sum('amount'),
+                    'whatsapp_credits' => (float) $group->where('category', 'whatsapp_credits')->sum('amount'),
+                    'ai_credits' => (float) $group->where('category', 'ai_credits')->sum('amount'),
+                    'admissions' => (float) $group->where('category', 'admissions')->sum('amount'),
+                    'transaction_count' => $group->count(),
+                ];
+            })
+            ->sortBy('year')
+            ->values();
+
+        // Termly Breakdown
+        $termLabels = [
+            '1st Term' => 'First Term (September – December)',
+            '2nd Term' => 'Second Term (January – April)',
+            '3rd Term' => 'Third Term (May – August)',
+        ];
+        $termlyBreakdown = collect(['1st Term', '2nd Term', '3rd Term'])
+            ->map(function ($term) use ($allTransactions, $totalPlatformIncome, $termLabels) {
+                $group = $allTransactions->where('term', $term);
+                $tot = (float) $group->sum('amount');
+                return [
+                    'term' => $term,
+                    'label' => $termLabels[$term] ?? $term,
+                    'total' => $tot,
+                    'percentage' => $totalPlatformIncome > 0 ? round(($tot / $totalPlatformIncome) * 100, 1) : 0,
+                    'subscriptions' => (float) $group->where('category', 'subscriptions')->sum('amount'),
+                    'domains' => (float) $group->where('category', 'domains')->sum('amount'),
+                    'tech_fees' => (float) $group->where('category', 'tech_fees')->sum('amount'),
+                    'invoices' => (float) $group->where('category', 'invoices')->sum('amount'),
+                    'whatsapp_credits' => (float) $group->where('category', 'whatsapp_credits')->sum('amount'),
+                    'ai_credits' => (float) $group->where('category', 'ai_credits')->sum('amount'),
+                    'admissions' => (float) $group->where('category', 'admissions')->sum('amount'),
+                    'transaction_count' => $group->count(),
                 ];
             })
             ->values();
 
+        // Category Breakdown
+        $categoriesConfig = [
+            'subscriptions' => ['name' => 'SaaS Subscriptions & Licenses', 'icon' => 'bi-award', 'color' => '#2563EB'],
+            'domains' => ['name' => 'Custom Domain Orders', 'icon' => 'bi-globe2', 'color' => '#059669'],
+            'tech_fees' => ['name' => 'Tuition Tech Royalty Fees', 'icon' => 'bi-shield-check', 'color' => '#D97706'],
+            'invoices' => ['name' => 'Offline Bank Invoices', 'icon' => 'bi-receipt', 'color' => '#7C3AED'],
+            'whatsapp_credits' => ['name' => 'WhatsApp Notification Bundles', 'icon' => 'bi-whatsapp', 'color' => '#16A34A'],
+            'ai_credits' => ['name' => 'AI Lesson & Scheme Credits', 'icon' => 'bi-robot', 'color' => '#DB2777'],
+            'admissions' => ['name' => 'Online Admissions Processing', 'icon' => 'bi-person-badge', 'color' => '#0D9488'],
+        ];
+
+        $categoryBreakdown = collect($categoriesConfig)->map(function ($meta, $key) use ($allTransactions, $totalPlatformIncome) {
+            $group = $allTransactions->where('category', $key);
+            $tot = (float) $group->sum('amount');
+            return [
+                'category' => $key,
+                'name' => $meta['name'],
+                'icon' => $meta['icon'],
+                'color' => $meta['color'],
+                'total' => $tot,
+                'percentage' => $totalPlatformIncome > 0 ? round(($tot / $totalPlatformIncome) * 100, 1) : 0,
+                'transaction_count' => $group->count(),
+            ];
+        })->values();
+
+        // Timeline Data (for the interactive Line Graph!)
+        $timelineData = $allTransactions
+            ->groupBy('month_key')
+            ->map(function ($group, $key) {
+                $first = $group->first();
+                return [
+                    'period' => $first['month_year'],
+                    'month' => $first['month'],
+                    'year' => $first['year'],
+                    'month_key' => $key,
+                    'total' => (float) $group->sum('amount'),
+                    'subscriptions' => (float) $group->where('category', 'subscriptions')->sum('amount'),
+                    'domains' => (float) $group->where('category', 'domains')->sum('amount'),
+                    'tech_fees' => (float) $group->where('category', 'tech_fees')->sum('amount'),
+                    'invoices' => (float) $group->where('category', 'invoices')->sum('amount'),
+                    'whatsapp_credits' => (float) $group->where('category', 'whatsapp_credits')->sum('amount'),
+                    'ai_credits' => (float) $group->where('category', 'ai_credits')->sum('amount'),
+                    'admissions' => (float) $group->where('category', 'admissions')->sum('amount'),
+                ];
+            })
+            ->sortKeys()
+            ->values();
+
+        // Monthly revenue for the current year (backward compatibility with existing monthly bar graph if needed)
+        $currentYearMonthly = $allTransactions
+            ->where('year', $currentYear)
+            ->groupBy('month_number')
+            ->map(function ($group, $mNum) {
+                $first = $group->first();
+                return [
+                    'month_number' => $mNum,
+                    'month' => $first['month'],
+                    'revenue' => (float) $group->sum('amount'),
+                ];
+            })
+            ->sortBy('month_number')
+            ->values();
+
+        // Active Students count (Excluding GradeQuest)
         $totalActiveStudents = User::whereRaw('LOWER(role) = ?', ['student'])
             ->where('status', 1)
             ->where(function ($q) {
@@ -800,17 +1141,14 @@ class SuperAdminController extends Controller
                   ->orWhere('school_id', '!=', 68);
             })
             ->whereDoesntHave('school', function ($q) {
-                $q->where('school_name', 'like', '%gradequest international%');
+                $q->where('school_name', 'like', '%gradequest%');
             })
             ->count();
 
-        // Total Gross Merchandise Value (Tuition processed across all schools)
-        $gmv = (float) DB::table('payments')->where('status', 'success')->sum('amount');
-
-        // Total Technology Royalty Fees collected across platform payments
-        $techFeesEarned = (float) DB::table('payments')->where('status', 'success')->sum('platform_fee');
-
-        $totalSchools = SchoolSetting::count();
+        $totalSchools = SchoolSetting::where(function ($q) {
+            $q->where('id', '!=', 68)
+              ->where('school_name', 'not like', '%gradequest%');
+        })->count();
 
         $splitReadySchools = SchoolBankAccount::where('is_active', true)
             ->where(function ($q) {
@@ -818,17 +1156,34 @@ class SuperAdminController extends Controller
                   ->orWhereNotNull('monnify_subaccount_code')
                   ->orWhereNotNull('flutterwave_subaccount_code');
             })
+            ->where(function ($q) {
+                $q->where('school_id', '!=', 68);
+            })
             ->distinct('school_id')
             ->count('school_id');
 
-        $onlinePayEnabledSchools = SchoolSetting::where('online_payment_enabled', true)->count();
+        $onlinePayEnabledSchools = SchoolSetting::where('online_payment_enabled', true)
+            ->where('id', '!=', 68)
+            ->count();
 
         return response()->json([
             'status' => 'success',
-            'data' => $monthlyRevenue,
+            'data' => $currentYearMonthly,
+            'financial_summary' => [
+                'total_platform_income' => $totalPlatformIncome,
+                'current_year_income' => $currentYearIncome,
+                'current_term_income' => $currentTermIncome,
+                'current_term' => $currentTerm,
+                'total_gmv' => $totalGmv,
+                'tech_fees_earned' => $techFeesEarned,
+            ],
+            'yearly_breakdown' => $yearlyBreakdown,
+            'termly_breakdown' => $termlyBreakdown,
+            'category_breakdown' => $categoryBreakdown,
+            'timeline_data' => $timelineData,
             'total_active_students' => $totalActiveStudents,
             'total_schools' => $totalSchools,
-            'gmv' => $gmv,
+            'gmv' => $totalGmv,
             'tech_fees_earned' => $techFeesEarned,
             'gateway_split_health' => [
                 'total_schools' => $totalSchools,
