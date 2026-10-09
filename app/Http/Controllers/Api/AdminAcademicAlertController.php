@@ -24,7 +24,16 @@ class AdminAcademicAlertController extends Controller
             ], 422);
         }
 
-        if (($auth->role ?? null) !== 'Admin') {
+        $role = strtolower(str_replace([' ', '-'], '_', trim((string) ($auth->role ?? ''))));
+        $allowedRoles = [
+            'admin', 'owner', 'proprietor', 'school_owner', 'school_admin',
+            'principal', 'head_teacher', 'headmaster', 'headmistress',
+            'operator', 'registrar', 'secretary', 'admin_officer',
+            'super_admin', 'platform_staff',
+            'teacher', 'class_teacher', 'subject_teacher'
+        ];
+
+        if (!in_array($role, $allowedRoles, true)) {
             return response()->json([
                 'message' => 'Unauthorized.'
             ], 403);
