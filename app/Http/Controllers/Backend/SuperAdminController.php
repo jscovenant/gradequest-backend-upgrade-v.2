@@ -34,6 +34,13 @@ class SuperAdminController extends Controller
      */
     public function getUserFeatures(Request $request)
     {
+        $user = $request->user();
+        $schoolSetting = $user ? ($user->school ?: $user->schoolsetting) : null;
+        if ($user && $user->school_id && ! $schoolSetting) {
+            $schoolSetting = SchoolSetting::find($user->school_id);
+        }
+        $activeTier = strtolower((string) ($schoolSetting?->active_edition_tier ?: 'standard_cbt'));
+
         $allFeatures = [
             'student_management',
             'support_student_management',
@@ -58,12 +65,8 @@ class SuperAdminController extends Controller
             'support_broadsheet',
             'support_student_promotion',
             'support_parent_timetable',
-            'cbt_online',
-            'cbt_offline',
-            'cbt',
             'ai_lesson_plan_generator',
             'ai_fee_collection_assistant',
-            'ai_cbt_question_generator',
             'ai_result_comment_generator',
             'gradequest_plus',
             'whatsapp_notifications',
@@ -74,7 +77,18 @@ class SuperAdminController extends Controller
             'results',
         ];
 
-        return response()->json(['features' => $allFeatures]);
+        // CBT and AI CBT Question Generator are only available to full CBT editions (standard_cbt, annual_full_session) or platform staff / super admins
+        if ($user && ($user->isSuperAdminUser() || $activeTier !== 'basic_result')) {
+            $allFeatures[] = 'cbt_online';
+            $allFeatures[] = 'cbt_offline';
+            $allFeatures[] = 'cbt';
+            $allFeatures[] = 'ai_cbt_question_generator';
+        }
+
+        return response()->json([
+            'features' => $allFeatures,
+            'active_edition_tier' => $activeTier,
+        ]);
     }
 
     /**

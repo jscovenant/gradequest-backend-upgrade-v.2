@@ -1260,10 +1260,27 @@ Route::put('/attendance-settings', [AttendanceSettingController::class, 'update'
 
 Route::middleware(['auth:sanctum', 'tenant'])->get('/user', function (Request $request) {
     $user = $request->user();
+    $schoolSetting = $user->school ?: $user->schoolsetting;
+    if ($user->school_id && ! $schoolSetting) {
+        $schoolSetting = \App\Models\SchoolSetting::find($user->school_id);
+    }
+    $activeTier = strtolower((string) ($schoolSetting?->active_edition_tier ?: 'standard_cbt'));
 
     return array_merge($user->toArray(), [
         'super_admin_type_label' => $user->isSuperAdminUser() ? $user->superAdminTypeLabel() : null,
         'super_admin_permissions' => $user->superAdminPermissions(),
+        'school' => $schoolSetting ? [
+            'id'   => $schoolSetting->id,
+            'name' => $schoolSetting->school_name,
+            'logo' => $schoolSetting->logo
+                ? asset($schoolSetting->logo)
+                : asset('img/school-default.png'),
+            'category' => $schoolSetting->category ?? null,
+            'primary_color' => $schoolSetting->primary_color ?? '#0F2744',
+            'secondary_color' => $schoolSetting->secondary_color ?? '#D97706',
+            'active_edition_tier' => $activeTier,
+        ] : null,
+        'active_edition_tier' => $activeTier,
     ]);
 });
 

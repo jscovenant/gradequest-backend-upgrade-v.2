@@ -128,6 +128,12 @@ public function login(Request $request)
         Log::warning('Login activity log failed: ' . $e->getMessage());
     }
 
+    $schoolSetting = $user->school ?: $user->schoolsetting;
+    if ($user->school_id && ! $schoolSetting) {
+        $schoolSetting = SchoolSetting::find($user->school_id);
+    }
+    $activeTier = strtolower((string) ($schoolSetting?->active_edition_tier ?: 'standard_cbt'));
+
     $safeUser = [
         'id'        => $user->id,
         'firstname' => $user->firstname,
@@ -139,16 +145,18 @@ public function login(Request $request)
         'photo_url' => $user->photo
             ? asset('uploads/users/' . $user->photo)
             : asset('img/profile.png'),
-        'school'    => $user->schoolsetting ? [
-            'id'   => $user->schoolsetting->id,
-            'name' => $user->schoolsetting->school_name,
-            'logo' => $user->schoolsetting->logo
-                ? asset($user->schoolsetting->logo)
+        'school'    => $schoolSetting ? [
+            'id'   => $schoolSetting->id,
+            'name' => $schoolSetting->school_name,
+            'logo' => $schoolSetting->logo
+                ? asset($schoolSetting->logo)
                 : asset('img/school-default.png'),
-            'category' => $user->schoolsetting->category ?? null,
-            'primary_color' => $user->schoolsetting->primary_color ?? '#0F2744',
-            'secondary_color' => $user->schoolsetting->secondary_color ?? '#D97706',
+            'category' => $schoolSetting->category ?? null,
+            'primary_color' => $schoolSetting->primary_color ?? '#0F2744',
+            'secondary_color' => $schoolSetting->secondary_color ?? '#D97706',
+            'active_edition_tier' => $activeTier,
         ] : null,
+        'active_edition_tier' => $activeTier,
         'must_change_password' => (bool) $user->force_password_change,
         'super_admin_type' => $user->super_admin_type,
         'super_admin_type_label' => $user->isSuperAdminUser() ? $user->superAdminTypeLabel() : null,
