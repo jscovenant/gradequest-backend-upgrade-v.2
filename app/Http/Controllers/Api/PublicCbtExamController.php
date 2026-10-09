@@ -34,17 +34,72 @@ class PublicCbtExamController extends Controller
         ]);
 
         [$admin, $student] = $this->resolveStudentContext($data['school_code'], $data['student_reg_no']);
-        $this->access->ensureCanUse($admin, 'online');
+
+        // Check platform fee / CBT edition
+        $schoolId = (int) ($admin->school_id ?? 0);
+        if ($schoolId > 0) {
+            $policy = app(SchoolFeeAccessPolicyService::class)->policyForSchool($schoolId);
+            $tier = $policy['active_edition_tier'] ?? 'standard_cbt';
+            if ($tier === 'basic_result') {
+                return response()->json([
+                    'status' => 'error',
+                    'school' => $this->schoolPayload($admin),
+                    'student' => $this->studentPayload($student),
+                    'exams' => [],
+                    'rejection' => [
+                        'reason' => 'platform_fee',
+                        'title' => 'CBT Access Locked: Platform Upgrade Required',
+                        'message' => 'CBT Examination is not included in the Basic Result Edition. Please contact school administration to upgrade to the Full CBT Edition.',
+                    ],
+                ], 403);
+            }
+        }
 
         $exams = $this->availableExamQuery($student)
             ->with(['subject:id,name', 'class:id,name', 'term:id,name', 'academicSession:id,name', 'schedules'])
             ->withCount('questions')
             ->get();
 
+        $rejection = null;
+        if ($exams->isEmpty()) {
+            // Check if there are any published exams for the student's class
+            $anyExamsForClass = CbtExam::query()
+                ->where('school_id', $schoolId)
+                ->where('status', 'published')
+                ->where(function ($query) use ($student) {
+                    $query->whereNull('class_id')->orWhere('class_id', $student->level_id);
+                })
+                ->exists();
+
+            // Check if fee policy restricted the student
+            $feeBlock = $this->feeAccessPolicy->cbtAccessStatus(
+                $schoolId,
+                (int) $student->id,
+                null,
+                null
+            );
+
+            if ($anyExamsForClass && !$feeBlock['allowed']) {
+                $rejection = [
+                    'reason' => 'school_fee',
+                    'title' => 'Access Restricted: School Fee Clearance Required',
+                    'message' => $feeBlock['message'] ?: 'School fee clearance is required before you can access this exam. Please contact the Bursary or Administration.',
+                    'fee_access' => $feeBlock,
+                ];
+            } else {
+                $rejection = [
+                    'reason' => 'no_exam_set',
+                    'title' => 'No CBT Exam Scheduled for Your Class',
+                    'message' => 'There are currently no active CBT exams scheduled for your class (' . ($student->level?->name ?? 'your level') . '). If an exam is scheduled for today, please alert your invigilator.',
+                ];
+            }
+        }
+
         return response()->json([
             'school' => $this->schoolPayload($admin),
             'student' => $this->studentPayload($student),
             'exams' => $exams->map(fn (CbtExam $exam) => $this->examSummaryPayload($exam, $student))->values(),
+            'rejection' => $rejection,
         ]);
     }
 
@@ -71,7 +126,18 @@ class PublicCbtExamController extends Controller
             $exam->term_id ? (int) $exam->term_id : null,
         );
 
-        abort_if($feeBlock, 403, $feeBlock['message'] ?? 'Access denied. Complete the required school fee payment before starting this exam.');
+        if ($feeBlock) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'school_fee',
+                    'title' => 'Access Denied: School Fee Clearance Required',
+                    'message' => $feeBlock['message'] ?? 'Complete the required school fee payment before starting this exam.',
+                    'fee_access' => $feeBlock,
+                ],
+                'message' => $feeBlock['message'] ?? 'Access denied. Complete the required school fee payment before starting this exam.',
+            ], 403);
+        }
 
         if ($exam->access_code_required) {
             abort_unless(

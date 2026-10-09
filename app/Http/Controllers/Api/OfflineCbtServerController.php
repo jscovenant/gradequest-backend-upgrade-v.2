@@ -80,11 +80,62 @@ class OfflineCbtServerController extends Controller
 
         abort_unless($student, 404, 'Admission number was not found on this local CBT server.');
 
-        $exams = collect($bundle->payload['exams'] ?? [])
+        // 1. Check if offline package has expired (Platform Fee / Licensing Issue)
+        if ($this->bundleIsExpiredPayload($bundle->payload) || $bundle->is_expired) {
+            return response()->json([
+                'school' => [
+                    'id' => $bundle->school_id,
+                    'name' => $bundle->school_name,
+                ],
+                'student' => $student,
+                'exams' => [],
+                'rejection' => [
+                    'reason' => 'platform_fee',
+                    'title' => 'Offline CBT Package Expired',
+                    'message' => 'The offline CBT license package on this local server has expired. The school administrator must download a fresh package from the SchoolProfit portal.',
+                ],
+            ]);
+        }
+
+        $allBundleExams = collect($bundle->payload['exams'] ?? []);
+        $eligibleExams = $allBundleExams
             ->filter(fn ($exam) => in_array((int) ($student['id'] ?? 0), array_map('intval', $exam['eligible_student_ids'] ?? []), true))
             ->map(fn ($exam) => $this->examSummary($exam, (int) $student['id'], $bundle->id))
             ->values()
             ->all();
+
+        $rejection = null;
+        if (empty($eligibleExams)) {
+            // Check if exams exist in the package for this student's class
+            $studentClassId = (int) ($student['class_id'] ?? 0);
+            $studentClassName = strtolower(trim((string) ($student['class'] ?? '')));
+
+            $matchingClassExams = $allBundleExams->filter(function ($exam) use ($studentClassId, $studentClassName) {
+                if ($studentClassId > 0 && isset($exam['class']['id']) && (int) $exam['class']['id'] === $studentClassId) {
+                    return true;
+                }
+                if ($studentClassName !== '' && isset($exam['class']['name']) && strtolower(trim($exam['class']['name'])) === $studentClassName) {
+                    return true;
+                }
+                return empty($exam['class_id']) && empty($exam['class']['id']);
+            });
+
+            if ($matchingClassExams->isNotEmpty()) {
+                // Exam exists for student's class, but student was excluded from eligible_student_ids due to fees
+                $rejection = [
+                    'reason' => 'school_fee',
+                    'title' => 'Exam Access Restricted: School Fee Clearance Required',
+                    'message' => 'Your student account has an outstanding school fee balance. School policy requires fee clearance before taking exams. Please contact the Bursary or School Administration to update your payment clearance.',
+                ];
+            } else {
+                // No exam was configured or published for this class
+                $rejection = [
+                    'reason' => 'no_exam_set',
+                    'title' => 'No CBT Exam Scheduled for Your Class',
+                    'message' => 'There is currently no CBT exam scheduled for your class (' . ($student['class'] ?? 'your level') . '). If an exam is scheduled for today, please alert your invigilator.',
+                ];
+            }
+        }
 
         return response()->json([
             'school' => [
@@ -92,7 +143,8 @@ class OfflineCbtServerController extends Controller
                 'name' => $bundle->school_name,
             ],
             'student' => $student,
-            'exams' => $exams,
+            'exams' => $eligibleExams,
+            'rejection' => $rejection,
         ]);
     }
 
@@ -108,8 +160,29 @@ class OfflineCbtServerController extends Controller
         $student = $this->studentFromBundle($bundle, (int) $data['student_id']);
         $exam = $this->examFromBundle($bundle, $examId);
 
-        abort_unless(in_array((int) $student['id'], array_map('intval', $exam['eligible_student_ids'] ?? []), true), 403, 'This student is not allowed to write this exam.');
-        abort_unless($this->examIsOpen($exam), 422, 'This exam is not open at the scheduled time.');
+        if (!in_array((int) $student['id'], array_map('intval', $exam['eligible_student_ids'] ?? []), true)) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'school_fee',
+                    'title' => 'Access Restricted: School Fee Clearance Required',
+                    'message' => 'School fee clearance is required before starting this exam. Please contact the school Bursary or Administration.',
+                ],
+                'message' => 'This student is not cleared by school fee policy to write this exam.',
+            ], 403);
+        }
+
+        if (!$this->examIsOpen($exam)) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'no_exam_set',
+                    'title' => 'Exam Window Closed',
+                    'message' => 'This CBT exam is not open at the scheduled time.',
+                ],
+                'message' => 'This exam is not open at the scheduled time.',
+            ], 422);
+        }
 
         $existingSubmitted = OfflineCbtAttempt::query()
             ->where('offline_cbt_bundle_id', $bundle->id)

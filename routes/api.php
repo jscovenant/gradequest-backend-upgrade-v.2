@@ -166,6 +166,7 @@ Route::post('/public/wema/webhook', [\App\Http\Controllers\Backend\WemaWebhookCo
 Route::post('/alatpay/webhook', [\App\Http\Controllers\Backend\WemaWebhookController::class, 'handle'])->name('alatpay.webhook');
 Route::post('/public/alatpay/webhook', [\App\Http\Controllers\Backend\WemaWebhookController::class, 'handle']);
 Route::post('/paystack/webhook', [\App\Http\Controllers\Backend\PaystackWebhookController::class, 'handle'])->name('paystack.webhook');
+Route::get('/public/cbt/ping', fn () => response()->json(['status' => 'connected', 'timestamp' => now()->timestamp, 'server' => request()->getHost()]));
 Route::get('/public/cbt/access/lookup', [PublicCbtExamController::class, 'lookup']);
 Route::post('/public/cbt/access/start', [PublicCbtExamController::class, 'start']);
 Route::post('/public/cbt/attempts/{token}/answers', [PublicCbtExamController::class, 'saveAnswer']);
@@ -173,6 +174,7 @@ Route::post('/public/cbt/attempts/{token}/events', [PublicCbtExamController::cla
 Route::post('/public/cbt/attempts/{token}/submit', [PublicCbtExamController::class, 'submit']);
 Route::get('/public/cbt/offline/installer/download', [\App\Http\Controllers\Api\CbtExamController::class, 'downloadOfflineInstaller']);
 Route::prefix('offline-cbt')->group(function () {
+    Route::get('/ping', fn () => response()->json(['status' => 'connected', 'timestamp' => now()->timestamp, 'server' => request()->getHost()]));
     Route::get('/status', [OfflineCbtServerController::class, 'status']);
     Route::post('/bundle/import', [OfflineCbtServerController::class, 'importBundle']);
     Route::post('/students/lookup', [OfflineCbtServerController::class, 'lookupStudent']);
