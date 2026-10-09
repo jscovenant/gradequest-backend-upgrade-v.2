@@ -628,9 +628,12 @@ Fruits | 4 | 200',
 
     public function downloadOfflineInstaller(Request $request)
     {
+        @ini_set('memory_limit', '512M');
+        @set_time_limit(0);
+
         $user = $request->user();
-        if (!$user && $request->filled('token')) {
-            $tokenStr = (string) $request->query('token');
+        $tokenStr = (string) ($request->query('token') ?: $request->bearerToken());
+        if (!$user && !empty($tokenStr)) {
             $pat = \Laravel\Sanctum\PersonalAccessToken::findToken($tokenStr);
             if ($pat && $pat->tokenable) {
                 $user = $pat->tokenable;
@@ -648,24 +651,49 @@ Fruits | 4 | 200',
                 'Only school administrators can download the offline CBT package or app.'
             );
         } else {
-            abort(401, 'Unauthenticated.');
+            abort(401, 'Unauthenticated. Please log in as an administrator to download the offline CBT app.');
         }
 
         $candidates = [
+            base_path('offline-installer/dist/GradeQuestOfflineCBTSetup.exe'),
+            base_path('offline-installer/dist/SchoolProfitOfflineCBTSetup.exe'),
             base_path('offline-installer/dist/GradiosEduOfflineCBTSetup.exe'),
+            public_path('downloads/GradeQuestOfflineCBTSetup.exe'),
+            public_path('downloads/SchoolProfitOfflineCBTSetup.exe'),
             public_path('downloads/GradiosEduOfflineCBTSetup.exe'),
+            storage_path('app/offline/GradeQuestOfflineCBTSetup.exe'),
+            storage_path('app/offline/SchoolProfitOfflineCBTSetup.exe'),
             storage_path('app/offline/GradiosEduOfflineCBTSetup.exe'),
         ];
 
         $path = collect($candidates)->first(fn ($candidate) => is_file($candidate));
 
+        if (!$path) {
+            $distExe = glob(base_path('offline-installer/dist/*.exe'));
+            if (!empty($distExe)) {
+                $path = $distExe[0];
+            }
+        }
+
+        if (!$path) {
+            $downloadsExe = glob(public_path('downloads/*.exe'));
+            if (!empty($downloadsExe)) {
+                $path = $downloadsExe[0];
+            }
+        }
+
         abort_unless($path && is_file($path), 404, 'Offline CBT installer is not available on the server. Please contact support.');
 
         $fileSize = (int) @filesize($path);
 
+        $host = strtolower((string) $request->getHost());
+        $downloadFilename = str_contains($host, 'gradequest')
+            ? 'GradeQuestOfflineCBTSetup.exe'
+            : 'SchoolProfitOfflineCBTSetup.exe';
+
         $headers = [
             'Content-Type' => 'application/vnd.microsoft.portable-executable',
-            'Content-Disposition' => 'attachment; filename="GradiosEduOfflineCBTSetup.exe"',
+            'Content-Disposition' => 'attachment; filename="' . $downloadFilename . '"',
             'Cache-Control' => 'no-cache, must-revalidate',
             'Pragma' => 'public',
             'Accept-Ranges' => 'bytes',
@@ -675,7 +703,7 @@ Fruits | 4 | 200',
             $headers['Content-Length'] = (string) $fileSize;
         }
 
-        return response()->download($path, 'GradiosEduOfflineCBTSetup.exe', $headers);
+        return response()->download($path, $downloadFilename, $headers);
     }
 
     public function uploadQuestionImage(Request $request, CbtExam $exam): JsonResponse
