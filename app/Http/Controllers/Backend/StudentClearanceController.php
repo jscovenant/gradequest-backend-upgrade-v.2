@@ -317,12 +317,35 @@ class StudentClearanceController extends Controller
                     $this->billing->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
                 }
 
-                // 3. Find all unpaid entitlements for this student (past arrears + current)
-                $studentUnpaid = \App\Models\StudentBillingEntitlement::query()
+                // 3. Find only eligible unpaid entitlements:
+                // If full session: all terms in this session (and past sessions)
+                // If single term: ONLY this term (and strictly past terms/sessions: session < sessionId OR (session == sessionId AND term < termId))
+                $studentUnpaidQuery = \App\Models\StudentBillingEntitlement::query()
                     ->where('school_id', $schoolId)
                     ->where('student_id', $student->id)
-                    ->whereNotIn('status', ['paid', 'override'])
-                    ->get();
+                    ->whereNotIn('status', ['paid', 'override']);
+
+                if ($isFullSession) {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId) {
+                        $q->where('session_id', $sessionId)
+                          ->orWhere('session_id', '<', $sessionId);
+                    });
+                } else {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId, $termId) {
+                        $q->where(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', $sessionId)
+                                ->where('term_id', $termId);
+                        })->orWhere(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', '<', $sessionId)
+                                ->orWhere(function ($sub2) use ($sessionId, $termId) {
+                                    $sub2->where('session_id', $sessionId)
+                                         ->where('term_id', '<', $termId);
+                                });
+                        });
+                    });
+                }
+
+                $studentUnpaid = $studentUnpaidQuery->get();
 
                 foreach ($studentUnpaid as $ent) {
                     $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));
@@ -638,12 +661,35 @@ class StudentClearanceController extends Controller
                     $this->billing->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
                 }
 
-                // 3. Find all unpaid entitlements for this student (past arrears + current)
-                $studentUnpaid = \App\Models\StudentBillingEntitlement::query()
+                // 3. Find only eligible unpaid entitlements:
+                // If full session: all terms in this session (and past sessions)
+                // If single term: ONLY this term (and strictly past terms/sessions: session < sessionId OR (session == sessionId AND term < termId))
+                $studentUnpaidQuery = \App\Models\StudentBillingEntitlement::query()
                     ->where('school_id', $schoolId)
                     ->where('student_id', $student->id)
-                    ->whereNotIn('status', ['paid', 'override'])
-                    ->get();
+                    ->whereNotIn('status', ['paid', 'override']);
+
+                if ($isFullSession) {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId) {
+                        $q->where('session_id', $sessionId)
+                          ->orWhere('session_id', '<', $sessionId);
+                    });
+                } else {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId, $termId) {
+                        $q->where(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', $sessionId)
+                                ->where('term_id', $termId);
+                        })->orWhere(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', '<', $sessionId)
+                                ->orWhere(function ($sub2) use ($sessionId, $termId) {
+                                    $sub2->where('session_id', $sessionId)
+                                         ->where('term_id', '<', $termId);
+                                });
+                        });
+                    });
+                }
+
+                $studentUnpaid = $studentUnpaidQuery->get();
 
                 foreach ($studentUnpaid as $ent) {
                     $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));

@@ -721,12 +721,24 @@ class SchoolBillingService
         $periodGraceUntil = ($session && $term) ? $this->periodGraceUntil($schoolId, $session, $term, $settings->payment_mode, $policy) : null;
         $isPeriodGraceActive = $periodGraceUntil ? now()->lte($periodGraceUntil) : false;
 
-        $blocked = StudentBillingEntitlement::query()
+        $blockedQuery = StudentBillingEntitlement::query()
             ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
             ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
             ->where('student_billing_entitlements.school_id', $schoolId)
             ->where('student_billing_entitlements.student_id', $studentId)
-            ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
+            ->whereNotIn('student_billing_entitlements.status', ['paid', 'override']);
+
+        if ($session && $term) {
+            $blockedQuery->where(function ($q) use ($session, $term) {
+                $q->where('student_billing_entitlements.session_id', '<', $session->id)
+                  ->orWhere(function ($sub) use ($session, $term) {
+                      $sub->where('student_billing_entitlements.session_id', '=', $session->id)
+                          ->where('student_billing_entitlements.term_id', '<=', $term->id);
+                  });
+            });
+        }
+
+        $blocked = $blockedQuery
             ->where(function ($q) use ($session, $term, $isPeriodGraceActive) {
                 $q->where(function ($sub) {
                     $sub->whereNull('student_billing_entitlements.grace_until')
@@ -1759,13 +1771,25 @@ $unpaid = StudentBillingEntitlement::query()
         // 2. Ensure current period entitlement
         $this->ensureEntitlement($schoolId, $studentId, $sessionId, $termId);
 
-        // 3. Find all unpaid entitlements for this student (past arrears + current)
+        // 3. Find eligible unpaid entitlements for this student (past arrears + current)
         $unpaidEntitlements = StudentBillingEntitlement::query()
             ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
             ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
             ->where('student_billing_entitlements.school_id', $schoolId)
             ->where('student_billing_entitlements.student_id', $studentId)
             ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
+            ->where(function ($q) use ($sessionId, $termId) {
+                $q->where(function ($sub) use ($sessionId, $termId) {
+                    $sub->where('student_billing_entitlements.session_id', $sessionId)
+                        ->where('student_billing_entitlements.term_id', $termId);
+                })->orWhere(function ($sub) use ($sessionId, $termId) {
+                    $sub->where('student_billing_entitlements.session_id', '<', $sessionId)
+                        ->orWhere(function ($sub2) use ($sessionId, $termId) {
+                            $sub2->where('student_billing_entitlements.session_id', $sessionId)
+                                 ->where('student_billing_entitlements.term_id', '<', $termId);
+                        });
+                });
+            })
             ->get([
                 'student_billing_entitlements.id',
                 'student_billing_entitlements.session_id',
@@ -2390,20 +2414,43 @@ $unpaid = StudentBillingEntitlement::query()
                 $this->ensureEntitlement($schoolId, (int) $student->id, (int) $sessionId, (int) $t->id);
             }
 
-            // 3. Find all unpaid entitlements for this student (past arrears + current)
-            $studentUnpaid = StudentBillingEntitlement::query()
+            // 3. Find only eligible unpaid entitlements for this student:
+            // If full session: all terms in this session (and past sessions)
+            // If single term: ONLY this term (and strictly past terms/sessions: session < sessionId OR (session == sessionId AND term < termId))
+            $studentUnpaidQuery = StudentBillingEntitlement::query()
                 ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
                 ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
                 ->where('student_billing_entitlements.school_id', $schoolId)
                 ->where('student_billing_entitlements.student_id', $student->id)
-                ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
-                ->get([
-                    'student_billing_entitlements.id',
-                    'student_billing_entitlements.session_id',
-                    'student_billing_entitlements.term_id',
-                    'academic_sessions.name as session_name',
-                    'terms.name as term_name',
-                ]);
+                ->whereNotIn('student_billing_entitlements.status', ['paid', 'override']);
+
+            if ($isFullSession) {
+                $studentUnpaidQuery->where(function ($q) use ($sessionId) {
+                    $q->where('student_billing_entitlements.session_id', $sessionId)
+                      ->orWhere('student_billing_entitlements.session_id', '<', $sessionId);
+                });
+            } else {
+                $studentUnpaidQuery->where(function ($q) use ($sessionId, $termId) {
+                    $q->where(function ($sub) use ($sessionId, $termId) {
+                        $sub->where('student_billing_entitlements.session_id', $sessionId)
+                            ->where('student_billing_entitlements.term_id', $termId);
+                    })->orWhere(function ($sub) use ($sessionId, $termId) {
+                        $sub->where('student_billing_entitlements.session_id', '<', $sessionId)
+                            ->orWhere(function ($sub2) use ($sessionId, $termId) {
+                                $sub2->where('student_billing_entitlements.session_id', $sessionId)
+                                     ->where('student_billing_entitlements.term_id', '<', $termId);
+                            });
+                    });
+                });
+            }
+
+            $studentUnpaid = $studentUnpaidQuery->get([
+                'student_billing_entitlements.id',
+                'student_billing_entitlements.session_id',
+                'student_billing_entitlements.term_id',
+                'academic_sessions.name as session_name',
+                'terms.name as term_name',
+            ]);
 
             foreach ($studentUnpaid as $ent) {
                 $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));
@@ -2614,8 +2661,11 @@ $unpaid = StudentBillingEntitlement::query()
         $pastArrearsCounts = StudentBillingEntitlement::where('school_id', $schoolId)
             ->whereNotIn('status', ['paid', 'override'])
             ->where(function ($q) use ($sessionId, $termId) {
-                $q->where('session_id', '!=', $sessionId)
-                  ->orWhere('term_id', '!=', $termId);
+                $q->where('session_id', '<', $sessionId)
+                  ->orWhere(function ($sub) use ($sessionId, $termId) {
+                      $sub->where('session_id', '=', $sessionId)
+                          ->where('term_id', '<', $termId);
+                  });
             })
             ->select('student_id', DB::raw('count(*) as count'))
             ->groupBy('student_id')
@@ -2862,11 +2912,32 @@ $unpaid = StudentBillingEntitlement::query()
                     $this->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
                 }
 
-                // 3. Find all unpaid entitlements for this student (past arrears + current)
-                $studentUnpaid = StudentBillingEntitlement::where('school_id', $schoolId)
+                // 3. Find only eligible unpaid entitlements for this student (past arrears + current)
+                $studentUnpaidQuery = StudentBillingEntitlement::where('school_id', $schoolId)
                     ->where('student_id', $student->id)
-                    ->whereNotIn('status', ['paid', 'override'])
-                    ->get();
+                    ->whereNotIn('status', ['paid', 'override']);
+
+                if ($isFullSession || $type === 'session') {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId) {
+                        $q->where('session_id', $sessionId)
+                          ->orWhere('session_id', '<', $sessionId);
+                    });
+                } else {
+                    $studentUnpaidQuery->where(function ($q) use ($sessionId, $termId) {
+                        $q->where(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', $sessionId)
+                                ->where('term_id', $termId);
+                        })->orWhere(function ($sub) use ($sessionId, $termId) {
+                            $sub->where('session_id', '<', $sessionId)
+                                ->orWhere(function ($sub2) use ($sessionId, $termId) {
+                                    $sub2->where('session_id', $sessionId)
+                                         ->where('term_id', '<', $termId);
+                                });
+                        });
+                    });
+                }
+
+                $studentUnpaid = $studentUnpaidQuery->get();
 
                 foreach ($studentUnpaid as $ent) {
                     $unpaidSlots[] = [
