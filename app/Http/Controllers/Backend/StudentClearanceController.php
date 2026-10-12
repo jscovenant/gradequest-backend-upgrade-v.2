@@ -250,6 +250,22 @@ class StudentClearanceController extends Controller
                 return response()->json(['success' => false, 'message' => 'No active students found.'], 422);
             }
 
+            // Validate 70% minimum population coverage
+            $coverageCheck = $this->billing->validateMinimumCoverageForClearance(
+                $schoolId,
+                $students->pluck('id')->all(),
+                $sessionId,
+                $termId
+            );
+            if (!$coverageCheck['allowed']) {
+                return response()->json([
+                    'success' => false,
+                    'minimum_coverage_unmet' => true,
+                    'message' => $coverageCheck['message'],
+                    'data' => $coverageCheck,
+                ], 422);
+            }
+
             $unpaidSlots = [];
             $currentSlotsCount = 0;
             $arrearsSlotsCount = 0;
@@ -553,6 +569,22 @@ class StudentClearanceController extends Controller
 
             if ($students->isEmpty()) {
                 return response()->json(['success' => false, 'message' => 'No active students found.'], 422);
+            }
+
+            // Validate 70% minimum population coverage
+            $coverageCheck = $this->billing->validateMinimumCoverageForClearance(
+                $schoolId,
+                $students->pluck('id')->all(),
+                $sessionId,
+                $termId
+            );
+            if (!$coverageCheck['allowed']) {
+                return response()->json([
+                    'success' => false,
+                    'minimum_coverage_unmet' => true,
+                    'message' => $coverageCheck['message'],
+                    'data' => $coverageCheck,
+                ], 422);
             }
 
             $unpaidSlots = [];

@@ -1732,6 +1732,12 @@ $unpaid = StudentBillingEntitlement::query()
         $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
         $term = Term::where('school_id', $schoolId)->findOrFail($termId);
 
+        // Validate 70% minimum population coverage
+        $coverageCheck = $this->validateMinimumCoverageForClearance($schoolId, [$studentId], $sessionId, $termId);
+        if (!$coverageCheck['allowed']) {
+            throw new \RuntimeException($coverageCheck['message']);
+        }
+
         // 1. Auto-waive zero-activity past periods
         $this->autoWaiveZeroActivityPastEntitlements($schoolId, $studentId, $sessionId, $termId);
 
@@ -1846,6 +1852,12 @@ $unpaid = StudentBillingEntitlement::query()
                 'total_fee' => 0,
                 'wallet_balance' => (float) (DB::table('wallets')->where('school_id', $schoolId)->value('balance') ?? 0),
             ];
+        }
+
+        // Validate 70% minimum population coverage
+        $coverageCheck = $this->validateMinimumCoverageForClearance($schoolId, collect($unpaidStudents)->pluck('id')->all(), $sessionId, $termId);
+        if (!$coverageCheck['allowed']) {
+            throw new \RuntimeException($coverageCheck['message']);
         }
 
         $totalFee = $count * $feePerStudent;
@@ -2094,6 +2106,13 @@ $unpaid = StudentBillingEntitlement::query()
             })
             ->count();
 
+        $policy = $this->policy();
+        $minCoveragePercent = (int) ($policy->online_minimum_coverage_percent ?? 70);
+        $minStudentsRequired = (int) ceil(($totalStudents * $minCoveragePercent) / 100);
+        $isMinCoverageMet = $totalStudents === 0 || $clearedCount >= $minStudentsRequired;
+        $shortfallStudents = max(0, $minStudentsRequired - $clearedCount);
+        $coveragePercent = $totalStudents > 0 ? round(($clearedCount / $totalStudents) * 100, 1) : 100.0;
+
         return [
             'total_students' => $totalStudents,
             'cleared_count' => $clearedCount,
@@ -2106,8 +2125,105 @@ $unpaid = StudentBillingEntitlement::query()
             'past_arrears_slots' => $pastArrearsSlots,
             'past_arrears_fee' => $pastArrearsSlots * $feePerStudent,
             'wallet_balance' => $walletBalance,
+            'minimum_coverage_percent' => $minCoveragePercent,
+            'minimum_students_required' => $minStudentsRequired,
+            'is_minimum_coverage_met' => $isMinCoverageMet,
+            'shortfall_students' => $shortfallStudents,
+            'coverage_percent' => $coveragePercent,
             'session_id' => $sessionId,
             'term_id' => $termId,
+        ];
+    }
+
+    /**
+     * Validate that clearing the specified students satisfies the 70% minimum population coverage threshold.
+     */
+    public function validateMinimumCoverageForClearance(
+        int $schoolId,
+        array $studentIdsToClear,
+        int $sessionId,
+        ?int $termId = null
+    ): array {
+        $policy = $this->policy();
+        $minCoveragePercent = (int) ($policy->online_minimum_coverage_percent ?? 70);
+
+        if ($minCoveragePercent <= 0) {
+            return ['allowed' => true];
+        }
+
+        $totalActiveStudents = User::where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->count();
+
+        if ($totalActiveStudents === 0) {
+            return ['allowed' => true];
+        }
+
+        $minStudentsRequired = (int) ceil(($totalActiveStudents * $minCoveragePercent) / 100);
+
+        // Find which active students are ALREADY paid/cleared for this session and term
+        $alreadyClearedStudentIds = StudentBillingEntitlement::query()
+            ->join('users', 'users.id', '=', 'student_billing_entitlements.student_id')
+            ->where('student_billing_entitlements.school_id', $schoolId)
+            ->where('student_billing_entitlements.session_id', $sessionId)
+            ->when($termId, fn ($q) => $q->where('student_billing_entitlements.term_id', $termId))
+            ->whereIn('student_billing_entitlements.status', ['paid', 'override'])
+            ->where('users.status', 1)
+            ->whereRaw('LOWER(users.role) = ?', ['student'])
+            ->pluck('student_billing_entitlements.student_id')
+            ->unique()
+            ->toArray();
+
+        $alreadyClearedCount = count($alreadyClearedStudentIds);
+
+        // If the school has ALREADY met or exceeded the 70% threshold, allow any incremental clearance
+        if ($alreadyClearedCount >= $minStudentsRequired) {
+            return [
+                'allowed' => true,
+                'minimum_coverage_percent' => $minCoveragePercent,
+                'total_active_students' => $totalActiveStudents,
+                'min_students_required' => $minStudentsRequired,
+                'already_cleared_count' => $alreadyClearedCount,
+                'is_already_satisfied' => true,
+            ];
+        }
+
+        // Active students being cleared in this transaction
+        $validClearingStudentIds = User::where('school_id', $schoolId)
+            ->whereIn('id', $studentIdsToClear)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->pluck('id')
+            ->toArray();
+
+        $combinedClearedStudentIds = array_unique(array_merge($alreadyClearedStudentIds, $validClearingStudentIds));
+        $combinedCount = count($combinedClearedStudentIds);
+
+        if ($combinedCount < $minStudentsRequired) {
+            $shortfall = $minStudentsRequired - $alreadyClearedCount;
+            $attempted = count($validClearingStudentIds);
+
+            return [
+                'allowed' => false,
+                'minimum_coverage_percent' => $minCoveragePercent,
+                'total_active_students' => $totalActiveStudents,
+                'min_students_required' => $minStudentsRequired,
+                'already_cleared_count' => $alreadyClearedCount,
+                'attempted_clearing_count' => $attempted,
+                'combined_cleared_count' => $combinedCount,
+                'shortfall' => $shortfall,
+                'message' => "SchoolProfit minimum population policy: Your school has {$totalActiveStudents} active enrolled students. You must clear platform fees for at least {$minCoveragePercent}% of your total student population (minimum {$minStudentsRequired} students) to activate platform services for this term. Currently cleared: {$alreadyClearedCount}. You selected {$attempted} student(s). Please select at least {$shortfall} student(s) to reach the 70% threshold.",
+            ];
+        }
+
+        return [
+            'allowed' => true,
+            'minimum_coverage_percent' => $minCoveragePercent,
+            'total_active_students' => $totalActiveStudents,
+            'min_students_required' => $minStudentsRequired,
+            'already_cleared_count' => $alreadyClearedCount,
+            'is_already_satisfied' => false,
         ];
     }
 
@@ -2136,6 +2252,12 @@ $unpaid = StudentBillingEntitlement::query()
 
         if ($students->isEmpty()) {
             throw new \RuntimeException('No active students found from the selection.');
+        }
+
+        // Validate 70% minimum population coverage
+        $coverageCheck = $this->validateMinimumCoverageForClearance($schoolId, $students->pluck('id')->all(), $sessionId, $termId);
+        if (!$coverageCheck['allowed']) {
+            throw new \RuntimeException($coverageCheck['message']);
         }
 
         $unpaidSlots = [];

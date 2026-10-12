@@ -123,6 +123,24 @@ class BroadsheetV2Controller extends Controller
                     'message' => 'Official broadsheet export is locked. The school has overdue platform invoices. Please settle outstanding invoices in the Billing portal.',
                 ], 402);
             }
+
+            // Check 70% minimum coverage policy
+            try {
+                $billingSvc = app(\App\Services\SchoolBillingService::class);
+                $summary = $billingSvc->clearanceSummary($schoolId);
+                if (!empty($summary['minimum_students_required']) && ($summary['cleared_count'] ?? 0) < $summary['minimum_students_required']) {
+                    $pct = $summary['minimum_coverage_percent'] ?? 70;
+                    $req = $summary['minimum_students_required'];
+                    $curr = $summary['cleared_count'] ?? 0;
+                    $tot = $summary['total_students'] ?? 0;
+                    return response()->json([
+                        'status' => 'platform_fee_required',
+                        'message' => "Official broadsheet export is locked. Under SchoolProfit billing policy, your school must clear platform fees for at least {$pct}% of your enrolled student population (minimum {$req} of {$tot} students; currently {$curr} cleared). Please clear the remaining shortfall in the Billing portal to unlock broadsheets.",
+                    ], 402);
+                }
+            } catch (\Throwable) {
+                // pass through if resolution fails
+            }
         }
 
         return $svc->export($data, $format);
