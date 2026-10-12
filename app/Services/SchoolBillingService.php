@@ -2113,6 +2113,14 @@ $unpaid = StudentBillingEntitlement::query()
         $shortfallStudents = max(0, $minStudentsRequired - $clearedCount);
         $coveragePercent = $totalStudents > 0 ? round(($clearedCount / $totalStudents) * 100, 1) : 100.0;
 
+        $session = $sessionId ? AcademicSession::where('school_id', $schoolId)->find($sessionId) : $currentSession;
+        $term = $termId ? Term::where('school_id', $schoolId)->find($termId) : $currentTerm;
+        $sessionName = $session?->name ?? 'Current Academic Session';
+        $termName = $term?->name ?? 'Current Academic Term';
+        $periodLabel = "{$sessionName} • {$termName}";
+        $shortfallFee = $shortfallStudents * $feePerStudent;
+        $minQuotaFee = $minStudentsRequired * $feePerStudent;
+
         return [
             'total_students' => $totalStudents,
             'cleared_count' => $clearedCount,
@@ -2129,10 +2137,74 @@ $unpaid = StudentBillingEntitlement::query()
             'minimum_students_required' => $minStudentsRequired,
             'is_minimum_coverage_met' => $isMinCoverageMet,
             'shortfall_students' => $shortfallStudents,
+            'shortfall_fee' => $shortfallFee,
+            'min_quota_fee' => $minQuotaFee,
             'coverage_percent' => $coveragePercent,
             'session_id' => $sessionId,
             'term_id' => $termId,
+            'session_name' => $sessionName,
+            'term_name' => $termName,
+            'period_label' => $periodLabel,
         ];
+    }
+
+    /**
+     * Retrieve all active student IDs who are unpaid for the specified session and term across all pages.
+     */
+    public function unpaidStudentIdsForPeriod(int $schoolId, int $sessionId, int $termId, ?int $limit = null): array
+    {
+        $alreadyClearedIds = StudentBillingEntitlement::query()
+            ->where('school_id', $schoolId)
+            ->where('session_id', $sessionId)
+            ->where('term_id', $termId)
+            ->whereIn('status', ['paid', 'override'])
+            ->pluck('student_id')
+            ->toArray();
+
+        $query = User::query()
+            ->where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->where('status', 1)
+            ->whereNotIn('id', $alreadyClearedIds)
+            ->orderBy('level_id')
+            ->orderBy('firstname')
+            ->orderBy('surname');
+
+        if ($limit && $limit > 0) {
+            $query->limit($limit);
+        }
+
+        return $query->pluck('id')->all();
+    }
+
+    /**
+     * Clear the exact 70% minimum quota shortfall from the school wallet.
+     */
+    public function clearMinQuotaFromWallet(int $schoolId, int $sessionId, int $termId, ?int $actorId = null): array
+    {
+        $summary = $this->clearanceSummary($schoolId, $sessionId, $termId);
+        $shortfall = (int) ($summary['shortfall_students'] ?? 0);
+        if ($shortfall <= 0) {
+            return [
+                'success' => true,
+                'message' => 'Your school has already met or exceeded the 70% minimum population clearance threshold.',
+                'wallet_balance' => (float) ($summary['wallet_balance'] ?? 0),
+            ];
+        }
+
+        $unpaidIds = $this->unpaidStudentIdsForPeriod($schoolId, $sessionId, $termId, $shortfall);
+        if (empty($unpaidIds)) {
+            throw new \RuntimeException('No unpaid active students found to fulfill quota.');
+        }
+
+        return $this->clearSelectedStudentsFromWallet(
+            $schoolId,
+            $unpaidIds,
+            $sessionId,
+            $termId,
+            false,
+            $actorId
+        );
     }
 
     /**

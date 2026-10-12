@@ -59,6 +59,42 @@ class StudentClearanceController extends Controller
         return response()->json($data);
     }
 
+    public function unpaidStudentIds(Request $request): JsonResponse
+    {
+        $schoolId = (int) $request->user()->school_id;
+        [$currentSession, $currentTerm] = $this->billing->currentPeriod($schoolId);
+        $sessionId = (int) ($request->query('session_id') ?: $currentSession?->id);
+        $termId = (int) ($request->query('term_id') ?: $currentTerm?->id);
+        $limit = $request->query('limit') ? (int) $request->query('limit') : null;
+
+        $ids = $this->billing->unpaidStudentIdsForPeriod($schoolId, $sessionId, $termId, $limit);
+
+        return response()->json([
+            'success' => true,
+            'student_ids' => $ids,
+            'count' => count($ids),
+        ]);
+    }
+
+    public function clearMinQuota(Request $request): JsonResponse
+    {
+        $schoolId = (int) $request->user()->school_id;
+        $actorId = (int) $request->user()->id;
+        [$currentSession, $currentTerm] = $this->billing->currentPeriod($schoolId);
+        $sessionId = (int) ($request->input('session_id') ?: $currentSession?->id);
+        $termId = (int) ($request->input('term_id') ?: $currentTerm?->id);
+
+        try {
+            $result = $this->billing->clearMinQuotaFromWallet($schoolId, $sessionId, $termId, $actorId);
+            return response()->json($result);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+            ], 422);
+        }
+    }
+
     public function clearSelected(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -207,7 +243,7 @@ class StudentClearanceController extends Controller
     public function initiatePaystackClearance(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'type'            => 'required|in:selected,single,term,session,all',
+            'type'            => 'required|in:selected,single,term,session,all,min_quota',
             'session_id'      => 'required|integer',
             'term_id'         => 'nullable|integer',
             'student_ids'     => 'nullable|array',
@@ -228,7 +264,21 @@ class StudentClearanceController extends Controller
             $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
             $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
 
-            if ($validated['type'] === 'selected' || $validated['type'] === 'single') {
+            if ($validated['type'] === 'min_quota') {
+                $summary = $this->billing->clearanceSummary($schoolId, $sessionId, $termId);
+                $shortfall = (int) ($summary['shortfall_students'] ?? 0);
+                if ($shortfall <= 0) {
+                    return response()->json(['success' => false, 'message' => 'Your school has already met or exceeded the 70% minimum population clearance threshold.'], 422);
+                }
+
+                $effectiveTermId = $termId ?: (int) ($terms->first()?->id ?? 1);
+                $rawIds = $this->billing->unpaidStudentIdsForPeriod($schoolId, $sessionId, $effectiveTermId, $shortfall);
+                $students = User::where('school_id', $schoolId)
+                    ->whereIn('id', $rawIds)
+                    ->whereRaw('LOWER(role) = ?', ['student'])
+                    ->where('status', 1)
+                    ->get();
+            } else if ($validated['type'] === 'selected' || $validated['type'] === 'single') {
                 $rawIds = array_values(array_unique(array_filter(array_map('intval', $validated['student_ids'] ?? []))));
                 if (empty($rawIds)) {
                     return response()->json(['success' => false, 'message' => 'No students selected for clearance.'], 422);
@@ -529,7 +579,7 @@ class StudentClearanceController extends Controller
     public function initiateOnlineClearance(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'type'            => 'required|in:selected,single,term,session,all',
+            'type'            => 'required|in:selected,single,term,session,all,min_quota',
             'session_id'      => 'required|integer',
             'term_id'         => 'nullable|integer',
             'student_ids'     => 'nullable|array',
@@ -549,7 +599,21 @@ class StudentClearanceController extends Controller
             $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
             $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
 
-            if ($validated['type'] === 'selected' || $validated['type'] === 'single') {
+            if ($validated['type'] === 'min_quota') {
+                $summary = $this->billing->clearanceSummary($schoolId, $sessionId, $termId);
+                $shortfall = (int) ($summary['shortfall_students'] ?? 0);
+                if ($shortfall <= 0) {
+                    return response()->json(['success' => false, 'message' => 'Your school has already met or exceeded the 70% minimum population clearance threshold.'], 422);
+                }
+
+                $effectiveTermId = $termId ?: (int) ($terms->first()?->id ?? 1);
+                $rawIds = $this->billing->unpaidStudentIdsForPeriod($schoolId, $sessionId, $effectiveTermId, $shortfall);
+                $students = User::where('school_id', $schoolId)
+                    ->whereIn('id', $rawIds)
+                    ->whereRaw('LOWER(role) = ?', ['student'])
+                    ->where('status', 1)
+                    ->get();
+            } else if ($validated['type'] === 'selected' || $validated['type'] === 'single') {
                 $rawIds = array_values(array_unique(array_filter(array_map('intval', $validated['student_ids'] ?? []))));
                 if (empty($rawIds)) {
                     return response()->json(['success' => false, 'message' => 'No students selected for clearance.'], 422);

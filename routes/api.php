@@ -592,6 +592,8 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
   // Student Clearance & Wallet Entitlement Routes
   Route::get('/school/clearance/summary', [StudentClearanceController::class, 'summary']);
   Route::get('/school/clearance/students-list', [StudentClearanceController::class, 'studentsList']);
+  Route::get('/school/clearance/unpaid-student-ids', [StudentClearanceController::class, 'unpaidStudentIds']);
+  Route::post('/school/clearance/clear-min-quota', [StudentClearanceController::class, 'clearMinQuota']);
   Route::post('/school/clearance/clear-selected', [StudentClearanceController::class, 'clearSelected']);
   Route::post('/school/clearance/clear-student', [StudentClearanceController::class, 'clearStudent']);
   Route::post('/school/clearance/clear-class', [StudentClearanceController::class, 'clearClass']);
