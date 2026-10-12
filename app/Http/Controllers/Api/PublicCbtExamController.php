@@ -151,11 +151,11 @@ class PublicCbtExamController extends Controller
                 'status' => 'error',
                 'rejection' => [
                     'reason' => 'platform_fee',
-                    'title' => 'Access Denied: Platform Fee Clearance Required',
-                    'message' => 'Platform fee for this academic period is unpaid. Please contact school administration to clear the platform fee before taking CBT exams.',
+                    'title' => 'Access Denied: SchoolProfit Platform Fee Clearance Required',
+                    'message' => ($billingClearance['explanatory_note'] ?? 'SchoolProfit platform fee for this academic period is unpaid.') . ' Please contact school administration to clear the platform fee before taking CBT exams.',
                     'billing_clearance' => $billingClearance,
                 ],
-                'message' => 'Access denied. Platform fee for this academic period is unpaid. Please contact school administration to clear the platform fee before taking CBT exams.',
+                'message' => 'Access denied. ' . ($billingClearance['explanatory_note'] ?? 'SchoolProfit platform fee is unpaid.') . ' Please contact school administration to clear the platform fee before taking CBT exams.',
             ], 402);
         }
 
@@ -435,7 +435,7 @@ class PublicCbtExamController extends Controller
             'fee_access' => $feeAccess ? [
                 'allowed' => (bool) $feeAccess['allowed'] && ((bool) ($billingClearance['allowed'] ?? true)),
                 'message' => ! ((bool) ($billingClearance['allowed'] ?? true))
-                    ? 'Platform fee unpaid. Contact school administration to clear the platform fee.'
+                    ? ($billingClearance['explanatory_note'] ?? 'SchoolProfit platform fee unpaid. Contact school administration to clear the platform fee.')
                     : $feeAccess['message'],
                 'required_percent' => $feeAccess['required_percent'],
                 'summary' => $feeAccess['summary'],

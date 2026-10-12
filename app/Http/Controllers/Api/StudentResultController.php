@@ -864,10 +864,13 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
             );
 
             if (! ($billingClearance['allowed'] ?? false)) {
+                $totalFeeRequired = (float) ($billingClearance['total_fee_required'] ?? 1000);
+                $explanatoryNote = $billingClearance['explanatory_note'] ?? ("SchoolProfit platform fee of ₦" . number_format($totalFeeRequired, 2) . " is unpaid.");
                 return response()->json([
-                    'message' => 'Official Report Card is locked. Platform fee of ₦1,000 for this academic period is unpaid. Please settle the platform fee to view, download, or print this report card.',
+                    'message' => "Official Report Card is locked. {$explanatoryNote} Please settle the platform fee to view, download, or print this report card.",
                     'status' => 'platform_fee_required',
                     'reason' => 'student_outstanding_billing_required',
+                    'total_fee_required' => $totalFeeRequired,
                     'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
                     'billing_clearance' => $billingClearance,
                 ], 402);

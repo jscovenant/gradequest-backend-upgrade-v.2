@@ -73,7 +73,7 @@ class CbtStudentExamController extends Controller
                 $platformCleared = (bool) ($billingClearance['allowed'] ?? false);
                 $allowed = (bool) $feeAccess['allowed'] && $platformCleared;
                 $message = ! $platformCleared
-                    ? 'Platform fee unpaid. Contact school administration to clear the platform fee.'
+                    ? ($billingClearance['explanatory_note'] ?? 'SchoolProfit platform fee is unpaid. Contact school administration to clear the platform fee.')
                     : $feeAccess['message'];
 
                 return $exam->toArray() + [
@@ -297,7 +297,7 @@ class CbtStudentExamController extends Controller
             (int) $exam->school_id,
             (int) $student->id
         );
-        abort_if(! ($billingClearance['allowed'] ?? false), 402, 'Access denied. Platform fee for this academic period is unpaid. Please contact school administration to clear the platform fee before taking CBT exams.');
+        abort_if(! ($billingClearance['allowed'] ?? false), 402, 'Access denied. ' . ($billingClearance['explanatory_note'] ?? 'SchoolProfit platform fee is unpaid.') . ' Please contact school administration to clear the platform fee before taking CBT exams.');
 
         if ($exam->class_id) {
             abort_unless((int) $exam->class_id === (int) $student->level_id, 403, 'This CBT exam is not assigned to your class.');

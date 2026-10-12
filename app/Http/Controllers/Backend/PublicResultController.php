@@ -111,11 +111,15 @@ class PublicResultController extends Controller
             (int) $student->id
         );
         if (! ($billingClearance['allowed'] ?? false)) {
+            $totalFeeRequired = (float) ($billingClearance['total_fee_required'] ?? 1000);
+            $explanatoryNote = $billingClearance['explanatory_note'] ?? ("SchoolProfit platform fee of ₦" . number_format($totalFeeRequired, 2) . " is unpaid.");
             return response()->json([
                 'status'  => 'platform_fee_required',
-                'message' => 'Official result card is locked. Platform fee of ₦1,000 for this academic period is unpaid. Please settle the platform fee to view or print this result.',
+                'message' => "Official result card is locked. {$explanatoryNote} Please settle the platform fee to view or print this result.",
                 'reason'  => 'student_outstanding_billing_required',
+                'total_fee_required' => $totalFeeRequired,
                 'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
+                'billing_clearance' => $billingClearance,
             ], 402);
         }
 

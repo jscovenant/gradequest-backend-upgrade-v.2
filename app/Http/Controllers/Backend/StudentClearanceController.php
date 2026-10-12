@@ -251,27 +251,53 @@ class StudentClearanceController extends Controller
             }
 
             $unpaidSlots = [];
-            if ($isFullSession) {
-                foreach ($terms as $t) {
-                    foreach ($students as $student) {
-                        $ent = $this->billing->ensureEntitlement($schoolId, $student->id, $sessionId, $t->id);
-                        if (!in_array($ent->status, ['paid', 'override'], true)) {
-                            $unpaidSlots[] = ['student_id' => $student->id, 'term_id' => $t->id];
-                        }
-                    }
-                }
-            } else {
-                if (!$termId) {
-                    [$currSess, $currTerm] = $this->billing->currentPeriod($schoolId);
-                    $termId = (int) $currTerm?->id;
-                }
-                $targetTerm = $terms->firstWhere('id', $termId) ?? Term::where('school_id', $schoolId)->findOrFail($termId);
+            $currentSlotsCount = 0;
+            $arrearsSlotsCount = 0;
 
-                foreach ($students as $student) {
-                    $ent = $this->billing->ensureEntitlement($schoolId, $student->id, $sessionId, $targetTerm->id);
-                    if (!in_array($ent->status, ['paid', 'override'], true)) {
-                        $unpaidSlots[] = ['student_id' => $student->id, 'term_id' => $targetTerm->id];
+            if (!$termId && !$isFullSession) {
+                [$currSess, $currTerm] = $this->billing->currentPeriod($schoolId);
+                $termId = (int) $currTerm?->id;
+            }
+
+            $targetTerms = [];
+            if ($isFullSession) {
+                $targetTerms = $terms;
+            } else {
+                $targetTerm = $terms->firstWhere('id', $termId) ?? Term::where('school_id', $schoolId)->findOrFail($termId);
+                $targetTerms = collect([$targetTerm]);
+            }
+
+            foreach ($students as $student) {
+                // 1. Auto-waive zero-activity past periods
+                $this->billing->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $student->id, (int) $sessionId, $termId ? (int) $termId : 0);
+
+                // 2. Ensure current period entitlement(s)
+                foreach ($targetTerms as $t) {
+                    $this->billing->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
+                }
+
+                // 3. Find all unpaid entitlements for this student (past arrears + current)
+                $studentUnpaid = \App\Models\StudentBillingEntitlement::query()
+                    ->where('school_id', $schoolId)
+                    ->where('student_id', $student->id)
+                    ->whereNotIn('status', ['paid', 'override'])
+                    ->get();
+
+                foreach ($studentUnpaid as $ent) {
+                    $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));
+                    if ($isCurrent) {
+                        $currentSlotsCount++;
+                    } else {
+                        $arrearsSlotsCount++;
                     }
+
+                    $unpaidSlots[] = [
+                        'student_id' => $student->id,
+                        'entitlement_id' => $ent->id,
+                        'session_id' => $ent->session_id,
+                        'term_id' => $ent->term_id,
+                        'is_current' => $isCurrent,
+                    ];
                 }
             }
 
@@ -321,6 +347,8 @@ class StudentClearanceController extends Controller
                 'term_id' => $termId,
                 'is_full_session' => $isFullSession,
                 'slot_count' => $slotCount,
+                'current_slots_count' => $currentSlotsCount,
+                'arrears_slots_count' => $arrearsSlotsCount,
                 'fee_per_student' => $feePerStudent,
                 'total_fee' => $totalFee,
             ];
@@ -366,6 +394,8 @@ class StudentClearanceController extends Controller
                 'reference' => $reference,
                 'total_fee' => $totalFee,
                 'slot_count' => $slotCount,
+                'current_slots_count' => $currentSlotsCount,
+                'arrears_slots_count' => $arrearsSlotsCount,
                 'student_count' => count($studentIdsToClear),
             ]);
         } catch (\Throwable $e) {
@@ -526,27 +556,53 @@ class StudentClearanceController extends Controller
             }
 
             $unpaidSlots = [];
-            if ($isFullSession) {
-                foreach ($terms as $t) {
-                    foreach ($students as $student) {
-                        $ent = $this->billing->ensureEntitlement($schoolId, $student->id, $sessionId, $t->id);
-                        if (!in_array($ent->status, ['paid', 'override'], true)) {
-                            $unpaidSlots[] = ['student_id' => $student->id, 'term_id' => $t->id];
-                        }
-                    }
-                }
-            } else {
-                if (!$termId) {
-                    [$currSess, $currTerm] = $this->billing->currentPeriod($schoolId);
-                    $termId = (int) $currTerm?->id;
-                }
-                $targetTerm = $terms->firstWhere('id', $termId) ?? Term::where('school_id', $schoolId)->findOrFail($termId);
+            $currentSlotsCount = 0;
+            $arrearsSlotsCount = 0;
 
-                foreach ($students as $student) {
-                    $ent = $this->billing->ensureEntitlement($schoolId, $student->id, $sessionId, $targetTerm->id);
-                    if (!in_array($ent->status, ['paid', 'override'], true)) {
-                        $unpaidSlots[] = ['student_id' => $student->id, 'term_id' => $targetTerm->id];
+            if (!$termId && !$isFullSession) {
+                [$currSess, $currTerm] = $this->billing->currentPeriod($schoolId);
+                $termId = (int) $currTerm?->id;
+            }
+
+            $targetTerms = [];
+            if ($isFullSession) {
+                $targetTerms = $terms;
+            } else {
+                $targetTerm = $terms->firstWhere('id', $termId) ?? Term::where('school_id', $schoolId)->findOrFail($termId);
+                $targetTerms = collect([$targetTerm]);
+            }
+
+            foreach ($students as $student) {
+                // 1. Auto-waive zero-activity past periods
+                $this->billing->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $student->id, (int) $sessionId, $termId ? (int) $termId : 0);
+
+                // 2. Ensure current period entitlement(s)
+                foreach ($targetTerms as $t) {
+                    $this->billing->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
+                }
+
+                // 3. Find all unpaid entitlements for this student (past arrears + current)
+                $studentUnpaid = \App\Models\StudentBillingEntitlement::query()
+                    ->where('school_id', $schoolId)
+                    ->where('student_id', $student->id)
+                    ->whereNotIn('status', ['paid', 'override'])
+                    ->get();
+
+                foreach ($studentUnpaid as $ent) {
+                    $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));
+                    if ($isCurrent) {
+                        $currentSlotsCount++;
+                    } else {
+                        $arrearsSlotsCount++;
                     }
+
+                    $unpaidSlots[] = [
+                        'student_id' => $student->id,
+                        'entitlement_id' => $ent->id,
+                        'session_id' => $ent->session_id,
+                        'term_id' => $ent->term_id,
+                        'is_current' => $isCurrent,
+                    ];
                 }
             }
 
@@ -607,6 +663,9 @@ class StudentClearanceController extends Controller
                         'type' => $validated['type'],
                         'student_ids' => $students->pluck('id')->all(),
                         'is_full_session' => $isFullSession,
+                        'slot_count' => $slotCount,
+                        'current_slots_count' => $currentSlotsCount,
+                        'arrears_slots_count' => $arrearsSlotsCount,
                         'channel' => 'student_clearance_wema',
                         'invoice_id' => $invoice->id,
                     ],
@@ -620,6 +679,8 @@ class StudentClearanceController extends Controller
                 'reference' => $reference,
                 'amount' => $amount,
                 'slot_count' => $slotCount,
+                'current_slots_count' => $currentSlotsCount,
+                'arrears_slots_count' => $arrearsSlotsCount,
                 'student_count' => count($students),
             ]);
         } catch (\Throwable $e) {

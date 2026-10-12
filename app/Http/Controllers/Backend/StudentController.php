@@ -1102,7 +1102,7 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             $unpaidCount = $blockedStudents->count();
 
             return response()->json([
-                'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully. Note: {$unpaidCount} student(s) have unpaid platform fees; their official report cards and CBT exams remain locked until platform fees are cleared.",
+                'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully. Note: {$unpaidCount} student(s) have unpaid SchoolProfit platform fees; their official report cards and CBT exams remain locked until platform fees are cleared.",
                 'promoted_count' => $promotedCount,
                 'unpaid_count' => $unpaidCount,
                 'unpaid_students' => $blockedStudents,

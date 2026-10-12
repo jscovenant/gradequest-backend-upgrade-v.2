@@ -673,7 +673,7 @@ class SchoolBillingService
                     ? ($status === 'grace_active'
                         ? 'Student result entry is permitted under active grace period.'
                         : 'Student is cleared for score entry and report cards.')
-                    : "Result Entry Locked: Student fee clearance (₦" . number_format($fee, 2) . ") is required for this term. Please clear student from wallet or collect tuition online.",
+                    : "Result Entry Locked: SchoolProfit platform fee clearance (₦" . number_format($fee, 2) . ") is required for this student for {$sessionName} {$termName}. Please clear student from wallet or Paystack.",
             ];
         }
 
@@ -712,6 +712,7 @@ class SchoolBillingService
         [$session, $term] = $this->currentPeriod($schoolId);
 
         if ($session && $term) {
+            $this->autoWaiveZeroActivityPastEntitlements($schoolId, $studentId, (int) $session->id, (int) $term->id);
             $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
         }
 
@@ -743,6 +744,8 @@ class SchoolBillingService
             ->orderByDesc('student_billing_entitlements.updated_at')
             ->get([
                 'student_billing_entitlements.id',
+                'student_billing_entitlements.session_id',
+                'student_billing_entitlements.term_id',
                 'student_billing_entitlements.status',
                 'student_billing_entitlements.billing_mode',
                 'student_billing_entitlements.grace_until',
@@ -751,18 +754,106 @@ class SchoolBillingService
             ]);
 
         $isAllowed = $blocked->isEmpty();
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $blockedCount = $blocked->count();
+        $totalFeeRequired = $blockedCount * $feePerStudent;
+
+        $breakdown = $blocked->map(function ($b) use ($feePerStudent, $session, $term) {
+            $isCurrent = ($session && $term && (int) $b->session_id === (int) $session->id && (int) $b->term_id === (int) $term->id);
+            $type = $isCurrent ? 'Current Period' : 'Past Term Arrears';
+            return [
+                'session' => $b->session,
+                'term' => $b->term,
+                'fee' => $feePerStudent,
+                'is_current' => $isCurrent,
+                'type' => $type,
+                'description' => "{$b->session} {$b->term}: ₦" . number_format($feePerStudent, 2) . " ({$type})",
+            ];
+        });
+
+        $explanatoryNote = $isAllowed
+            ? 'Student billing is clear.'
+            : "Total SchoolProfit platform fee required: ₦" . number_format($totalFeeRequired, 2) . " for {$blockedCount} academic period(s) [" . $breakdown->pluck('description')->implode('; ') . "].";
 
         return [
             'allowed' => $isAllowed,
             'status' => $isAllowed ? ($isPeriodGraceActive ? 'grace_period_active' : 'clear') : 'blocked',
-            'blocked_terms_count' => $blocked->count(),
+            'blocked_terms_count' => $blockedCount,
+            'total_fee_required' => $totalFeeRequired,
+            'fee_per_student' => $feePerStudent,
+            'breakdown' => $breakdown,
+            'explanatory_note' => $explanatoryNote,
             'blocked_terms' => $blocked,
-            'message' => $isAllowed
-                ? ($isPeriodGraceActive
-                    ? 'Student billing is clear under active grace period.'
-                    : 'Student billing is clear.')
-                : 'Access denied. This student has outstanding fees for one or more current or previous academic periods.',
+            'message' => $explanatoryNote,
         ];
+    }
+
+    public function autoWaiveZeroActivityPastEntitlements(int $schoolId, int $studentId, int $currentSessionId, int $currentTermId): int
+    {
+        $pastEntitlements = StudentBillingEntitlement::query()
+            ->where('school_id', $schoolId)
+            ->where('student_id', $studentId)
+            ->whereNotIn('status', ['paid', 'override'])
+            ->where(function ($q) use ($currentSessionId, $currentTermId) {
+                $q->where('session_id', '!=', $currentSessionId)
+                    ->orWhere('term_id', '!=', $currentTermId);
+            })
+            ->get();
+
+        if ($pastEntitlements->isEmpty()) {
+            return 0;
+        }
+
+        $waivedCount = 0;
+
+        foreach ($pastEntitlements as $entitlement) {
+            $hasResults = false;
+            $hasCbt = false;
+
+            $session = AcademicSession::find($entitlement->session_id);
+            $term = Term::find($entitlement->term_id);
+
+            if ($session && $term) {
+                $batchIds = ResultBatch::where('school_id', $schoolId)
+                    ->where('session', $session->name)
+                    ->where('term', $term->name)
+                    ->pluck('id');
+
+                if ($batchIds->isNotEmpty()) {
+                    $hasResults = StudentResultV2::whereIn('batch_id', $batchIds)
+                        ->where('user_id', $studentId)
+                        ->exists();
+                }
+
+                $hasCbt = CbtAttempt::where('school_id', $schoolId)
+                    ->where('student_id', $studentId)
+                    ->where('academic_session_id', $session->id)
+                    ->where('term_id', $term->id)
+                    ->exists();
+
+                if (! $hasCbt && Schema::hasTable('offline_cbt_attempts')) {
+                    $hasCbt = DB::table('offline_cbt_attempts')
+                        ->where('school_id', $schoolId)
+                        ->where('student_id', $studentId)
+                        ->where('academic_session_id', $session->id)
+                        ->where('term_id', $term->id)
+                        ->exists();
+                }
+            }
+
+            // Zero-footprint rule: If zero results and zero CBT attempts, auto-waive!
+            if (! $hasResults && ! $hasCbt) {
+                $entitlement->update([
+                    'status' => 'override',
+                    'reason' => 'Auto-waived by SchoolProfit: Zero academic activity / dormant in past term',
+                    'grace_until' => null,
+                    'updated_at' => now(),
+                ]);
+                $waivedCount++;
+            }
+        }
+
+        return $waivedCount;
     }
 
     protected function activeTemporaryAccess(int $schoolId, string $scope): ?SchoolBillingTemporaryAccess
@@ -1630,45 +1721,92 @@ $unpaid = StudentBillingEntitlement::query()
 
     public function clearStudentFromWallet(int $schoolId, int $studentId, int $sessionId, int $termId, ?int $actorId = null): array
     {
-        $fee = (float) $this->pricePerStudentForSchool($schoolId);
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
         $student = User::where('school_id', $schoolId)->findOrFail($studentId);
         $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
         $term = Term::where('school_id', $schoolId)->findOrFail($termId);
 
-        $referenceId = 'clear_std_' . $studentId . '_s' . $sessionId . '_t' . $termId . '_' . Str::random(6);
-        $description = "Student Term Clearance (₦" . number_format($fee, 2) . "): {$student->firstname} {$student->surname} ({$student->reg_no}) - {$session->name} ({$term->name})";
+        // 1. Auto-waive zero-activity past periods
+        $this->autoWaiveZeroActivityPastEntitlements($schoolId, $studentId, $sessionId, $termId);
+
+        // 2. Ensure current period entitlement
+        $this->ensureEntitlement($schoolId, $studentId, $sessionId, $termId);
+
+        // 3. Find all unpaid entitlements for this student (past arrears + current)
+        $unpaidEntitlements = StudentBillingEntitlement::query()
+            ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
+            ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
+            ->where('student_billing_entitlements.school_id', $schoolId)
+            ->where('student_billing_entitlements.student_id', $studentId)
+            ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
+            ->get([
+                'student_billing_entitlements.id',
+                'student_billing_entitlements.session_id',
+                'student_billing_entitlements.term_id',
+                'academic_sessions.name as session_name',
+                'terms.name as term_name',
+            ]);
+
+        $slotCount = $unpaidEntitlements->count();
+        $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
+        $currentWalletBalance = (float) ($wallet?->balance ?? 0);
+
+        if ($slotCount === 0) {
+            return [
+                'success' => true,
+                'message' => "Student {$student->firstname} {$student->surname} is already cleared across all academic periods.",
+                'wallet_balance' => $currentWalletBalance,
+                'fee_paid' => 0,
+            ];
+        }
+
+        $totalFee = $slotCount * $feePerStudent;
+        if ($currentWalletBalance < $totalFee) {
+            throw new \RuntimeException("Insufficient school wallet balance. Total fee required is ₦" . number_format($totalFee, 2) . " for {$slotCount} academic period(s), but current balance is ₦" . number_format($currentWalletBalance, 2) . ". Please top up your wallet.");
+        }
+
+        $breakdownItems = $unpaidEntitlements->map(function ($ent) use ($sessionId, $termId, $feePerStudent) {
+            $isCurrent = ((int)$ent->session_id === (int)$sessionId && (int)$ent->term_id === (int)$termId);
+            $type = $isCurrent ? 'Current Period' : 'Past Arrears';
+            return ($ent->session_name ?? 'Session') . ' ' . ($ent->term_name ?? 'Term') . ' (₦' . number_format($feePerStudent, 2) . " {$type})";
+        })->implode(', ');
+
+        $referenceId = 'clear_std_' . $studentId . '_' . Str::random(8);
+        $description = "SchoolProfit Student Clearance (₦" . number_format($totalFee, 2) . "): {$student->firstname} {$student->surname} ({$student->reg_no}) - [{$breakdownItems}]";
 
         app(WalletService::class)->debitSchoolWalletOrFail(
             $schoolId,
-            $fee,
+            $totalFee,
             $actorId ?? (int) $student->id,
             $description,
             $referenceId
         );
 
-        $entitlement = $this->ensureEntitlement($schoolId, $studentId, $sessionId, $termId);
-        $entitlement->update([
-            'status' => 'paid',
-            'source' => 'wallet',
-            'covered_at' => now(),
-            'grace_until' => null,
-            'meta' => array_merge($entitlement->meta ?: [], [
-                'cleared_via' => 'wallet',
-                'fee_amount' => $fee,
-                'cleared_by' => $actorId,
-                'cleared_at' => now()->toIso8601String(),
-                'reference_id' => $referenceId,
-            ]),
-        ]);
+        foreach ($unpaidEntitlements as $ent) {
+            StudentBillingEntitlement::where('id', $ent->id)->update([
+                'status' => 'paid',
+                'source' => 'wallet',
+                'covered_at' => now(),
+                'grace_until' => null,
+                'meta' => [
+                    'cleared_via' => 'wallet',
+                    'fee_amount' => $feePerStudent,
+                    'cleared_by' => $actorId,
+                    'cleared_at' => now()->toIso8601String(),
+                    'reference_id' => $referenceId,
+                ],
+            ]);
+        }
 
         $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
 
         return [
             'success' => true,
-            'message' => "Student {$student->firstname} {$student->surname} successfully cleared for {$session->name} {$term->name}.",
-            'entitlement' => $entitlement->fresh(),
+            'message' => "Student {$student->firstname} {$student->surname} successfully cleared for {$slotCount} academic period(s) (Total: ₦" . number_format($totalFee, 2) . "). Breakdown: {$breakdownItems}.",
             'wallet_balance' => (float) ($wallet?->balance ?? 0),
-            'fee_paid' => $fee,
+            'fee_paid' => $totalFee,
+            'cleared_periods_count' => $slotCount,
+            'breakdown' => $breakdownItems,
         ];
     }
 
@@ -1940,6 +2078,16 @@ $unpaid = StudentBillingEntitlement::query()
             $sessionPendingSlots = $totalStudents * max(1, $termsCount);
         }
 
+        $pastArrearsSlots = StudentBillingEntitlement::where('school_id', $schoolId)
+            ->whereNotIn('status', ['paid', 'override'])
+            ->where(function ($q) use ($sessionId, $termId) {
+                if ($sessionId && $termId) {
+                    $q->where('session_id', '!=', $sessionId)
+                      ->orWhere('term_id', '!=', $termId);
+                }
+            })
+            ->count();
+
         return [
             'total_students' => $totalStudents,
             'cleared_count' => $clearedCount,
@@ -1949,6 +2097,8 @@ $unpaid = StudentBillingEntitlement::query()
             'term_clearance_fee' => $pendingCount * $feePerStudent,
             'session_clearance_fee' => $sessionPendingSlots * $feePerStudent,
             'session_pending_slots' => $sessionPendingSlots,
+            'past_arrears_slots' => $pastArrearsSlots,
+            'past_arrears_fee' => $pastArrearsSlots * $feePerStudent,
             'wallet_balance' => $walletBalance,
             'session_id' => $sessionId,
             'term_id' => $termId,
@@ -1983,41 +2133,66 @@ $unpaid = StudentBillingEntitlement::query()
         }
 
         $unpaidSlots = [];
+        $currentSlotsCount = 0;
+        $arrearsSlotsCount = 0;
 
+        if (!$termId && !$isFullSession) {
+            [$currentSession, $currentTerm] = $this->currentPeriod($schoolId);
+            $termId = (int) $currentTerm?->id;
+        }
+
+        $targetTerms = [];
         if ($isFullSession) {
-            $terms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
-            if ($terms->isEmpty()) {
+            $targetTerms = Term::where('school_id', $schoolId)->whereNull('archived_at')->orderBy('id')->get();
+            if ($targetTerms->isEmpty()) {
                 throw new \RuntimeException('No academic terms found for this session.');
             }
-
-            foreach ($terms as $term) {
-                foreach ($students as $student) {
-                    $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $term->id);
-                    if (!in_array($ent->status, ['paid', 'override'], true)) {
-                        $unpaidSlots[] = [
-                            'student' => $student,
-                            'term' => $term,
-                            'entitlement' => $ent,
-                        ];
-                    }
-                }
-            }
         } else {
-            if (!$termId) {
-                [$currentSession, $currentTerm] = $this->currentPeriod($schoolId);
-                $termId = (int) $currentTerm?->id;
-            }
             $term = Term::where('school_id', $schoolId)->findOrFail($termId);
+            $targetTerms = collect([$term]);
+        }
 
-            foreach ($students as $student) {
-                $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $term->id);
-                if (!in_array($ent->status, ['paid', 'override'], true)) {
-                    $unpaidSlots[] = [
-                        'student' => $student,
-                        'term' => $term,
-                        'entitlement' => $ent,
-                    ];
+        foreach ($students as $student) {
+            // 1. Auto-waive zero-activity past periods
+            $this->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $student->id, (int) $sessionId, $termId ? (int) $termId : 0);
+
+            // 2. Ensure target period entitlement(s)
+            foreach ($targetTerms as $t) {
+                $this->ensureEntitlement($schoolId, (int) $student->id, (int) $sessionId, (int) $t->id);
+            }
+
+            // 3. Find all unpaid entitlements for this student (past arrears + current)
+            $studentUnpaid = StudentBillingEntitlement::query()
+                ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
+                ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
+                ->where('student_billing_entitlements.school_id', $schoolId)
+                ->where('student_billing_entitlements.student_id', $student->id)
+                ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
+                ->get([
+                    'student_billing_entitlements.id',
+                    'student_billing_entitlements.session_id',
+                    'student_billing_entitlements.term_id',
+                    'academic_sessions.name as session_name',
+                    'terms.name as term_name',
+                ]);
+
+            foreach ($studentUnpaid as $ent) {
+                $isCurrent = ((int)$ent->session_id === (int)$sessionId && ($termId ? (int)$ent->term_id === (int)$termId : true));
+                if ($isCurrent) {
+                    $currentSlotsCount++;
+                } else {
+                    $arrearsSlotsCount++;
                 }
+
+                $unpaidSlots[] = [
+                    'student' => $student,
+                    'entitlement_id' => $ent->id,
+                    'session_id' => $ent->session_id,
+                    'term_id' => $ent->term_id,
+                    'session_name' => $ent->session_name,
+                    'term_name' => $ent->term_name,
+                    'is_current' => $isCurrent,
+                ];
             }
         }
 
@@ -2028,9 +2203,11 @@ $unpaid = StudentBillingEntitlement::query()
         if ($slotCount === 0) {
             return [
                 'success' => true,
-                'message' => "All selected student(s) are already cleared for the specified " . ($isFullSession ? "academic session." : "term."),
+                'message' => "All selected student(s) are already cleared across the specified and past periods.",
                 'cleared_students_count' => 0,
                 'cleared_slots' => 0,
+                'current_slots' => 0,
+                'arrears_slots' => 0,
                 'total_fee' => 0,
                 'fee_per_student' => $feePerStudent,
                 'wallet_balance' => $currentWalletBalance,
@@ -2041,15 +2218,15 @@ $unpaid = StudentBillingEntitlement::query()
         $totalFee = $slotCount * $feePerStudent;
 
         if ($currentWalletBalance < $totalFee) {
-            throw new \RuntimeException("Insufficient school wallet balance. Total fee required is ₦" . number_format($totalFee, 2) . ", but current balance is ₦" . number_format($currentWalletBalance, 2) . ". Please top up your wallet.");
+            $arrearsNote = $arrearsSlotsCount > 0 ? " ({$currentSlotsCount} current, {$arrearsSlotsCount} past arrears)" : "";
+            throw new \RuntimeException("Insufficient school wallet balance. Total fee required is ₦" . number_format($totalFee, 2) . " for {$slotCount} term-slot(s){$arrearsNote}, but current balance is ₦" . number_format($currentWalletBalance, 2) . ". Please top up your wallet.");
         }
 
         $referenceId = 'clear_sel_' . count($students) . 'std_' . Str::random(8);
-        $termsCount = $isFullSession ? count($terms ?? []) : 1;
-        $scopeDesc = $isFullSession
-            ? "Full Session ({$slotCount} term-slots across {$termsCount} terms)"
-            : "Term ({$slotCount} students, {$term->name})";
-        $description = "Selective Student Clearance ({$scopeDesc} @ ₦" . number_format($feePerStudent, 2) . "): {$session->name}";
+        $scopeDesc = $arrearsSlotsCount > 0
+            ? "{$slotCount} term-slot(s) [{$currentSlotsCount} current, {$arrearsSlotsCount} past arrears]"
+            : "{$slotCount} student(s)";
+        $description = "SchoolProfit Clearance ({$scopeDesc} @ ₦" . number_format($feePerStudent, 2) . "): {$session->name}";
 
         // 1. Debit school wallet
         app(WalletService::class)->debitSchoolWalletOrFail(
@@ -2063,20 +2240,20 @@ $unpaid = StudentBillingEntitlement::query()
         // 2. Mark entitlements paid
         $clearedStudentIds = [];
         foreach ($unpaidSlots as $slot) {
-            $ent = $slot['entitlement'];
-            $ent->update([
+            StudentBillingEntitlement::where('id', $slot['entitlement_id'])->update([
                 'status' => 'paid',
                 'source' => 'wallet',
                 'covered_at' => now(),
                 'grace_until' => null,
-                'meta' => array_merge($ent->meta ?: [], [
+                'meta' => [
                     'cleared_via' => 'wallet_selective',
                     'fee_amount' => $feePerStudent,
-                    'term_id' => $slot['term']->id,
+                    'term_id' => $slot['term_id'],
+                    'session_id' => $slot['session_id'],
                     'cleared_by' => $actorId,
                     'cleared_at' => now()->toIso8601String(),
                     'reference_id' => $referenceId,
-                ]),
+                ],
             ]);
             $clearedStudentIds[] = (int) $slot['student']->id;
         }
@@ -2133,11 +2310,19 @@ $unpaid = StudentBillingEntitlement::query()
 
         $updatedWallet = DB::table('wallets')->where('school_id', $schoolId)->first();
 
+        $message = "Successfully cleared " . count($clearedStudentIds) . " student(s) across {$slotCount} term-slot(s)";
+        if ($arrearsSlotsCount > 0) {
+            $message .= " ({$currentSlotsCount} current, {$arrearsSlotsCount} past arrears)";
+        }
+        $message .= " (Total: ₦" . number_format($totalFee, 2) . ").";
+
         return [
             'success' => true,
-            'message' => "Successfully cleared " . count($clearedStudentIds) . " student(s) (" . $slotCount . " term-slots) for " . ($isFullSession ? "all {$termsCount} terms in {$session->name}" : "{$session->name} ({$term->name})") . ".",
+            'message' => $message,
             'cleared_students_count' => count($clearedStudentIds),
             'cleared_slots' => $slotCount,
+            'current_slots' => $currentSlotsCount,
+            'arrears_slots' => $arrearsSlotsCount,
             'total_fee' => $totalFee,
             'fee_per_student' => $feePerStudent,
             'wallet_balance' => (float) ($updatedWallet?->balance ?? 0),
@@ -2197,6 +2382,18 @@ $unpaid = StudentBillingEntitlement::query()
             ->get()
             ->groupBy('student_id');
 
+        $pastArrearsCounts = StudentBillingEntitlement::where('school_id', $schoolId)
+            ->whereNotIn('status', ['paid', 'override'])
+            ->where(function ($q) use ($sessionId, $termId) {
+                $q->where('session_id', '!=', $sessionId)
+                  ->orWhere('term_id', '!=', $termId);
+            })
+            ->select('student_id', DB::raw('count(*) as count'))
+            ->groupBy('student_id')
+            ->pluck('count', 'student_id');
+
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+
         $roster = [];
         $totalClearedCount = 0;
         $totalUnpaidCount = 0;
@@ -2231,6 +2428,9 @@ $unpaid = StudentBillingEntitlement::query()
             }
 
             $className = $std->level?->name ?? 'Unassigned';
+            $arrearsCount = (int) ($pastArrearsCounts[$std->id] ?? 0);
+            $totalUnpaidSlots = ($isTermPaid ? 0 : 1) + $arrearsCount;
+            $totalFeeRequired = $totalUnpaidSlots * $feePerStudent;
 
             $roster[] = [
                 'id' => (int) $std->id,
@@ -2244,6 +2444,10 @@ $unpaid = StudentBillingEntitlement::query()
                 'is_session_cleared' => $isSessionPaid,
                 'paid_terms_count' => $paidTermsCount,
                 'total_terms_count' => $termsCount,
+                'arrears_terms_count' => $arrearsCount,
+                'has_past_arrears' => $arrearsCount > 0,
+                'total_unpaid_slots' => $totalUnpaidSlots,
+                'total_fee_required' => $totalFeeRequired,
                 'covered_at' => $currentTermEnt?->covered_at?->toIso8601String(),
                 'grace_until' => $currentTermEnt?->grace_until?->toIso8601String(),
             ];
@@ -2255,7 +2459,6 @@ $unpaid = StudentBillingEntitlement::query()
         $pagedStudents = array_slice($roster, $offset, $perPage);
 
         $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
-        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
 
         return [
             'students' => $pagedStudents,
@@ -2409,27 +2612,40 @@ $unpaid = StudentBillingEntitlement::query()
             }
 
             $unpaidSlots = [];
+            $targetTerms = [];
             if ($isFullSession || $type === 'session') {
-                foreach ($terms as $t) {
-                    foreach ($students as $student) {
-                        $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $t->id);
-                        if (!in_array($ent->status, ['paid', 'override'], true)) {
-                            $unpaidSlots[] = ['student' => $student, 'term' => $t, 'entitlement' => $ent];
-                        }
-                    }
-                }
+                $targetTerms = $terms;
             } else {
                 if (!$termId) {
                     [$currentSession, $currentTerm] = $this->currentPeriod($schoolId);
                     $termId = (int) $currentTerm?->id;
                 }
                 $targetTerm = $terms->firstWhere('id', $termId) ?? Term::where('school_id', $schoolId)->findOrFail($termId);
+                $targetTerms = collect([$targetTerm]);
+            }
 
-                foreach ($students as $student) {
-                    $ent = $this->ensureEntitlement($schoolId, $student->id, $sessionId, $targetTerm->id);
-                    if (!in_array($ent->status, ['paid', 'override'], true)) {
-                        $unpaidSlots[] = ['student' => $student, 'term' => $targetTerm, 'entitlement' => $ent];
-                    }
+            foreach ($students as $student) {
+                // 1. Auto-waive zero-activity past periods
+                $this->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $student->id, (int) $sessionId, $termId ? (int) $termId : 0);
+
+                // 2. Ensure current period entitlement(s)
+                foreach ($targetTerms as $t) {
+                    $this->ensureEntitlement($schoolId, (int) $student->id, $sessionId, (int) $t->id);
+                }
+
+                // 3. Find all unpaid entitlements for this student (past arrears + current)
+                $studentUnpaid = StudentBillingEntitlement::where('school_id', $schoolId)
+                    ->where('student_id', $student->id)
+                    ->whereNotIn('status', ['paid', 'override'])
+                    ->get();
+
+                foreach ($studentUnpaid as $ent) {
+                    $unpaidSlots[] = [
+                        'student' => $student,
+                        'entitlement' => $ent,
+                        'term_id' => $ent->term_id,
+                        'session_id' => $ent->session_id,
+                    ];
                 }
             }
 
@@ -2447,7 +2663,8 @@ $unpaid = StudentBillingEntitlement::query()
                     'meta' => array_merge($ent->meta ?: [], [
                         'cleared_via' => "{$channel}_{$type}",
                         'fee_amount' => $feePerStudent,
-                        'term_id' => $slot['term']->id,
+                        'term_id' => $slot['term_id'],
+                        'session_id' => $slot['session_id'],
                         'cleared_by' => $actorId,
                         'cleared_at' => now()->toIso8601String(),
                         'reference_id' => $reference,
