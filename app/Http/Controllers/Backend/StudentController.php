@@ -982,37 +982,41 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
     public function promoteStudents(Request $request)
     {
         $user = Auth::user();
-        $schoolId = $user->school_id;
+        $schoolId = (int) $user->school_id;
 
         $request->validate([
-            'from_class' => 'required|integer',
-            'to_class' => 'required|integer|different:from_class',
-            'student_ids' => 'required|array|min:1',
-            'student_ids.*' => 'required|integer|exists:users,id',
+            'from_class' => 'nullable|integer',
+            'to_class' => 'required|integer',
+            'promote_all' => 'nullable|boolean',
+            'student_ids' => 'nullable|array',
+            'student_ids.*' => 'integer|exists:users,id',
         ]);
 
-        $fromClass = (int) $request->from_class;
+        $fromClass = $request->filled('from_class') ? (int) $request->from_class : null;
         $toClass   = (int) $request->to_class;
-        $studentIds = $request->student_ids;
+        $studentIds = (array) ($request->student_ids ?? []);
+        $promoteAll = $request->boolean('promote_all');
 
-        // Verify that both from_class and to_class belong to this school and are not archived
-        $validClassIds = StudentClass::where('school_id', $schoolId)
+        // Verify that to_class belongs to this school and is not archived
+        $toClassModel = StudentClass::where('school_id', $schoolId)
             ->whereNull('archived_at')
-            ->whereIn('id', [$fromClass, $toClass])
-            ->pluck('id')
-            ->all();
+            ->find($toClass);
 
-        if (!in_array($fromClass, $validClassIds, true) || !in_array($toClass, $validClassIds, true)) {
-            return response()->json([
-                'message' => 'One or both selected classes are invalid, archived, or do not belong to your school.',
-            ], 422);
+        abort_unless($toClassModel, 422, 'The selected destination class is invalid, archived, or does not belong to your school.');
+
+        if ($fromClass) {
+            abort_if($fromClass === $toClass, 422, 'Destination class must be different from current class.');
+            $fromClassModel = StudentClass::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->find($fromClass);
+            abort_unless($fromClassModel, 422, 'The selected source class is invalid, archived, or does not belong to your school.');
         }
 
         $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
         $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
 
         // TEACHER restriction: must be assigned to from_class
-        if ($isTeacherRole) {
+        if ($isTeacherRole && $fromClass) {
             $allowed = TeacherEnrollment::where('user_id', $user->id)
                 ->where('school_id', $schoolId)
                 ->where('enroll', '1')
@@ -1026,78 +1030,102 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             }
         }
 
-        // Safety: ensure students belong to this school, are active, and are in from_class
-        $validCount = User::where('school_id', $schoolId)
+        // If promote_all or student_ids empty but from_class given:
+        if ($promoteAll || (empty($studentIds) && $fromClass)) {
+            abort_unless($fromClass > 0, 422, 'Source class is required to promote all students.');
+            $studentIds = User::where('school_id', $schoolId)
+                ->withRole('student')
+                ->where('level_id', $fromClass)
+                ->where('status', 1)
+                ->where(function ($q) {
+                    $q->whereNull('student_status')->orWhere('student_status', 'active');
+                })
+                ->pluck('id')
+                ->all();
+
+            abort_if(empty($studentIds), 422, 'No active students found in the selected class to promote.');
+        }
+
+        abort_if(empty($studentIds), 422, 'Please select at least one student to promote.');
+
+        // Safety: ensure students belong to this school, are active
+        $studentsQuery = User::where('school_id', $schoolId)
             ->withRole('student')
-            ->where('level_id', $fromClass)
             ->where('status', 1)
             ->where(function ($q) {
                 $q->whereNull('student_status')->orWhere('student_status', 'active');
             })
-            ->whereIn('id', $studentIds)
-            ->count();
+            ->whereIn('id', $studentIds);
 
-        if ($validCount !== count($studentIds)) {
+        if ($fromClass) {
+            $studentsQuery->where('level_id', $fromClass);
+        }
+
+        $validStudents = $studentsQuery->get(['id', 'firstname', 'surname', 'reg_no', 'level_id']);
+
+        if ($validStudents->count() !== count($studentIds)) {
             return response()->json([
-                'message' => 'Some selected students are inactive, not in the selected From Class, or not in your school.',
+                'message' => 'Some selected students are inactive, not in the specified class, or do not belong to your school.',
             ], 422);
         }
 
-    $billing = app(SchoolBillingService::class);
-    $blockedStudents = User::where('school_id', $schoolId)
-        ->withRole('student')
-        ->where('level_id', $fromClass)
-        ->whereIn('id', $studentIds)
-        ->get(['id', 'firstname', 'surname', 'reg_no'])
-        ->map(function (User $student) use ($billing, $schoolId) {
-            $status = $billing->studentAcademicClearanceStatus((int) $schoolId, (int) $student->id);
+        $billing = app(SchoolBillingService::class);
+        $blockedStudents = $validStudents
+            ->map(function (User $student) use ($billing, $schoolId) {
+                $status = $billing->studentAcademicClearanceStatus((int) $schoolId, (int) $student->id);
 
-            if ($status['allowed']) {
-                return null;
-            }
+                if ($status['allowed']) {
+                    return null;
+                }
 
-            return [
-                'id' => $student->id,
-                'name' => trim($student->firstname . ' ' . $student->surname),
-                'reg_no' => $student->reg_no,
-                'blocked_terms_count' => $status['blocked_terms_count'],
-                'blocked_terms' => $status['blocked_terms'],
-            ];
-        })
-        ->filter()
-        ->values();
+                return [
+                    'id' => $student->id,
+                    'name' => trim($student->firstname . ' ' . $student->surname),
+                    'reg_no' => $student->reg_no,
+                    'blocked_terms_count' => $status['blocked_terms_count'],
+                    'blocked_terms' => $status['blocked_terms'],
+                ];
+            })
+            ->filter()
+            ->values();
 
-    $blockedIds = $blockedStudents->pluck('id')->map(fn ($id) => (int) $id)->all();
-    $clearedIds = array_values(array_filter($studentIds, fn ($id) => ! in_array((int) $id, $blockedIds, true)));
+        $blockedIds = $blockedStudents->pluck('id')->map(fn ($id) => (int) $id)->all();
+        $clearedIds = array_values(array_filter($studentIds, fn ($id) => ! in_array((int) $id, $blockedIds, true)));
 
-    if (empty($clearedIds)) {
+        if (empty($clearedIds)) {
+            return response()->json([
+                'message' => 'Access denied. The selected student(s) have unpaid platform fees and cannot be promoted.',
+                'reason' => 'student_outstanding_billing_required',
+                'blocked_students' => $blockedStudents,
+            ], 402);
+        }
+
+        User::where('school_id', $schoolId)
+            ->withRole('student')
+            ->whereIn('id', $clearedIds)
+            ->update(['level_id' => $toClass]);
+
+        $promotedCount = count($clearedIds);
+        $toClassName = $toClassModel->name;
+
+        if ($blockedStudents->isNotEmpty()) {
+            $blockedCount = $blockedStudents->count();
+
+            return response()->json([
+                'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully. {$blockedCount} student(s) were held back because their platform fees are unpaid.",
+                'promoted_count' => $promotedCount,
+                'blocked_count' => $blockedCount,
+                'blocked_students' => $blockedStudents,
+                'to_class_name' => $toClassName,
+            ]);
+        }
+
         return response()->json([
-            'message' => 'Access denied. The selected student(s) have unpaid platform fees and cannot be promoted.',
-            'reason' => 'student_outstanding_billing_required',
-            'blocked_students' => $blockedStudents,
-        ], 402);
-    }
-
-    User::where('school_id', $schoolId)
-        ->withRole('student')
-        ->where('level_id', $fromClass)
-        ->whereIn('id', $clearedIds)
-        ->update(['level_id' => $toClass]);
-
-    $promotedCount = count($clearedIds);
-
-    if ($blockedStudents->isNotEmpty()) {
-        $blockedCount = $blockedStudents->count();
-
-        return response()->json([
-            'message' => "{$promotedCount} student(s) promoted successfully. {$blockedCount} student(s) were held back because their platform fees are unpaid.",
+            'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully.",
             'promoted_count' => $promotedCount,
-            'blocked_count' => $blockedCount,
-            'blocked_students' => $blockedStudents,
+            'to_class_name' => $toClassName,
         ]);
     }
-
-    return response()->json(['message' => 'Students promoted successfully']);
 }
 
 
