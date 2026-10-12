@@ -34,11 +34,11 @@ class SchoolBillingService
     public function policy(): SchoolProfitBillingPolicy
     {
         return SchoolProfitBillingPolicy::firstOrCreate([], [
-            'online_grace_days' => 14,
+            'online_grace_days' => 0,
             'online_minimum_coverage_percent' => 70,
             'online_whole_school_block_enabled' => false,
             'online_student_level_block_enabled' => true,
-            'offline_grace_days' => 7,
+            'offline_grace_days' => 0,
             'offline_school_block_enabled' => false,
             'platform_fee_per_student' => 1000,
             'legacy_subscription_honor_enabled' => true,
@@ -652,9 +652,10 @@ class SchoolBillingService
             $entitlement = $this->ensureEntitlement($schoolId, $studentId, $session->id, $term->id);
             $policy = $this->policy();
             $settings = $this->settingsForSchool($schoolId);
-            $graceUntil = $this->periodGraceUntil($schoolId, $session, $term, $settings->payment_mode, $policy);
-            $isPeriodGraceActive = $graceUntil ? now()->lte($graceUntil) : false;
-            $isStudentGraceActive = ($entitlement->status === 'grace') && ($entitlement->grace_until ? now()->lte($entitlement->grace_until) : true);
+            $graceDays = $settings->payment_mode === 'online' ? (int) $policy->online_grace_days : (int) $policy->offline_grace_days;
+            $graceUntil = $graceDays > 0 ? $this->periodGraceUntil($schoolId, $session, $term, $settings->payment_mode, $policy) : null;
+            $isPeriodGraceActive = ($graceDays > 0 && $graceUntil) ? now()->lte($graceUntil) : false;
+            $isStudentGraceActive = ($graceDays > 0 && $entitlement->status === 'grace') && ($entitlement->grace_until ? now()->lte($entitlement->grace_until) : false);
 
             $isCleared = in_array($entitlement->status, ['paid', 'override'], true) || $isPeriodGraceActive || $isStudentGraceActive;
             $fee = $this->pricePerStudentForSchool($schoolId);
