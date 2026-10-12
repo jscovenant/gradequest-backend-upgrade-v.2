@@ -1126,7 +1126,6 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             'to_class_name' => $toClassName,
         ]);
     }
-}
 
 
 //method for affective and psychomotor domain
