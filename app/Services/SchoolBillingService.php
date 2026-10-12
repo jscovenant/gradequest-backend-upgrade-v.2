@@ -790,15 +790,30 @@ class SchoolBillingService
 
     public function autoWaiveZeroActivityPastEntitlements(int $schoolId, int $studentId, int $currentSessionId, int $currentTermId): int
     {
-        $pastEntitlements = StudentBillingEntitlement::query()
+        if ($currentSessionId <= 0) {
+            return 0;
+        }
+
+        $query = StudentBillingEntitlement::query()
             ->where('school_id', $schoolId)
             ->where('student_id', $studentId)
-            ->whereNotIn('status', ['paid', 'override'])
-            ->where(function ($q) use ($currentSessionId, $currentTermId) {
-                $q->where('session_id', '!=', $currentSessionId)
-                    ->orWhere('term_id', '!=', $currentTermId);
-            })
-            ->get();
+            ->whereNotIn('status', ['paid', 'override']);
+
+        if ($currentTermId > 0) {
+            // Only strictly PAST terms: prior sessions, OR current session with an earlier term
+            $query->where(function ($q) use ($currentSessionId, $currentTermId) {
+                $q->where('session_id', '<', $currentSessionId)
+                    ->orWhere(function ($sub) use ($currentSessionId, $currentTermId) {
+                        $sub->where('session_id', '=', $currentSessionId)
+                            ->where('term_id', '<', $currentTermId);
+                    });
+            });
+        } else {
+            // Only strictly prior sessions
+            $query->where('session_id', '<', $currentSessionId);
+        }
+
+        $pastEntitlements = $query->get();
 
         if ($pastEntitlements->isEmpty()) {
             return 0;
@@ -2061,7 +2076,9 @@ $unpaid = StudentBillingEntitlement::query()
         $sessionId = $sessionId ?: $currentSession?->id;
         $termId = $termId ?: $currentTerm?->id;
 
-        $totalStudents = $this->activeStudents($schoolId)->count();
+        $activeStudents = $this->activeStudents($schoolId);
+        $activeStudentIds = $activeStudents->pluck('id');
+        $totalStudents = $activeStudentIds->count();
         $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
         $wallet = DB::table('wallets')->where('school_id', $schoolId)->first();
         $walletBalance = (float) ($wallet?->balance ?? 0);
@@ -2069,13 +2086,16 @@ $unpaid = StudentBillingEntitlement::query()
         $clearedCount = 0;
         $pendingCount = $totalStudents;
 
-        if ($sessionId && $termId) {
-            $clearedCount = StudentBillingEntitlement::where('school_id', $schoolId)
+        if ($sessionId && $termId && $activeStudentIds->isNotEmpty()) {
+            $rawCleared = StudentBillingEntitlement::where('school_id', $schoolId)
                 ->where('session_id', $sessionId)
                 ->where('term_id', $termId)
+                ->whereIn('student_id', $activeStudentIds)
                 ->whereIn('status', ['paid', 'override'])
-                ->count();
+                ->distinct('student_id')
+                ->count('student_id');
 
+            $clearedCount = min($totalStudents, $rawCleared);
             $pendingCount = max(0, $totalStudents - $clearedCount);
         }
 
@@ -2083,28 +2103,37 @@ $unpaid = StudentBillingEntitlement::query()
         $termsCount = $terms->count();
 
         $sessionPendingSlots = 0;
-        if ($sessionId && $terms->isNotEmpty()) {
+        if ($sessionId && $terms->isNotEmpty() && $activeStudentIds->isNotEmpty()) {
             foreach ($terms as $t) {
                 $termCleared = StudentBillingEntitlement::where('school_id', $schoolId)
                     ->where('session_id', $sessionId)
                     ->where('term_id', $t->id)
+                    ->whereIn('student_id', $activeStudentIds)
                     ->whereIn('status', ['paid', 'override'])
-                    ->count();
-                $sessionPendingSlots += max(0, $totalStudents - $termCleared);
+                    ->distinct('student_id')
+                    ->count('student_id');
+                $sessionPendingSlots += max(0, $totalStudents - min($totalStudents, $termCleared));
             }
         } else {
             $sessionPendingSlots = $totalStudents * max(1, $termsCount);
         }
 
-        $pastArrearsSlots = StudentBillingEntitlement::where('school_id', $schoolId)
-            ->whereNotIn('status', ['paid', 'override'])
-            ->where(function ($q) use ($sessionId, $termId) {
-                if ($sessionId && $termId) {
-                    $q->where('session_id', '!=', $sessionId)
-                      ->orWhere('term_id', '!=', $termId);
-                }
-            })
-            ->count();
+        $pastArrearsSlots = 0;
+        if ($activeStudentIds->isNotEmpty()) {
+            $pastArrearsSlots = StudentBillingEntitlement::where('school_id', $schoolId)
+                ->whereIn('student_id', $activeStudentIds)
+                ->whereNotIn('status', ['paid', 'override'])
+                ->where(function ($q) use ($sessionId, $termId) {
+                    if ($sessionId && $termId) {
+                        $q->where('session_id', '<', $sessionId)
+                          ->orWhere(function ($sub) use ($sessionId, $termId) {
+                              $sub->where('session_id', '=', $sessionId)
+                                  ->where('term_id', '<', $termId);
+                          });
+                    }
+                })
+                ->count();
+        }
 
         $policy = $this->policy();
         $minCoveragePercent = (int) ($policy->online_minimum_coverage_percent ?? 70);
