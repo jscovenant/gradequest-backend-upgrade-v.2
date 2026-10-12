@@ -825,19 +825,25 @@ class SchoolBillingService
                         ->exists();
                 }
 
-                $hasCbt = CbtAttempt::where('school_id', $schoolId)
-                    ->where('student_id', $studentId)
+                $cbtExamIds = DB::table('cbt_exams')
+                    ->where('school_id', $schoolId)
                     ->where('academic_session_id', $session->id)
                     ->where('term_id', $term->id)
-                    ->exists();
+                    ->pluck('id');
 
-                if (! $hasCbt && Schema::hasTable('offline_cbt_attempts')) {
-                    $hasCbt = DB::table('offline_cbt_attempts')
-                        ->where('school_id', $schoolId)
+                if ($cbtExamIds->isNotEmpty()) {
+                    $hasCbt = CbtAttempt::where('school_id', $schoolId)
                         ->where('student_id', $studentId)
-                        ->where('academic_session_id', $session->id)
-                        ->where('term_id', $term->id)
+                        ->whereIn('exam_id', $cbtExamIds)
                         ->exists();
+
+                    if (! $hasCbt && Schema::hasTable('offline_cbt_attempts')) {
+                        $hasCbt = DB::table('offline_cbt_attempts')
+                            ->where('school_id', $schoolId)
+                            ->where('student_id', $studentId)
+                            ->whereIn('exam_id', $cbtExamIds)
+                            ->exists();
+                    }
                 }
             }
 
