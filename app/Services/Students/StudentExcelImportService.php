@@ -300,6 +300,25 @@ class StudentExcelImportService
                     // Some older installs rely only on the users.role column.
                 }
 
+                // Anti-Evasion: Re-attach previous unpaid billing entitlements if a deleted/withdrawn student is re-imported
+                $previousStudent = User::withoutGlobalScopes()
+                    ->where('school_id', $schoolId)
+                    ->where('id', '!=', $student->id)
+                    ->where(function ($q) use ($regNo, $row) {
+                        $q->where('reg_no', $regNo)
+                            ->orWhere(function ($sub) use ($row) {
+                                $sub->where('firstname', $row['firstname'])
+                                    ->where('surname', $row['surname']);
+                            });
+                    })
+                    ->first();
+
+                if ($previousStudent) {
+                    \App\Models\StudentBillingEntitlement::where('school_id', $schoolId)
+                        ->where('student_id', $previousStudent->id)
+                        ->update(['student_id' => $student->id]);
+                }
+
                 $created[] = [
                     'id' => $student->id,
                     'name' => trim($student->firstname . ' ' . $student->surname),

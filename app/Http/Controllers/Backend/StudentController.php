@@ -1089,34 +1089,25 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             ->filter()
             ->values();
 
-        $blockedIds = $blockedStudents->pluck('id')->map(fn ($id) => (int) $id)->all();
-        $clearedIds = array_values(array_filter($studentIds, fn ($id) => ! in_array((int) $id, $blockedIds, true)));
-
-        if (empty($clearedIds)) {
-            return response()->json([
-                'message' => 'Access denied. The selected student(s) have unpaid platform fees and cannot be promoted.',
-                'reason' => 'student_outstanding_billing_required',
-                'blocked_students' => $blockedStudents,
-            ], 402);
-        }
-
-        User::where('school_id', $schoolId)
-            ->withRole('student')
-            ->whereIn('id', $clearedIds)
-            ->update(['level_id' => $toClass]);
-
-        $promotedCount = count($clearedIds);
+        $promotedCount = count($studentIds);
         $toClassName = $toClassModel->name;
 
+        // Promote all selected students to the new class
+        User::where('school_id', $schoolId)
+            ->withRole('student')
+            ->whereIn('id', $studentIds)
+            ->update(['level_id' => $toClass]);
+
         if ($blockedStudents->isNotEmpty()) {
-            $blockedCount = $blockedStudents->count();
+            $unpaidCount = $blockedStudents->count();
 
             return response()->json([
-                'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully. {$blockedCount} student(s) were held back because their platform fees are unpaid.",
+                'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully. Note: {$unpaidCount} student(s) have unpaid platform fees; their official report cards and CBT exams remain locked until platform fees are cleared.",
                 'promoted_count' => $promotedCount,
-                'blocked_count' => $blockedCount,
-                'blocked_students' => $blockedStudents,
+                'unpaid_count' => $unpaidCount,
+                'unpaid_students' => $blockedStudents,
                 'to_class_name' => $toClassName,
+                'has_unpaid_fees' => true,
             ]);
         }
 
@@ -1124,6 +1115,7 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             'message' => "{$promotedCount} student(s) promoted to {$toClassName} successfully.",
             'promoted_count' => $promotedCount,
             'to_class_name' => $toClassName,
+            'has_unpaid_fees' => false,
         ]);
     }
 

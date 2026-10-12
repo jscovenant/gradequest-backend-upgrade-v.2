@@ -856,6 +856,22 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                     'fee_access' => $feeAccess,
                 ], 403);
             }
+
+            // Platform fee clearance check (Pay-As-You-Go per-student fee enforcement)
+            $billingClearance = $this->schoolBillingService->studentAcademicClearanceStatus(
+                (int) $request->school_id,
+                (int) $request->student_id
+            );
+
+            if (! ($billingClearance['allowed'] ?? false)) {
+                return response()->json([
+                    'message' => 'Official Report Card is locked. Platform fee of ₦1,000 for this academic period is unpaid. Please settle the platform fee to view, download, or print this report card.',
+                    'status' => 'platform_fee_required',
+                    'reason' => 'student_outstanding_billing_required',
+                    'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
+                    'billing_clearance' => $billingClearance,
+                ], 402);
+            }
         }
 
         // Find the matching batch

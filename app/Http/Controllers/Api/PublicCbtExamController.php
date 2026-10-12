@@ -10,6 +10,7 @@ use App\Models\CbtExam;
 use App\Models\CbtQuestion;
 use App\Models\User;
 use App\Services\CbtAccessService;
+use App\Services\SchoolBillingService;
 use App\Services\SchoolFeeAccessPolicyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,7 @@ class PublicCbtExamController extends Controller
     public function __construct(
         private readonly CbtAccessService $access,
         private readonly SchoolFeeAccessPolicyService $feeAccessPolicy,
+        private readonly SchoolBillingService $billingService,
     )
     {
     }
@@ -137,6 +139,24 @@ class PublicCbtExamController extends Controller
                 ],
                 'message' => $feeBlock['message'] ?? 'Access denied. Complete the required school fee payment before starting this exam.',
             ], 403);
+        }
+
+        $billingClearance = $this->billingService->studentAcademicClearanceStatus(
+            (int) $exam->school_id,
+            (int) $student->id
+        );
+
+        if (! ($billingClearance['allowed'] ?? false)) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'platform_fee',
+                    'title' => 'Access Denied: Platform Fee Clearance Required',
+                    'message' => 'Platform fee for this academic period is unpaid. Please contact school administration to clear the platform fee before taking CBT exams.',
+                    'billing_clearance' => $billingClearance,
+                ],
+                'message' => 'Access denied. Platform fee for this academic period is unpaid. Please contact school administration to clear the platform fee before taking CBT exams.',
+            ], 402);
         }
 
         if ($exam->access_code_required) {
@@ -396,6 +416,10 @@ class PublicCbtExamController extends Controller
             )
             : null;
 
+        $billingClearance = $student
+            ? $this->billingService->studentAcademicClearanceStatus((int) $exam->school_id, (int) $student->id)
+            : null;
+
         return [
             'id' => $exam->id,
             'title' => $exam->title,
@@ -409,10 +433,13 @@ class PublicCbtExamController extends Controller
             'term' => $exam->term,
             'academic_session' => $exam->academicSession,
             'fee_access' => $feeAccess ? [
-                'allowed' => (bool) $feeAccess['allowed'],
-                'message' => $feeAccess['message'],
+                'allowed' => (bool) $feeAccess['allowed'] && ((bool) ($billingClearance['allowed'] ?? true)),
+                'message' => ! ((bool) ($billingClearance['allowed'] ?? true))
+                    ? 'Platform fee unpaid. Contact school administration to clear the platform fee.'
+                    : $feeAccess['message'],
                 'required_percent' => $feeAccess['required_percent'],
                 'summary' => $feeAccess['summary'],
+                'platform_fee_cleared' => (bool) ($billingClearance['allowed'] ?? true),
             ] : null,
             'schedule' => $schedule ? [
                 'exam_date' => optional($schedule->exam_date)->toDateString(),

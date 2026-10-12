@@ -19,6 +19,7 @@ use App\Models\SchoolSetting;
 use App\Models\StudentClass;
 
 use App\Services\ResultService;
+use App\Services\SchoolBillingService;
 use App\Services\SchoolFeeAccessPolicyService;
 use App\Traits\CheckFeeStatus;
 use App\Repositories\ResultRepository;
@@ -34,8 +35,11 @@ class PublicResultController extends Controller
     // move the private method below into that controller instead OR inject the repo here too.
     protected $repo;
 
-    public function __construct(ResultRepository $repo, private SchoolFeeAccessPolicyService $feeAccessPolicyService)
-    {
+    public function __construct(
+        ResultRepository $repo,
+        private SchoolFeeAccessPolicyService $feeAccessPolicyService,
+        private SchoolBillingService $billingService
+    ) {
         $this->repo = $repo;
     }
 
@@ -99,6 +103,20 @@ class PublicResultController extends Controller
                 'message' => $feeAccess['message'],
                 'fee_access' => $feeAccess,
             ], 403);
+        }
+
+        // 6b) Platform fee clearance check (Pay-As-You-Go per-student fee enforcement)
+        $billingClearance = $this->billingService->studentAcademicClearanceStatus(
+            (int) $student->school_id,
+            (int) $student->id
+        );
+        if (! ($billingClearance['allowed'] ?? false)) {
+            return response()->json([
+                'status'  => 'platform_fee_required',
+                'message' => 'Official result card is locked. Platform fee of ₦1,000 for this academic period is unpaid. Please settle the platform fee to view or print this result.',
+                'reason'  => 'student_outstanding_billing_required',
+                'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
+            ], 402);
         }
 
         // 7) Context

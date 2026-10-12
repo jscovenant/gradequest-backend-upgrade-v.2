@@ -101,13 +101,29 @@ class BroadsheetV2Controller extends Controller
         return response()->json($row);
     }
 
-    public function export(Request $request, int $batch, BroadsheetV2Service $svc)
+    public function export(Request $request, int $batch, BroadsheetV2Service $svc, \App\Services\SchoolBillingService $billingService)
     {
         $format = (string)$request->query('format', 'csv'); // csv|xlsx (csv implemented)
         $includePrevious = (bool)$request->query('include_previous', false);
         $rankBy = (string)$request->query('rank_by', 'average');
 
         $data = $svc->build($batch, $includePrevious, $rankBy);
+
+        $schoolId = (int) ($data['batch']['school_id'] ?? $request->user()?->school_id);
+        if ($schoolId > 0) {
+            $overdueInvoices = \App\Models\SchoolProfitTermInvoice::query()
+                ->where('school_id', $schoolId)
+                ->where('status', 'overdue')
+                ->where('balance', '>', 0)
+                ->count();
+
+            if ($overdueInvoices > 0) {
+                return response()->json([
+                    'status' => 'platform_fee_required',
+                    'message' => 'Official broadsheet export is locked. The school has overdue platform invoices. Please settle outstanding invoices in the Billing portal.',
+                ], 402);
+            }
+        }
 
         return $svc->export($data, $format);
     }
