@@ -151,44 +151,8 @@ class SchoolBillingService
 
     protected function syncCurrentPeriodEntitlementsWithSubscriptionPayments(int $schoolId): void
     {
-        if ($this->legacySubscriptionProtection($schoolId)['active']) {
-            return;
-        }
-
-        [$session, $term] = $this->currentPeriod($schoolId);
-
-        if (! $session || ! $term) {
-            return;
-        }
-
-        $activeStudents = $this->activeStudents($schoolId);
-        if ($activeStudents->isEmpty()) {
-            return;
-        }
-
-        $pricePerStudent = max(1, (float) $this->pricePerStudentForSchool($schoolId));
-        $coveredCount = (int) floor($this->subscriptionPaidAmountForSchool($schoolId) / $pricePerStudent);
-
-        if ($coveredCount <= 0) {
-            return;
-        }
-
-        foreach ($activeStudents->take($coveredCount) as $student) {
-            StudentBillingEntitlement::updateOrCreate(
-                [
-                    'school_id' => $schoolId,
-                    'student_id' => $student->id,
-                    'session_id' => $session->id,
-                    'term_id' => $term->id,
-                ],
-                [
-                    'status' => 'paid',
-                    'source' => 'subscription_payment',
-                    'covered_at' => now(),
-                    'grace_until' => null,
-                ]
-            );
-        }
+        // Disabled: Historical subscription payments must never automatically clear per-student platform fee entitlements.
+        return;
     }
 
     public function updateSettings(int $schoolId, array $payload, ?int $actorId = null): SchoolBillingSetting
@@ -292,7 +256,7 @@ class SchoolBillingService
                 $invoice->created_by = $actorId;
             }
 
-            $alreadyPaidAmount = max((float) ($invoice->amount_paid ?? 0), $clearedCount * $pricePerStudent, $this->subscriptionPaidAmountForSchool($schoolId));
+            $alreadyPaidAmount = max((float) ($invoice->amount_paid ?? 0), $clearedCount * $pricePerStudent);
             $amountPaid = min($alreadyPaidAmount, $totalAmount);
             $balance = max(0, $totalAmount - $amountPaid);
 
@@ -1267,10 +1231,9 @@ class SchoolBillingService
             $this->ensureEntitlement($schoolId, $student->id, $session->id, $term->id);
         }
 
-        $this->syncCurrentPeriodEntitlementsWithSubscriptionPayments($schoolId);
-        $subscriptionPaidAmount = $this->subscriptionPaidAmountForSchool($schoolId);
-        $outstandingAmount = max(0, (float) $billingProfile['current_invoice_amount'] - $subscriptionPaidAmount);
-        $subscriptionCreditAmount = min((float) $billingProfile['current_invoice_amount'], $subscriptionPaidAmount);
+        $subscriptionPaidAmount = 0.0;
+        $outstandingAmount = (float) $billingProfile['current_invoice_amount'];
+        $subscriptionCreditAmount = 0.0;
 
 $summaryBase = StudentBillingEntitlement::query()
     ->where('student_billing_entitlements.school_id', $schoolId)
@@ -1564,24 +1527,6 @@ $unpaid = StudentBillingEntitlement::query()
 
     protected function syncInvoiceWithSubscriptionPayments(SchoolProfitTermInvoice $invoice): SchoolProfitTermInvoice
     {
-        if (($invoice->invoice_type ?? 'term_invoice') !== 'term_invoice') {
-            return $invoice->fresh();
-        }
-
-        $coveredBySubscription = $this->subscriptionPaidAmountForSchool($invoice->school_id);
-        $paid = min((float) $invoice->amount_due, max((float) $invoice->amount_paid, $coveredBySubscription));
-        $balance = max(0, (float) $invoice->amount_due - $paid);
-
-        if ((float) $invoice->amount_paid !== $paid || (float) $invoice->balance !== $balance) {
-            $invoice->update([
-                'amount_paid' => $paid,
-                'balance' => $balance,
-                'status' => $balance <= 0 ? 'paid' : ($paid > 0 ? 'partial' : 'issued'),
-            ]);
-
-            $this->allocateInvoicePayment($invoice->fresh());
-        }
-
         return $invoice->fresh();
     }
 
@@ -1644,22 +1589,7 @@ $unpaid = StudentBillingEntitlement::query()
 
     protected function subscriptionPaidAmountForSchool(int $schoolId): float
     {
-        $owner = $this->ownerForSchool($schoolId);
-        if (! $owner) {
-            return 0;
-        }
-
-        $subscription = $this->activeSubscriptionForSchool($schoolId);
-        if (! $subscription) {
-            return 0;
-        }
-
-        return (float) SubPayment::query()
-            ->where('user_id', $owner->id)
-            ->whereIn('status', ['successful', 'success', 'paid'])
-            ->when($subscription->starts_at, fn ($query) => $query->where('created_at', '>=', $subscription->starts_at->copy()->subDay()))
-            ->selectRaw('COALESCE(SUM(amount + COALESCE(upgrade_credit_amount, 0)), 0) as total_paid_value')
-            ->value('total_paid_value');
+        return 0.0;
     }
 
     protected function activeStudents(int $schoolId)
