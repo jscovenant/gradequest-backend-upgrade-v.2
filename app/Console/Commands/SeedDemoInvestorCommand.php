@@ -28,6 +28,7 @@ class SeedDemoInvestorCommand extends Command
                 'surname' => 'Babalola',
                 'phone' => '08012345678',
                 'role' => User::ROLE_INVESTOR,
+                'status' => 1,
                 'password' => Hash::make($password),
                 'default_password' => $password,
                 'force_password_change' => false,

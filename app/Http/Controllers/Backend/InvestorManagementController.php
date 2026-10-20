@@ -97,6 +97,7 @@ class InvestorManagementController extends Controller
             if ($existingUser) {
                 $userId = $existingUser->id;
                 $existingUser->role = User::ROLE_INVESTOR;
+                $existingUser->status = 1;
                 $existingUser->save();
             } elseif (!empty($validated['create_user_account'])) {
                 $password = !empty($validated['user_password']) ? $validated['user_password'] : 'Invest@' . date('Y');
@@ -110,6 +111,7 @@ class InvestorManagementController extends Controller
                     'email' => $validated['email'],
                     'phone' => $validated['phone'] ?? null,
                     'role' => User::ROLE_INVESTOR,
+                    'status' => 1,
                     'password' => Hash::make($password),
                     'default_password' => $password,
                     'force_password_change' => false,
@@ -188,7 +190,7 @@ class InvestorManagementController extends Controller
 
         $investor->update($validated);
 
-        // Keep linked login user updated if name/email/phone changed
+        // Keep linked login user updated if name/email/phone/status changed
         if ($investor->user) {
             $userUpdates = [];
             if (!empty($validated['email'])) {
@@ -201,6 +203,9 @@ class InvestorManagementController extends Controller
             }
             if (isset($validated['phone'])) {
                 $userUpdates['phone'] = $validated['phone'];
+            }
+            if (isset($validated['status'])) {
+                $userUpdates['status'] = $validated['status'] === 'active' ? 1 : 0;
             }
             if (!empty($userUpdates)) {
                 $investor->user->update($userUpdates);
