@@ -77,6 +77,7 @@ public const ROLE_SUBJECT_TEACHER = 'subject_teacher';
 public const ROLE_TEACHER = 'teacher';
 public const ROLE_PARENT = 'parent';
 public const ROLE_STUDENT = 'student';
+public const ROLE_INVESTOR = 'investor';
 
 public const SUPER_ADMIN_PERMISSION_MAP = [
     'owner' => ['dashboard', 'billing', 'finance', 'support', 'sales', 'marketing', 'content', 'settings', 'audit', 'staff'],
@@ -102,6 +103,7 @@ public static function normalizeRole(?string $role): string
         'parent', 'guardian' => 'parent',
         'student', 'pupil' => 'student',
         'sales_representative', 'sales_rep', 'salesrep' => 'sales_representative',
+        'investor', 'strategic_partner', 'partner' => 'investor',
         default => $r,
     };
 }
@@ -442,6 +444,11 @@ public function schoolsetting()
     return $this->hasOne(TeacherEnrollment::class, 'user_id');
 }
 
+    public function teacherEnrollments()
+{
+    return $this->hasMany(TeacherEnrollment::class, 'user_id');
+}
+
 public function school()
 {
     return $this->belongsTo(SchoolSetting::class);
@@ -543,4 +550,48 @@ public function hasFeature(string $featureKey): ?array
     {
         return $this->default_password;
     }
+
+    public function bursarSections()
+    {
+        return $this->hasMany(BursarSection::class, 'user_id');
+    }
+
+    public function assignedSections()
+    {
+        return $this->belongsToMany(Section::class, 'bursar_sections', 'user_id', 'section_id');
+    }
+
+    public function getBursarAssignedSectionIds(): array
+    {
+        $ids = $this->bursarSections()->pluck('section_id')->toArray();
+        if (empty($ids) && $this->section_id) {
+            $ids = [(int) $this->section_id];
+        }
+        return array_values(array_unique(array_filter($ids)));
+    }
+
+    public function principalSections()
+    {
+        return $this->hasMany(PrincipalSection::class, 'user_id');
+    }
+
+    public function assignedPrincipalSections()
+    {
+        return $this->belongsToMany(Section::class, 'principal_sections', 'user_id', 'section_id');
+    }
+
+    public function getPrincipalAssignedSectionIds(): array
+    {
+        $ids = $this->principalSections()->pluck('section_id')->toArray();
+        if (empty($ids) && $this->section_id) {
+            $ids = [(int) $this->section_id];
+        }
+        return array_values(array_unique(array_filter($ids)));
+    }
+
+    public function investor()
+    {
+        return $this->hasOne(Investor::class, 'user_id');
+    }
 }
+

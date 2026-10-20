@@ -11,6 +11,9 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 
+use App\Models\BursarSection;
+use App\Models\Section;
+
 class BusarController extends Controller
 {
     // ✅ Create / Register Bursar
@@ -24,9 +27,13 @@ class BusarController extends Controller
             'email' => 'required|email|unique:users,email',
             'phone' => 'required|string|max:20|unique:users,phone',
             'address' => 'nullable|string|max:255',
+            'section_ids' => 'nullable|array',
+            'section_ids.*' => 'exists:sections,id',
         ]);
 
         $randomPassword = Str::random(8);
+
+        $sectionIds = array_values(array_filter(array_unique($request->section_ids ?? [])));
 
         $bursar = User::create([
             'firstname' => $request->firstname,
@@ -36,12 +43,25 @@ class BusarController extends Controller
             'address' => $request->address,
             'role' => 'Bursar',
             'school_id' => $auth->school_id,
+            'section_id' => count($sectionIds) === 1 ? $sectionIds[0] : null,
             'password' => Hash::make($randomPassword),
             'default_password' => $randomPassword,
             'status' => 1,
         ]);
 
         $bursar->assignRole('Bursar');
+
+        if (!empty($sectionIds)) {
+            foreach ($sectionIds as $secId) {
+                BursarSection::firstOrCreate([
+                    'school_id' => $auth->school_id,
+                    'user_id' => $bursar->id,
+                    'section_id' => $secId,
+                ]);
+            }
+        }
+
+        $bursar->load('assignedSections:id,name');
 
         return response()->json([
             'message' => 'Bursar registered successfully',
@@ -55,8 +75,13 @@ class BusarController extends Controller
     {
         $auth = Auth::user();
         $bursars = User::withRole('bursar')
+                       ->with('assignedSections:id,name')
                        ->where('school_id', $auth->school_id)
-                       ->get();
+                       ->get()
+                       ->map(function ($b) {
+                           $b->assigned_section_ids = $b->assignedSections->pluck('id')->toArray();
+                           return $b;
+                       });
 
         return response()->json([
             'bursars' => $bursars,
@@ -68,7 +93,8 @@ class BusarController extends Controller
     $auth = Auth::user();
 
     $bursar = User::withRole('bursar')
-        ->where('school_id', $auth->school_id) // optional, if you want to restrict to your school
+        ->with('assignedSections:id,name')
+        ->where('school_id', $auth->school_id)
         ->findOrFail($id);
 
     $decryptedPassword = $this->readableDefaultPassword($bursar) ?: 'N/A';
@@ -82,6 +108,9 @@ class BusarController extends Controller
             'phone' => $bursar->phone,
             'address' => $bursar->address,
             'default_password' => $decryptedPassword,
+            'section_id' => $bursar->section_id,
+            'assigned_sections' => $bursar->assignedSections,
+            'assigned_section_ids' => $bursar->assignedSections->pluck('id')->toArray(),
         ],
     ]);
 }
@@ -90,10 +119,10 @@ public function edit($id)
 {
     $auth = Auth::user();
 
-    // 🔹 Fetch bursar in the same school
     $bursar = User::where('id', $id)
         ->where('school_id', $auth->school_id)
         ->withRole('bursar')
+        ->with('assignedSections:id,name')
         ->firstOrFail();
 
     $decryptedPassword = $this->readableDefaultPassword($bursar);
@@ -107,6 +136,9 @@ public function edit($id)
             'phone' => $bursar->phone,
             'address' => $bursar->address,
             'default_password' => $decryptedPassword,
+            'section_id' => $bursar->section_id,
+            'assigned_sections' => $bursar->assignedSections,
+            'assigned_section_ids' => $bursar->assignedSections->pluck('id')->toArray(),
         ],
     ]);
 }
@@ -128,9 +160,24 @@ public function edit($id)
         'address' => 'nullable|string|max:255',
         'status' => 'nullable|in:0,1',
         'password' => 'nullable|string|min:6',
+        'section_ids' => 'nullable|array',
+        'section_ids.*' => 'exists:sections,id',
     ]);
 
     $data = $request->only('firstname', 'surname', 'email', 'phone', 'address', 'status');
+
+    if ($request->has('section_ids')) {
+        $sectionIds = array_values(array_filter(array_unique($request->section_ids ?? [])));
+        BursarSection::where('user_id', $bursar->id)->delete();
+        foreach ($sectionIds as $secId) {
+            BursarSection::firstOrCreate([
+                'school_id' => $auth->school_id,
+                'user_id' => $bursar->id,
+                'section_id' => $secId,
+            ]);
+        }
+        $data['section_id'] = count($sectionIds) === 1 ? $sectionIds[0] : null;
+    }
 
     if ($request->filled('password')) {
         $data['password'] = Hash::make($request->password);
@@ -138,6 +185,7 @@ public function edit($id)
     }
 
     $bursar->update($data);
+    $bursar->load('assignedSections:id,name');
 
     return response()->json([
         'message' => 'Bursar updated successfully',

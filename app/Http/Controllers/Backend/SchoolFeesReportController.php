@@ -14,20 +14,24 @@ class SchoolFeesReportController extends Controller
 {
     public function schoolFinancialReport(Request $request)
 {
-    $schoolId = Auth::user()->school_id;
+    $user = Auth::user();
+    $schoolId = $user->school_id;
 
     $filters = $request->only(['session_id', 'term_id', 'section_id']);
     $perPage = $request->get('per_page', 10);
 
     $baseQuery = StudentFee::where('school_id', $schoolId);
 
-    if (!empty($filters['session_id'])) {
-        $baseQuery->where('session_id', $filters['session_id']);
-    }
-    if (!empty($filters['term_id'])) {
-        $baseQuery->where('term_id', $filters['term_id']);
-    }
-    if (!empty($filters['section_id'])) {
+    $isBursar = strtolower((string) ($user->role ?? '')) === 'bursar';
+    $assignedSectionIds = $isBursar ? $user->getBursarAssignedSectionIds() : [];
+
+    if (!empty($assignedSectionIds)) {
+        if (!empty($filters['section_id']) && in_array((int) $filters['section_id'], $assignedSectionIds, true)) {
+            $baseQuery->where('section_id', $filters['section_id']);
+        } else {
+            $baseQuery->whereIn('section_id', $assignedSectionIds);
+        }
+    } elseif (!empty($filters['section_id'])) {
         $baseQuery->where('section_id', $filters['section_id']);
     }
 

@@ -38,6 +38,21 @@ class TeacherController extends Controller
         $query = User::withRole('teacher')
             ->where('school_id', $auth->school_id);
 
+        if ($auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->where(function ($tq) use ($assigned) {
+                    $tq->whereIn('section_id', $assigned)
+                       ->orWhereHas('teacherEnrollments.level', function ($lq) use ($assigned) {
+                           $lq->whereIn('section_id', $assigned);
+                       })
+                       ->orWhereHas('teacherEnrollment.level', function ($lq) use ($assigned) {
+                           $lq->whereIn('section_id', $assigned);
+                       });
+                });
+            }
+        }
+
         if ($teacherStatus !== 'all') {
             $query->where('teacher_status', $teacherStatus);
         }
@@ -63,7 +78,21 @@ class TeacherController extends Controller
         });
     
         $statusCounts = User::withRole('teacher')
-            ->where('school_id', $auth->school_id)
+            ->where('school_id', $auth->school_id);
+
+        if ($auth->isPrincipal() && !empty($assigned)) {
+            $statusCounts->where(function ($tq) use ($assigned) {
+                $tq->whereIn('section_id', $assigned)
+                   ->orWhereHas('teacherEnrollments.level', function ($lq) use ($assigned) {
+                       $lq->whereIn('section_id', $assigned);
+                   })
+                   ->orWhereHas('teacherEnrollment.level', function ($lq) use ($assigned) {
+                       $lq->whereIn('section_id', $assigned);
+                   });
+            });
+        }
+
+        $statusCounts = $statusCounts
             ->selectRaw('COALESCE(teacher_status, "active") as teacher_status, COUNT(*) as total')
             ->groupBy('teacher_status')
             ->pluck('total', 'teacher_status');
@@ -97,6 +126,19 @@ public function viewTeacher($id)
             return response()->json([
                 'message' => 'Teacher not found.',
             ], 404);
+        }
+
+        if ($auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $teacherLevel = $teacher->teacherEnrollment?->level;
+                $tSecId = (int) ($teacher->section_id ?: $teacherLevel?->section_id);
+                if ($tSecId && !in_array($tSecId, $assigned)) {
+                    return response()->json([
+                        'message' => 'You are not authorized to view teachers in this section.',
+                    ], 403);
+                }
+            }
         }
 
         $decryptedPassword = $this->readableDefaultPassword($teacher);

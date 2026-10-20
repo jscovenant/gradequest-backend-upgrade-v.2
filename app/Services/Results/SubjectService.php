@@ -27,20 +27,77 @@ class SubjectService
         return $this->legacySubjectsForDepartment($schoolId, $departmentId);
     }
 
-    public function subjectsForStudent(User $student, ?int $academicSessionId = null, ?int $termId = null): Collection
+    public function subjectsForStudent(User|int|string $student, ?int $academicSessionId = null, ?int $termId = null): Collection
     {
+        if (! ($student instanceof User)) {
+            $student = User::with(['level.section', 'department'])->find((int) $student);
+            if (! $student) {
+                return collect();
+            }
+        }
+
         $schoolId = (int) $student->school_id;
         $class = $student->level ?? \App\Models\StudentClass::find($student->level_id);
 
-        $effectiveSectionId = $student->section_id ? (int) $student->section_id : null;
-        if ($class && $class->section_id) {
-            $secExists = DB::table('sections')->where('school_id', $schoolId)->where('id', $effectiveSectionId)->exists();
-            if (! $secExists) {
-                $effectiveSectionId = (int) $class->section_id;
-            }
+        $effectiveSectionId = $class && $class->section_id
+            ? (int) $class->section_id
+            : ($student->section_id ? (int) $student->section_id : null);
+
+        // Keep student record section_id in sync if class has a definitive section
+        if ($class && $class->section_id && (int) $student->section_id !== (int) $class->section_id) {
+            DB::table('users')->where('id', $student->id)->update(['section_id' => (int) $class->section_id]);
+            $student->section_id = (int) $class->section_id;
         }
+
         $effectiveDepartmentId = $student->department_id ? (int) $student->department_id : ($class?->department_id ? (int) $class->department_id : null);
         $classId = $student->level_id ? (int) $student->level_id : null;
+
+        // Auto-heal / validate department against effective section
+        if ($effectiveSectionId) {
+            $sectionDeptIds = Subject::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where('section_id', $effectiveSectionId)
+                ->whereNotNull('department_id')
+                ->pluck('department_id')
+                ->unique()
+                ->values();
+
+            if ($effectiveDepartmentId) {
+                $deptValidForSection = Subject::where('school_id', $schoolId)
+                    ->whereNull('archived_at')
+                    ->where('department_id', $effectiveDepartmentId)
+                    ->where(function ($q) use ($effectiveSectionId) {
+                        $q->whereNull('section_id')->orWhere('section_id', $effectiveSectionId);
+                    })
+                    ->exists();
+
+                if (! $deptValidForSection && Schema::hasTable('subject_offerings')) {
+                    $deptValidForSection = DB::table('subject_offerings')
+                        ->where('school_id', $schoolId)
+                        ->where('department_id', $effectiveDepartmentId)
+                        ->where(function ($q) use ($effectiveSectionId) {
+                            $q->whereNull('section_id')->orWhere('section_id', $effectiveSectionId);
+                        })
+                        ->exists();
+                }
+
+                if (! $deptValidForSection) {
+                    // Stale or invalid department for this section (e.g. Junior Dept in Senior section)
+                    if ($sectionDeptIds->count() === 1) {
+                        $effectiveDepartmentId = (int) $sectionDeptIds->first();
+                        DB::table('users')->where('id', $student->id)->update(['department_id' => $effectiveDepartmentId]);
+                        $student->department_id = $effectiveDepartmentId;
+                    } else {
+                        $effectiveDepartmentId = null;
+                    }
+                }
+            } elseif ($sectionDeptIds->count() === 1) {
+                // Student has no department assigned, but this section has exactly one department with active subjects
+                $effectiveDepartmentId = (int) $sectionDeptIds->first();
+                DB::table('users')->where('id', $student->id)->update(['department_id' => $effectiveDepartmentId]);
+                $student->department_id = $effectiveDepartmentId;
+            }
+        }
 
         $subjects = $this->subjectsForOfferingScope(
             $schoolId,
@@ -71,7 +128,7 @@ class SubjectService
             }
         }
 
-        return $this->legacySubjectsForDepartment($schoolId, $effectiveDepartmentId, $classId);
+        return $this->legacySubjectsForDepartment($schoolId, $effectiveDepartmentId, $classId, $effectiveSectionId);
     }
 
     public function subjectsForOfferingScope(
@@ -241,10 +298,16 @@ class SubjectService
             ->values();
     }
 
-    private function legacySubjectsForDepartment(int $schoolId, ?int $departmentId, ?int $classId = null): Collection
+    private function legacySubjectsForDepartment(int $schoolId, ?int $departmentId, ?int $classId = null, ?int $sectionId = null): Collection
     {
         $subjects = Subject::where('school_id', $schoolId)
             ->whereNull('archived_at')
+            ->when($sectionId, function ($query) use ($sectionId) {
+                $query->where(function ($inner) use ($sectionId) {
+                    $inner->whereNull('section_id')
+                        ->orWhere('section_id', $sectionId);
+                });
+            })
             ->when($classId, function ($query) use ($classId) {
                 $query->where(function ($inner) use ($classId) {
                     $inner->whereNull('class_id')
@@ -260,6 +323,24 @@ class SubjectService
             ->select('id', 'name', 'subject_id', 'department_id', 'section_id', 'class_id')
             ->orderBy('name')
             ->get();
+
+        if ($subjects->isEmpty() && is_null($departmentId) && $sectionId) {
+            $subjects = Subject::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where(function ($inner) use ($sectionId) {
+                    $inner->whereNull('section_id')
+                        ->orWhere('section_id', $sectionId);
+                })
+                ->when($classId, function ($query) use ($classId) {
+                    $query->where(function ($inner) use ($classId) {
+                        $inner->whereNull('class_id')
+                            ->orWhere('class_id', $classId);
+                    });
+                })
+                ->select('id', 'name', 'subject_id', 'department_id', 'section_id', 'class_id')
+                ->orderBy('name')
+                ->get();
+        }
 
         return $this->formatSubjects($this->preferGeneralSubjects($subjects, $departmentId));
     }

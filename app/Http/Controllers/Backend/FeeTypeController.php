@@ -19,10 +19,17 @@ class FeeTypeController extends Controller
 
     public function index(Request $request)
     {
-        $schoolId = Auth::user()->school_id;
+        $user = Auth::user();
+        $schoolId = $user->school_id;
+        $isBursar = strtolower((string) ($user->role ?? '')) === 'bursar';
+        $assignedSectionIds = $isBursar ? $user->getBursarAssignedSectionIds() : [];
 
         $query = FeeType::with(['section', 'session', 'term'])
             ->where('school_id', $schoolId);
+
+        if (!empty($assignedSectionIds)) {
+            $query->whereIn('section_id', $assignedSectionIds);
+        }
 
         // 🔍 Search by fee name or amount
         if ($request->has('search') && $request->search !== '') {
@@ -51,10 +58,12 @@ class FeeTypeController extends Controller
         $feeTypes = $query->orderBy('id', 'desc')->paginate(10);
 
         // 🎯 Also fetch related data dynamically
-        $sections = Section::where('school_id', $schoolId)
-            ->whereNull('archived_at')
-            ->select('id', 'name')
-            ->get();
+        $sectionsQuery = Section::where('school_id', $schoolId)->whereNull('archived_at');
+        if (!empty($assignedSectionIds)) {
+            $sectionsQuery->whereIn('id', $assignedSectionIds);
+        }
+        $sections = $sectionsQuery->select('id', 'name')->get();
+
         $sessions = AcademicSession::where('school_id', $schoolId)
             ->whereNull('archived_at')
             ->select('id', 'name')
@@ -85,11 +94,16 @@ class FeeTypeController extends Controller
             'term_id' => 'required|exists:terms,id',
             'name' => 'required|string|max:255',
             'amount' => 'required|numeric|min:0',
+            'is_discountable' => 'nullable|boolean',
+            'is_compulsory' => 'nullable|boolean',
         ]);
 
         if (!Section::where('school_id', $schoolId)->whereNull('archived_at')->where('id', $validated['section_id'])->exists()) {
             return response()->json(['message' => 'Selected section is archived or unavailable.'], 422);
         }
+
+        $validated['is_discountable'] = $request->input('is_discountable', true);
+        $validated['is_compulsory'] = $request->input('is_compulsory', true);
 
         $fee = FeeType::create([
             ...$validated,
@@ -117,10 +131,19 @@ class FeeTypeController extends Controller
             'term_id' => 'required|exists:terms,id',
             'name' => 'required|string|max:255',
             'amount' => 'required|numeric|min:0',
+            'is_discountable' => 'nullable|boolean',
+            'is_compulsory' => 'nullable|boolean',
         ]);
 
         if (!Section::where('school_id', $schoolId)->whereNull('archived_at')->where('id', $validated['section_id'])->exists()) {
             return response()->json(['message' => 'Selected section is archived or unavailable.'], 422);
+        }
+
+        if ($request->has('is_discountable')) {
+            $validated['is_discountable'] = $request->boolean('is_discountable');
+        }
+        if ($request->has('is_compulsory')) {
+            $validated['is_compulsory'] = $request->boolean('is_compulsory');
         }
 
         $fee->update($validated);

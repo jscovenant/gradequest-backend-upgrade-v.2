@@ -39,7 +39,7 @@ $NormalizedNginxDir = ($NginxDir -replace "\\", "/")
     -replace "__NGINX_DIR__", $NormalizedNginxDir |
     Set-Content $NginxConf -Encoding ASCII
 
-Write-Host "Starting MariaDB..."
+Write-Host "Starting MariaDB database service..."
 if (Test-Path $AriaChk) {
     Push-Location $DataDir
     Get-ChildItem $DataDir -Recurse -Filter "*.MAI" -ErrorAction SilentlyContinue |
@@ -54,12 +54,19 @@ $DbProcess = Start-Process -FilePath $Mysqld -ArgumentList @(
     "--port=3307",
     "--bind-address=127.0.0.1",
     "--console"
-) -PassThru -WindowStyle Hidden
+) -WorkingDirectory (Join-Path $InstallDir "runtime\mariadb") -PassThru -WindowStyle Hidden
 $DbProcess.Id | Set-Content (Join-Path $RunDir "mariadb.pid")
 
-Start-Sleep -Seconds 4
+for ($d = 0; $d -lt 15; $d++) {
+    Start-Sleep -Seconds 1
+    $listening = netstat -ano | Select-String ":3307\s+.*LISTENING"
+    if ($listening) {
+        break
+    }
+}
 
-Write-Host "Starting PHP FastCGI..."
+Write-Host "Starting PHP FastCGI runtime..."
+$env:PHP_FCGI_MAX_REQUESTS = "0"
 $PhpProcess = Start-Process -FilePath $PhpCgi -ArgumentList @(
     "-b",
     "127.0.0.1:9123",
@@ -68,13 +75,21 @@ $PhpProcess = Start-Process -FilePath $PhpCgi -ArgumentList @(
 ) -WorkingDirectory $BackendDir -PassThru -WindowStyle Hidden
 $PhpProcess.Id | Set-Content (Join-Path $RunDir "php-cgi.pid")
 
-Write-Host "Starting Nginx..."
+for ($p = 0; $p -lt 10; $p++) {
+    Start-Sleep -Milliseconds 400
+    $listening = netstat -ano | Select-String ":9123\s+.*LISTENING"
+    if ($listening) {
+        break
+    }
+}
+
+Write-Host "Starting Nginx web server..."
 $NginxProcess = Start-Process -FilePath $Nginx -ArgumentList @(
     "-p",
-    $NginxDir,
+    $NormalizedNginxDir,
     "-c",
     "conf\nginx.conf"
-) -PassThru -WindowStyle Hidden
+) -WorkingDirectory $NginxDir -PassThru -WindowStyle Hidden
 $NginxProcess.Id | Set-Content (Join-Path $RunDir "nginx.pid")
 
 Write-Host "GradeQuest Offline CBT Server is running."

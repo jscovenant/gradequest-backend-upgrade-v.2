@@ -13,8 +13,18 @@ class StudentFee extends Model
     use HasFactory;
     
     protected $guarded = [];
+
+    protected $casts = [
+        'gross_amount' => 'float',
+        'discount_amount' => 'float',
+        'discount_rate' => 'float',
+        'net_amount' => 'float',
+        'total_amount' => 'float',
+        'amount_paid' => 'float',
+        'balance' => 'float',
+    ];
     
-        // ✅ Relationships
+    // ✅ Relationships
     public function section()
     {
         return $this->belongsTo(Section::class);
@@ -43,5 +53,15 @@ class StudentFee extends Model
     public function student()
     {
         return $this->belongsTo(User::class, 'student_id');
+    }
+
+    public function discountApprover()
+    {
+        return $this->belongsTo(User::class, 'discount_approved_by');
+    }
+
+    public function school()
+    {
+        return $this->belongsTo(SchoolSetting::class, 'school_id');
     }
 }

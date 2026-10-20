@@ -132,12 +132,29 @@ class TeacherSubjectController extends Controller
 
     private function teachersPayload(int $schoolId)
     {
-        $teachers = $this->teacherQuery($schoolId)
+        $auth = Auth::user();
+        $query = $this->teacherQuery($schoolId)
             ->with(['teacherEnrollment.level.section'])
             ->select('id', 'firstname', 'surname', 'email', 'reg_no', 'username', 'teacher_status')
             ->orderBy('surname')
-            ->orderBy('firstname')
-            ->get();
+            ->orderBy('firstname');
+
+        if ($auth && $auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->where(function ($tq) use ($assigned) {
+                    $tq->whereIn('section_id', $assigned)
+                       ->orWhereHas('teacherEnrollments.level', function ($lq) use ($assigned) {
+                           $lq->whereIn('section_id', $assigned);
+                       })
+                       ->orWhereHas('teacherEnrollment.level', function ($lq) use ($assigned) {
+                           $lq->whereIn('section_id', $assigned);
+                       });
+                });
+            }
+        }
+
+        $teachers = $query->get();
 
         return $teachers->map(function (User $teacher) use ($schoolId) {
             $assignedClasses = $this->teacherAssignedClasses($schoolId, (int) $teacher->id);
@@ -157,7 +174,8 @@ class TeacherSubjectController extends Controller
 
     private function assignmentsPayload(int $schoolId)
     {
-        return TeacherSubject::query()
+        $auth = Auth::user();
+        $query = TeacherSubject::query()
             ->join('users as t', 't.id', '=', 'teacher_subjects.teacher_id')
             ->join('subjects as s', 's.id', '=', 'teacher_subjects.subject_id')
             ->leftJoin('sections as sec', 'sec.id', '=', 's.section_id')
@@ -178,7 +196,24 @@ class TeacherSubjectController extends Controller
                 'dep.name as department_name',
             ])
             ->orderBy('t.surname')
-            ->orderBy('s.name')
+            ->orderBy('s.name');
+
+        if ($auth && $auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->where(function ($aq) use ($assigned) {
+                    $aq->whereIn('s.section_id', $assigned)
+                       ->orWhereExists(function ($sub) use ($assigned) {
+                           $sub->select(DB::raw(1))
+                               ->from('student_classes')
+                               ->whereColumn('student_classes.id', 's.class_id')
+                               ->whereIn('student_classes.section_id', $assigned);
+                       });
+                });
+            }
+        }
+
+        return $query
             ->get()
             ->map(fn ($row) => [
                 'teacher_id' => (int) $row->teacher_id,
@@ -202,7 +237,8 @@ class TeacherSubjectController extends Controller
 
     private function subjectsQuery(int $schoolId)
     {
-        return Subject::query()
+        $auth = Auth::user();
+        $query = Subject::query()
             ->leftJoin('sections as sec', 'sec.id', '=', 'subjects.section_id')
             ->leftJoin('departments as dep', 'dep.id', '=', 'subjects.department_id')
             ->when(Schema::hasColumn('subjects', 'school_id'), fn ($q) => $q->where('subjects.school_id', $schoolId))
@@ -217,6 +253,23 @@ class TeacherSubjectController extends Controller
                 'dep.name as department_name',
             ])
             ->orderBy('subjects.name');
+
+        if ($auth && $auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->where(function ($sq) use ($assigned) {
+                    $sq->whereIn('subjects.section_id', $assigned)
+                       ->orWhereExists(function ($sub) use ($assigned) {
+                           $sub->select(DB::raw(1))
+                               ->from('student_classes')
+                               ->whereColumn('student_classes.id', 'subjects.class_id')
+                               ->whereIn('student_classes.section_id', $assigned);
+                       });
+                });
+            }
+        }
+
+        return $query;
     }
 
     private function eligibleSubjectsForTeacher(int $schoolId, int $teacherId)

@@ -38,27 +38,121 @@ class AdminDashboardController extends Controller
     $totalAdmins  = User::where('role', 'Admin')->count();
     $totalResults = Average::count();
 
-    // === SCHOOL USERS COUNTS (Students, Teachers, Parents) IN ONE QUERY ===
-    $schoolUsers = User::where('school_id', $auth->school_id)
-        ->selectRaw("
-            SUM(CASE WHEN LOWER(role) = 'student' THEN 1 ELSE 0 END) as students,
-            SUM(CASE WHEN LOWER(role) = 'teacher' THEN 1 ELSE 0 END) as teachers,
-            SUM(CASE WHEN LOWER(role) = 'parent' THEN 1 ELSE 0 END) as parents
-        ")
-        ->first();
+    $normRole = User::normalizeRole($auth->role);
+    $isPrincipal = $normRole === 'principal' || (method_exists($auth, 'isPrincipal') && $auth->isPrincipal());
 
-    // === RESULTS UPLOADED ===
-    $resultsUploaded = Average::where('school_id', $auth->school_id)->count();
+    if ($isPrincipal && !empty($auth->getPrincipalAssignedSectionIds())) {
+        $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+
+        // Students in assigned section(s) (only active students)
+        $studentsCount = User::where('school_id', $auth->school_id)
+            ->whereRaw("LOWER(role) = 'student'")
+            ->where(function ($q) {
+                $q->where('status', 1)->orWhereNull('status');
+            })
+            ->where(function ($q) {
+                $q->where('student_status', 'active')->orWhereNull('student_status');
+            })
+            ->where(function ($q) use ($assignedSectionIds) {
+                $q->whereIn('section_id', $assignedSectionIds)
+                  ->orWhereHas('level', function ($lq) use ($assignedSectionIds) {
+                      $lq->whereIn('section_id', $assignedSectionIds);
+                  });
+            })
+            ->count();
+
+        // Classes in assigned section(s)
+        $assignedClassIds = \App\Models\StudentClass::where('school_id', $auth->school_id)
+            ->whereIn('section_id', $assignedSectionIds)
+            ->pluck('id')
+            ->toArray();
+
+        // Teachers in assigned section(s)
+        $teachersCount = User::where('school_id', $auth->school_id)
+            ->where(function ($q) {
+                $q->where('status', 1)->orWhereNull('status');
+            })
+            ->whereIn('id', function ($q) use ($assignedClassIds, $auth) {
+                $q->select('user_id')
+                  ->from('teacher_enrollments')
+                  ->where('school_id', $auth->school_id)
+                  ->where('enroll', '1')
+                  ->whereIn('level_id', $assignedClassIds);
+            })
+            ->count();
+
+        // Parents with children in assigned section(s)
+        $parentsCount = User::where('school_id', $auth->school_id)
+            ->whereRaw("LOWER(role) = 'parent'")
+            ->whereIn('id', function ($q) use ($auth, $assignedSectionIds) {
+                $q->select('parent_id')
+                  ->from('parent_students')
+                  ->whereIn('student_id', function ($sq) use ($auth, $assignedSectionIds) {
+                      $sq->select('id')
+                        ->from('users')
+                        ->where('school_id', $auth->school_id)
+                        ->where(function ($uq) use ($assignedSectionIds) {
+                            $uq->whereIn('section_id', $assignedSectionIds)
+                               ->orWhereIn('level_id', function ($lq) use ($assignedSectionIds) {
+                                   $lq->select('id')->from('student_classes')->whereIn('section_id', $assignedSectionIds);
+                               });
+                        });
+                  });
+            })
+            ->count();
+
+        // Results uploaded for classes in assigned section(s)
+        $resultsUploaded = Average::where('school_id', $auth->school_id)
+            ->whereIn('class_id', $assignedClassIds)
+            ->count();
+
+        $students = $studentsCount;
+        $teachers = $teachersCount;
+        $parents  = $parentsCount;
+        $graduates = 0;
+        $withdrawn = 0;
+        $totalHistoricalStudents = $studentsCount;
+    } else {
+        // === SCHOOL USERS COUNTS (Students, Teachers, Parents) IN ONE QUERY ===
+        $schoolUsers = User::where('school_id', $auth->school_id)
+            ->selectRaw("
+                SUM(CASE WHEN LOWER(role) = 'student' AND (status = 1 OR status IS NULL) AND (student_status = 'active' OR student_status IS NULL) THEN 1 ELSE 0 END) as students,
+                SUM(CASE WHEN LOWER(role) = 'teacher' AND (status = 1 OR status IS NULL) THEN 1 ELSE 0 END) as teachers,
+                SUM(CASE WHEN LOWER(role) = 'parent' THEN 1 ELSE 0 END) as parents,
+                SUM(CASE WHEN LOWER(role) = 'student' AND student_status = 'graduate' THEN 1 ELSE 0 END) as graduates,
+                SUM(CASE WHEN LOWER(role) = 'student' AND student_status = 'withdrawn' THEN 1 ELSE 0 END) as withdrawn,
+                SUM(CASE WHEN LOWER(role) = 'student' THEN 1 ELSE 0 END) as total_historical_students
+            ")
+            ->first();
+
+        $students = (int) ($schoolUsers->students ?? 0);
+        $teachers = (int) ($schoolUsers->teachers ?? 0);
+        $parents  = (int) ($schoolUsers->parents ?? 0);
+        $graduates = (int) ($schoolUsers->graduates ?? 0);
+        $withdrawn = (int) ($schoolUsers->withdrawn ?? 0);
+        $totalHistoricalStudents = (int) ($schoolUsers->total_historical_students ?? 0);
+        $resultsUploaded = Average::where('school_id', $auth->school_id)->count();
+    }
+
+    // === SENIOR STUDENTS DEPARTMENT ATTENTION ===
+    $deptAttentionService = app(\App\Services\Students\DepartmentAttentionService::class);
+    $deptAttention = $deptAttentionService->getStudentsNeedingAttention((int) $auth->school_id, null, 15);
 
     // === RETURN ALL STATS ===
     return response()->json([
-        'totalSchools'      => $totalSchools,
-        'totalAdmins'       => $totalAdmins,
-        'totalResults'      => $totalResults,
-        'students'          => $schoolUsers->students,
-        'teachers'          => $schoolUsers->teachers,
-        'parents'           => $schoolUsers->parents,
-        'results_uploaded'  => $resultsUploaded,
+        'totalSchools'                 => $totalSchools,
+        'totalAdmins'                  => $totalAdmins,
+        'totalResults'                 => $totalResults,
+        'students'                     => $students,
+        'active_students'              => $students,
+        'graduates_count'              => $graduates ?? 0,
+        'withdrawn_count'              => $withdrawn ?? 0,
+        'total_historical_students'    => $totalHistoricalStudents ?? $students,
+        'teachers'                     => $teachers,
+        'parents'                      => $parents,
+        'results_uploaded'             => $resultsUploaded,
+        'department_attention_count'   => (int) $deptAttention['total_count'],
+        'department_attention_summary' => $deptAttention,
     ]);
 }
 

@@ -135,7 +135,7 @@ class StudentController extends Controller
     // ========================
     // BASE STUDENT QUERY
     // ========================
-    $studentsQuery = User::with('level')
+    $studentsQuery = User::with(['level.section', 'department'])
         ->withRole('student')
         ->where('school_id', $user->school_id);
 
@@ -145,8 +145,45 @@ class StudentController extends Controller
         $studentsQuery->where('student_status', $studentStatus);
     }
 
+    // Filter students needing senior department attention
+    if ($request->boolean('needs_department')) {
+        $studentsQuery->whereHas('level', function ($q) {
+            $q->where(function ($sub) {
+                $sub->where('name', 'LIKE', 'SS%')
+                    ->orWhere('name', 'LIKE', 'SSS%')
+                    ->orWhere('name', 'LIKE', 'Senior%')
+                    ->orWhereHas('section', function ($sq) {
+                        $sq->where('name', 'LIKE', '%Senior%');
+                    });
+            });
+        })->where(function ($q) {
+            $q->whereNull('department_id')
+              ->orWhereHas('department', function ($dq) {
+                  $dq->where('name', 'LIKE', '%junior%')
+                     ->orWhere('name', 'LIKE', '%basic%')
+                     ->orWhere('name', 'LIKE', '%primary%');
+              });
+        });
+    }
+
     $levelsQuery = StudentClass::where('school_id', $user->school_id)
         ->whereNull('archived_at');
+
+    // ========================
+    // PRINCIPAL VIEW SCOPING
+    // ========================
+    if ($user->isPrincipal()) {
+        $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $studentsQuery->where(function ($q) use ($assignedSectionIds) {
+                $q->whereIn('section_id', $assignedSectionIds)
+                  ->orWhereHas('level', function ($lq) use ($assignedSectionIds) {
+                      $lq->whereIn('section_id', $assignedSectionIds);
+                  });
+            });
+            $levelsQuery->whereIn('section_id', $assignedSectionIds);
+        }
+    }
 
     // ========================
     // TEACHER VIEW
@@ -201,6 +238,20 @@ class StudentController extends Controller
     // PAGINATION
     // ========================
     $students = $studentsQuery->latest()->paginate($perPage, ['*'], 'page', $page);
+
+    $deptAttentionService = app(\App\Services\Students\DepartmentAttentionService::class);
+    $students->getCollection()->transform(function ($student) use ($deptAttentionService) {
+        $check = $deptAttentionService->checkStudent($student);
+        $student->needs_department_update = ! empty($check);
+        $student->department_issue = $check['issue'] ?? null;
+        $student->department_issue_label = $check['issue_label'] ?? null;
+        $student->department_issue_message = $check['message'] ?? null;
+        return $student;
+    });
+
+    $isTeacherRole = in_array(strtolower(str_replace(['-', '_', ' '], '', (string) $user->role)), ['teacher', 'classteacher', 'subjectteacher'], true);
+    $attentionSummary = $deptAttentionService->getStudentsNeedingAttention((int) $user->school_id, $isTeacherRole ? (int) $user->id : null);
+
     $levels = $levelsQuery->with('section:id,name')
         ->withCount(['students' => function ($q) use ($user, $studentStatus) {
             $q->where('school_id', $user->school_id)
@@ -224,6 +275,9 @@ class StudentController extends Controller
         'students' => $students,
         'school_setting' => $school_setting,
         'levels' => $levels,
+        'department_attention_count' => (int) $attentionSummary['total_count'],
+        'senior_departments' => $attentionSummary['senior_departments'],
+        'department_importance_notice' => $attentionSummary['importance_notice'],
         'status_counts' => [
             'active' => (int) ($statusCounts['active'] ?? 0),
             'alumni' => (int) ($statusCounts['alumni'] ?? 0),
@@ -238,14 +292,114 @@ class StudentController extends Controller
     ]);
 }
 
+    /**
+     * Export all students (Excel/CSV and PDF data) sorted alphabetically: Surname, Firstname, Othername
+     */
+    public function exportAllStudents(Request $request): JsonResponse
+    {
+        $user = Auth::user();
+        $schoolId = (int) $user->school_id;
+        $schoolSetting = SchoolSetting::find($schoolId) ?: SchoolSetting::first();
 
+        $classIdFilter = $request->query('class_id') ?: $request->query('level_id');
+        $studentStatus = $request->query('student_status', 'all');
+        $search = $request->query('search');
 
-    
-    
-    
+        $query = User::where('school_id', $schoolId)
+            ->whereRaw('LOWER(role) = ?', ['student'])
+            ->with(['level:id,name', 'section:id,name', 'department:id,name']);
 
-    
-     
+        // Principal scoping
+        if ($user->isPrincipal()) {
+            $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $query->where(function ($q) use ($assignedSectionIds) {
+                    $q->whereIn('section_id', $assignedSectionIds)
+                      ->orWhereHas('level', function ($lq) use ($assignedSectionIds) {
+                          $lq->whereIn('section_id', $assignedSectionIds);
+                      });
+                });
+            }
+        }
+
+        // Teacher scoping
+        if ($user->role === 'Teacher') {
+            $enrolledLevels = TeacherEnrollment::where('user_id', $user->id)
+                ->where('enroll', '1')
+                ->where('school_id', $schoolId)
+                ->pluck('level_id');
+
+            $query->whereIn('level_id', $enrolledLevels);
+        }
+
+        if ($studentStatus === 'inactive') {
+            $query->where('status', 0);
+        } elseif ($studentStatus && $studentStatus !== 'all') {
+            $query->where('student_status', $studentStatus);
+        }
+
+        if ($classIdFilter && $classIdFilter !== 'all') {
+            $query->where('level_id', (int) $classIdFilter);
+        }
+
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('firstname', 'LIKE', "%{$search}%")
+                  ->orWhere('surname', 'LIKE', "%{$search}%")
+                  ->orWhere('third_name', 'LIKE', "%{$search}%")
+                  ->orWhere('reg_no', 'LIKE', "%{$search}%");
+            });
+        }
+
+        // Standard Nigerian school register sorting: Surname ASC, Firstname ASC, Third_name ASC
+        $students = $query->orderBy('surname', 'asc')
+            ->orderBy('firstname', 'asc')
+            ->orderBy('third_name', 'asc')
+            ->get();
+
+        $formatted = $students->map(function ($s, $index) {
+            $surname = trim(ucfirst(strtolower($s->surname ?? '')));
+            $firstname = trim(ucfirst(strtolower($s->firstname ?? '')));
+            $othername = trim(ucfirst(strtolower($s->third_name ?? $s->othername ?? '')));
+
+            $fullName = $surname;
+            if ($firstname) {
+                $fullName .= ', ' . $firstname;
+            }
+            if ($othername) {
+                $fullName .= ', ' . $othername;
+            }
+
+            return [
+                'sn' => $index + 1,
+                'id' => $s->id,
+                'reg_no' => $s->reg_no ?: 'N/A',
+                'surname' => $surname,
+                'firstname' => $firstname,
+                'third_name' => $othername,
+                'full_name' => $fullName,
+                'gender' => $s->sex ?: $s->gender ?: 'N/A',
+                'class_name' => $s->level?->name ?: 'Unassigned',
+                'section_name' => $s->section?->name ?: 'N/A',
+                'department_name' => $s->department?->name ?: 'N/A',
+                'student_status' => $s->student_status ?: ($s->status == 1 ? 'active' : 'inactive'),
+                'email' => $s->email ?: 'N/A',
+                'phone' => $s->phone ?: 'N/A',
+                'address' => $s->address ?: 'N/A',
+                'created_at' => $s->created_at ? $s->created_at->format('Y-m-d') : 'N/A',
+            ];
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'school_name' => $schoolSetting->school_name ?? $schoolSetting->name ?? 'SchoolProfit School',
+            'school_logo' => $schoolSetting->logo ? asset($schoolSetting->logo) : null,
+            'school_address' => $schoolSetting->address ?? '',
+            'school_phone' => $schoolSetting->phone_number ?? '',
+            'total' => $formatted->count(),
+            'students' => $formatted,
+        ]);
+    }
 
    public function ViewStudent($id)
 {
@@ -255,6 +409,16 @@ class StudentController extends Controller
 
     if (!$user || $user->school_id !== $auth->school_id) {
         return response()->json(['message' => 'Student not found.'], 404);
+    }
+
+    if ($auth->isPrincipal()) {
+        $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $studentSectionId = (int) ($user->section_id ?: $user->level?->section_id);
+            if ($studentSectionId && !in_array($studentSectionId, $assignedSectionIds)) {
+                return response()->json(['message' => 'You are not authorized to view students in this section.'], 403);
+            }
+        }
     }
 
     $affectiveDomains = AffectiveDomain::all();
@@ -272,10 +436,20 @@ class StudentController extends Controller
 
     $sessions = AcademicSession::where('school_id', $auth->school_id)->get();
 
-    // ðŸ”¹ Add available levels and departments
-    $levels = StudentClass::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
+    $levelsQuery = StudentClass::where('school_id', $auth->school_id)->whereNull('archived_at');
+    $sectionsQuery = Section::where('school_id', $auth->school_id)->whereNull('archived_at');
+
+    if ($auth->isPrincipal()) {
+        $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $levelsQuery->whereIn('section_id', $assignedSectionIds);
+            $sectionsQuery->whereIn('id', $assignedSectionIds);
+        }
+    }
+
+    $levels = $levelsQuery->get();
     $departments = Department::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
-    $sections = Section::where('school_id', $auth->school_id)->whereNull('archived_at')->get();
+    $sections = $sectionsQuery->get();
 
     return response()->json([
         'student' => $user,
@@ -290,28 +464,49 @@ class StudentController extends Controller
     ]);
 }
 
-
-
-
 public function Section(): JsonResponse
 {
     $auth = Auth::user();
 
-    // Fetch all sections belonging to the authenticated user's school
-    $sections = Section::select('id', 'name')
+    $query = Section::select('id', 'name')
         ->where('school_id', $auth->school_id)
-        ->whereNull('archived_at')
-        ->get();
+        ->whereNull('archived_at');
+
+    if ($auth->isPrincipal()) {
+        $assigned = $auth->getPrincipalAssignedSectionIds();
+        if (!empty($assigned)) {
+            $query->whereIn('id', $assigned);
+        }
+    } elseif ($auth->isBursar()) {
+        $assigned = $auth->getBursarAssignedSectionIds();
+        if (!empty($assigned)) {
+            $query->whereIn('id', $assigned);
+        }
+    }
+
+    $sections = $query->get();
 
     return response()->json($sections);
 }
 
-    
-    
   public function Level(): JsonResponse
     {
         $auth = Auth::user();
-        $levels = StudentClass::select('id', 'name')->where('school_id', $auth->school_id)->whereNull('archived_at')->get();
+        $query = StudentClass::select('id', 'name')->where('school_id', $auth->school_id)->whereNull('archived_at');
+
+        if ($auth->isPrincipal()) {
+            $assigned = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->whereIn('section_id', $assigned);
+            }
+        } elseif ($auth->isBursar()) {
+            $assigned = $auth->getBursarAssignedSectionIds();
+            if (!empty($assigned)) {
+                $query->whereIn('section_id', $assigned);
+            }
+        }
+
+        $levels = $query->get();
         return response()->json($levels);
     }
     
@@ -371,7 +566,19 @@ if (strtolower((string) $request->input('role')) === 'student') {
         ],
     ]);
 
-    // âœ… Step 3: Generate or accept admission number
+    if ($auth->isPrincipal()) {
+        $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $cls = StudentClass::where('id', $request->level_id)->where('school_id', $auth->school_id)->first();
+            if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+                return response()->json([
+                    'message' => 'You can only enroll students into classes belonging to your assigned section(s).',
+                ], 403);
+            }
+        }
+    }
+
+    // Step 3: Generate or accept admission number
     if ($schoolSetting->auto_admission == 1) {
         do {
             $regNo = random_int(100000, 999999);
@@ -414,7 +621,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
     $user->dob               = $request->dob;
     $user->address           = $request->address;
     $user->level_id          = $request->level_id;
-    $user->section_id        = $request->filled('section_id') ? (int) $request->section_id : ($class?->section_id ? (int) $class->section_id : null);
+    $user->section_id        = $class?->section_id ? (int) $class->section_id : ($request->filled('section_id') ? (int) $request->section_id : null);
     $user->department_id     = $request->filled('department_id') ? (int) $request->department_id : null;
     $user->blood_group       = $request->blood_group;
     $user->religion          = $request->religion;
@@ -454,10 +661,20 @@ if (strtolower((string) $request->input('role')) === 'student') {
     {
         $auth = Auth::user();
 
-        $student = User::with('department')
+        $student = User::with(['department', 'level'])
             ->forSchool($auth->school_id)
             ->withRole('student')
             ->findOrFail($id);
+
+        if ($auth->isPrincipal()) {
+            $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $studentSectionId = (int) ($student->section_id ?: $student->level?->section_id);
+                if ($studentSectionId && !in_array($studentSectionId, $assignedSectionIds)) {
+                    return response()->json(['message' => 'You are not authorized to view students in this section.'], 403);
+                }
+            }
+        }
     
         return response()->json([
             'id' => $student->id,
@@ -501,8 +718,23 @@ if (strtolower((string) $request->input('role')) === 'student') {
         $auth = Auth::user();
 
         $student = User::forSchool($auth->school_id)
+            ->with(['level'])
             ->withRole('student')
             ->findOrFail($id);
+
+        if ($auth->isPrincipal()) {
+            $assignedSectionIds = $auth->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $studentSectionId = (int) ($student->section_id ?: $student->level?->section_id);
+                if ($studentSectionId && !in_array($studentSectionId, $assignedSectionIds)) {
+                    return response()->json(['message' => 'You are not authorized to edit students in this section.'], 403);
+                }
+                $targetClass = StudentClass::where('school_id', $auth->school_id)->find($request->level_id);
+                if ($targetClass && !in_array((int)$targetClass->section_id, $assignedSectionIds)) {
+                    return response()->json(['message' => 'You cannot move this student to a class outside your assigned section(s).'], 403);
+                }
+            }
+        }
     
         $student->firstname = $request->firstname;
         $student->surname = $request->surname;
@@ -518,7 +750,7 @@ if (strtolower((string) $request->input('role')) === 'student') {
         
         $class = StudentClass::where('school_id', $auth->school_id)->find($request->level_id);
         $student->level_id = $request->level_id;
-        $student->section_id = $request->filled('section_id') ? (int) $request->section_id : ($class?->section_id ? (int) $class->section_id : $student->section_id);
+        $student->section_id = $class?->section_id ? (int) $class->section_id : ($request->filled('section_id') ? (int) $request->section_id : $student->section_id);
         $student->department_id = $request->filled('department_id') ? (int) $request->department_id : null; 
         $student->phone = $request->phone;
         $student->status = "1";
@@ -879,6 +1111,26 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
         $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
         $isTeacherRole = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
 
+        // Principal scoping: only assigned sections as from_classes
+        if ($user->isPrincipal()) {
+            $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $fromClasses = StudentClass::where('school_id', $schoolId)
+                    ->whereNull('archived_at')
+                    ->whereIn('section_id', $assignedSectionIds)
+                    ->select('id', 'name')
+                    ->withCount(['students as students_count' => $classStudentCountQuery])
+                    ->orderBy('name')
+                    ->get();
+
+                return response()->json([
+                    'user_role' => $user->role,
+                    'from_classes' => $fromClasses,
+                    'all_classes' => $allClasses,
+                ]);
+            }
+        }
+
         // Teacher: only assigned classes as FROM
         if ($isTeacherRole) {
             $enrolledLevelIds = TeacherEnrollment::where('user_id', $user->id)
@@ -932,6 +1184,19 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
             return response()->json([
                 'message' => 'The selected class was not found, is archived, or does not belong to your school.',
             ], 404);
+        }
+
+        // Principal scoping
+        if ($user->isPrincipal()) {
+            $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $cls = StudentClass::where('id', $classId)->where('school_id', $schoolId)->first();
+                if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+                    return response()->json([
+                        'message' => 'You are not assigned to manage students in this section.',
+                    ], 403);
+                }
+            }
         }
 
         $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
@@ -1010,6 +1275,17 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
                 ->whereNull('archived_at')
                 ->find($fromClass);
             abort_unless($fromClassModel, 422, 'The selected source class is invalid, archived, or does not belong to your school.');
+        }
+
+        // Principal scoping
+        if ($user->isPrincipal() && $fromClass) {
+            $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+            if (!empty($assignedSectionIds)) {
+                $fromCls = StudentClass::where('id', $fromClass)->where('school_id', $schoolId)->first();
+                if (!$fromCls || !in_array((int)$fromCls->section_id, $assignedSectionIds)) {
+                    abort(403, 'You can only promote students from classes in your assigned section(s).');
+                }
+            }
         }
 
         $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
@@ -1093,10 +1369,38 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
         $toClassName = $toClassModel->name;
 
         // Promote all selected students to the new class
+        $updateData = ['level_id' => $toClass];
+        if ($toClassModel->section_id) {
+            $updateData['section_id'] = (int) $toClassModel->section_id;
+        }
+
         User::where('school_id', $schoolId)
             ->withRole('student')
             ->whereIn('id', $studentIds)
-            ->update(['level_id' => $toClass]);
+            ->update($updateData);
+
+        // If class belongs to a section, clean up invalid cross-section departments for promoted students
+        if ($toClassModel->section_id) {
+            $toSectionId = (int) $toClassModel->section_id;
+
+            $validDeptIds = \App\Models\Subject::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where(function ($q) use ($toSectionId) {
+                    $q->whereNull('section_id')->orWhere('section_id', $toSectionId);
+                })
+                ->whereNotNull('department_id')
+                ->pluck('department_id')
+                ->unique()
+                ->values();
+
+            // Clear department_id for promoted students whose current department does not belong to the new section
+            User::where('school_id', $schoolId)
+                ->withRole('student')
+                ->whereIn('id', $studentIds)
+                ->whereNotNull('department_id')
+                ->whereNotIn('department_id', $validDeptIds)
+                ->update(['department_id' => null]);
+        }
 
         if ($blockedStudents->isNotEmpty()) {
             $unpaidCount = $blockedStudents->count();
@@ -1215,9 +1519,55 @@ public function bulkUpdateStudentLifecycleStatus(Request $request)
         ], 200);
     }
 
+    /**
+     * Get list of senior students needing department assignment or update
+     */
+    public function getDepartmentAttention(Request $request): JsonResponse
+    {
+        $user = Auth::user();
+        $schoolId = (int) $user->school_id;
+        $normRole = strtolower(str_replace(['-', '_', ' '], '', (string) $user->role));
+        $isTeacher = in_array($normRole, ['teacher', 'classteacher', 'subjectteacher'], true);
 
+        $service = app(\App\Services\Students\DepartmentAttentionService::class);
+        $data = $service->getStudentsNeedingAttention($schoolId, $isTeacher ? (int) $user->id : null);
 
+        return response()->json($data);
+    }
 
+    /**
+     * Fast 1-click assignment/update of student's department stream
+     */
+    public function assignDepartment(Request $request, $studentId): JsonResponse
+    {
+        $user = Auth::user();
+        $schoolId = (int) $user->school_id;
 
+        $request->validate([
+            'department_id' => 'required|integer',
+        ]);
+
+        $dept = \App\Models\Department::where('school_id', $schoolId)->findOrFail($request->department_id);
+
+        $student = User::where('school_id', $schoolId)
+            ->withRole('student')
+            ->with('level')
+            ->findOrFail($studentId);
+
+        $student->department_id = (int) $dept->id;
+
+        // Keep section_id aligned with class section
+        if ($student->level && $student->level->section_id) {
+            $student->section_id = (int) $student->level->section_id;
+        }
+
+        $student->save();
+
+        return response()->json([
+            'success' => true,
+            'message' => "{$student->firstname} {$student->surname} assigned to {$dept->name} department successfully.",
+            'student' => $student->fresh(['level.section', 'department']),
+        ]);
+    }
 }
 

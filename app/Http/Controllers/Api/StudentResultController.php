@@ -362,6 +362,16 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
         return response()->json(['message' => 'You are not allowed to access this result batch.'], 403);
     }
 
+    if ($authUser->isPrincipal()) {
+        $assignedSectionIds = $authUser->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $cls = \App\Models\StudentClass::where('id', $batchRow->class_id)->where('school_id', $authUser->school_id)->first();
+            if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+                return response()->json(['message' => 'You are not assigned to record results for this section.'], 403);
+            }
+        }
+    }
+
     $studentRow = DB::table('users')
         ->where('id', $student)
         ->where('school_id', (int) $batchRow->school_id)
@@ -546,8 +556,10 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
             ->where('name', (string) $batchRow->term)
             ->value('id');
 
+        $studentUser = User::with(['level.section', 'department'])->find((int) $student);
+
         $allowedSubjectIds = $this->subjectService
-            ->subjectsForStudent($student, $sessionId ? (int) $sessionId : null, $termId ? (int) $termId : null)
+            ->subjectsForStudent($studentUser ?? (int) $student, $sessionId ? (int) $sessionId : null, $termId ? (int) $termId : null)
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
@@ -668,6 +680,16 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
 
       if (! $studentModel || (int) $studentModel->level_id !== (int) $batchModel->class_id) {
           return response()->json(['message' => 'This student does not belong to the selected result batch class.'], 403);
+      }
+
+      if ($authUser->isPrincipal()) {
+          $assignedSectionIds = $authUser->getPrincipalAssignedSectionIds();
+          if (!empty($assignedSectionIds)) {
+              $cls = \App\Models\StudentClass::where('id', $batchModel->class_id)->where('school_id', $authUser->school_id)->first();
+              if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+                  return response()->json(['message' => 'You are not assigned to generate comments for this section.'], 403);
+              }
+          }
       }
 
       $role = strtolower((string) $authUser->role);
@@ -798,6 +820,20 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
    */
   public function showInBatch(int $batch, int $student): JsonResponse
   {
+    $authUser = \Illuminate\Support\Facades\Auth::user();
+    if ($authUser && $authUser->isPrincipal()) {
+      $batchRow = DB::table('result_batches')->where('id', $batch)->first();
+      if ($batchRow) {
+        $assigned = $authUser->getPrincipalAssignedSectionIds();
+        if (!empty($assigned)) {
+          $cls = \App\Models\StudentClass::where('id', $batchRow->class_id)->where('school_id', $authUser->school_id)->first();
+          if (!$cls || !in_array((int)$cls->section_id, $assigned)) {
+            return response()->json(['message' => 'You are not assigned to view results for this section.'], 403);
+          }
+        }
+      }
+    }
+
     // Get header row for this (batch, student)
     $sr = $this->repo->getV2StudentResult($batch, $student);
     if (!$sr) return response()->json(['message' => 'Result not found'], 404);
@@ -858,22 +894,28 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
             }
 
             // Platform fee clearance check (Pay-As-You-Go per-student fee enforcement)
-            $billingClearance = $this->schoolBillingService->studentAcademicClearanceStatus(
-                (int) $request->school_id,
-                (int) $request->student_id
-            );
+            // Exempt school staff, proprietors, admins, and principals when previewing/verifying results
+            $isStaffOrAdmin = in_array(User::normalizeRole($viewer->role), ['proprietor', 'principal', 'operator', 'teacher', 'super_admin', 'platform_staff'], true)
+                || $viewer->isProprietor() || $viewer->isPrincipal();
 
-            if (! ($billingClearance['allowed'] ?? false)) {
-                $totalFeeRequired = (float) ($billingClearance['total_fee_required'] ?? 1000);
-                $explanatoryNote = $billingClearance['explanatory_note'] ?? ("SchoolProfit platform fee of ₦" . number_format($totalFeeRequired, 2) . " is unpaid.");
-                return response()->json([
-                    'message' => "Official Report Card is locked. {$explanatoryNote} Please settle the platform fee to view, download, or print this report card.",
-                    'status' => 'platform_fee_required',
-                    'reason' => 'student_outstanding_billing_required',
-                    'total_fee_required' => $totalFeeRequired,
-                    'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
-                    'billing_clearance' => $billingClearance,
-                ], 402);
+            if (! $isStaffOrAdmin) {
+                $billingClearance = $this->schoolBillingService->studentAcademicClearanceStatus(
+                    (int) $request->school_id,
+                    (int) $request->student_id
+                );
+
+                if (! ($billingClearance['allowed'] ?? false)) {
+                    $totalFeeRequired = (float) ($billingClearance['total_fee_required'] ?? 1000);
+                    $explanatoryNote = $billingClearance['explanatory_note'] ?? ("SchoolProfit platform fee of ₦" . number_format($totalFeeRequired, 2) . " is unpaid.");
+                    return response()->json([
+                        'message' => "Official Report Card is locked. {$explanatoryNote} Please settle the platform fee to view, download, or print this report card.",
+                        'status' => 'platform_fee_required',
+                        'reason' => 'student_outstanding_billing_required',
+                        'total_fee_required' => $totalFeeRequired,
+                        'blocked_terms_count' => $billingClearance['blocked_terms_count'] ?? 1,
+                        'billing_clearance' => $billingClearance,
+                    ], 402);
+                }
             }
         }
 
@@ -1004,6 +1046,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                 return response()->json([
                     'source' => 'v2',
                     'result_status' => $batch->status,
+                    'is_preview' => (($batch->status ?? null) !== 'published'),
                     'user' => $student,
                     'user_photo_base64' => $photoBase64,
                     'average' => $averageData,
@@ -1021,7 +1064,7 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
                         'logo' => $this->getBase64Image($school->logo),
                         'principal_signature' => $this->getBase64Image($school->principal_signature),
 
-                        // Ã¢Å“â€¦ Theme colors
+                        // Theme colors
                         'primary_color' => $school->primary_color ?? '#0d47a1',
                         'secondary_color' => $school->secondary_color ?? '#ffc107',
                         'background_color' => $school->background_color ?? '#ffffff',
@@ -1048,19 +1091,19 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
         );
 
         $legacy['source'] = 'legacy';
+        $legacy['result_status'] = 'legacy';
+        $legacy['is_preview'] = false;
 
-        // Ã¢Å“â€¦ Ensure school_info exists
+        // Ensure school_info exists
         if (!isset($legacy['school_info']) || !is_array($legacy['school_info'])) {
             $legacy['school_info'] = [];
         }
 
-        // Ã¢Å“â€¦ Inject theme colors into legacy payload too
+        // Inject theme colors into legacy payload too
         $legacy['school_info']['primary_color'] = $school->primary_color ?? '#0d47a1';
         $legacy['school_info']['secondary_color'] = $school->secondary_color ?? '#ffc107';
         $legacy['school_info']['background_color'] = $school->background_color ?? '#ffffff';
 
-        // Ã¢Å“â€¦ Optional: make sure legacy also uses base64 images consistently
-        // If your legacy builder already returns base64, you can remove these 2 lines.
         if (empty($legacy['school_info']['logo'])) {
             $legacy['school_info']['logo'] = $this->getBase64Image($school->logo);
         }
@@ -1068,7 +1111,6 @@ public function reportCard(GetReportCardRequest $request): JsonResponse
             $legacy['school_info']['principal_signature'] = $this->getBase64Image($school->principal_signature);
         }
 
-        // Ã¢Å“â€¦ Also ensure basic school metadata exists
         $legacy['school_info']['name'] = $legacy['school_info']['name'] ?? $school->school_name;
         $legacy['school_info']['address'] = $legacy['school_info']['address'] ?? $school->address;
         $legacy['school_info']['phone'] = $legacy['school_info']['phone'] ?? $school->phone;
@@ -1103,7 +1145,35 @@ private function canViewUnpublishedResult(Request $request, object $batch): bool
         return false;
     }
 
-    return in_array(strtolower((string) $user->role), ['admin', 'teacher', 'principal', 'super admin', 'super-admin', 'superadmin'], true);
+    $normRole = User::normalizeRole($user->role);
+    $allowedRoles = [
+        'admin', 'owner', 'proprietor', 'school_owner', 'school_admin',
+        'principal', 'head_teacher', 'headmaster', 'headmistress',
+        'teacher', 'class_teacher', 'subject_teacher',
+        'super_admin', 'platform_staff', 'operator'
+    ];
+
+    $isAllowed = in_array(strtolower((string) $user->role), $allowedRoles, true)
+        || in_array($normRole, ['proprietor', 'principal', 'teacher', 'super_admin', 'platform_staff', 'operator'], true)
+        || $user->isProprietor()
+        || $user->isPrincipal();
+
+    if (! $isAllowed) {
+        return false;
+    }
+
+    // Principal section scoping: if principal has assigned sections, ensure the batch class belongs to their assigned section
+    if ($user->isPrincipal()) {
+        $assigned = $user->getPrincipalAssignedSectionIds();
+        if (! empty($assigned)) {
+            $class = StudentClass::where('id', $batch->class_id)->where('school_id', $user->school_id)->first();
+            if (! $class || ! in_array((int) $class->section_id, $assigned, true)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 private function resultColumnPolicy(int $schoolId, int $classId, string $term): array

@@ -38,6 +38,18 @@ php.ini
 .DS_Store
 Thumbs.db
 
+# Scratch scripts
+assign_ruth_sections.php
+check_bursar_pivots.php
+check_live_finance.php
+check_users_sections.php
+inspect_samjane_students.php
+reset_ruth_sections.php
+test_controller_endpoints.php
+count()])
+password
+
+
 # Editor
 .vscode/
 .idea/

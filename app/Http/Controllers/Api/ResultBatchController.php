@@ -96,6 +96,19 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
         }
     }
 
+    // Principal can only resolve batch for assigned section(s)
+    if ($user->isPrincipal()) {
+        $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+        if (!empty($assignedSectionIds)) {
+            $cls = \App\Models\StudentClass::where('id', $classId)->where('school_id', $schoolId)->first();
+            if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+                return response()->json([
+                    'message' => 'You are not assigned to record or manage results for this section.'
+                ], 403);
+            }
+        }
+    }
+
     $selectedTermName = trim((string) $request->term);
 
     $termExists = Term::query()
@@ -137,6 +150,17 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
       return response()->json(['message' => 'Batch not found'], 404);
     }
 
+    $user = \Illuminate\Support\Facades\Auth::user();
+    if ($user && $user->isPrincipal()) {
+      $assigned = $user->getPrincipalAssignedSectionIds();
+      if (!empty($assigned)) {
+        $cls = \App\Models\StudentClass::where('id', $data->class_id)->where('school_id', $user->school_id)->first();
+        if (!$cls || !in_array((int)$cls->section_id, $assigned)) {
+          return response()->json(['message' => 'You are not assigned to view results for this section.'], 403);
+        }
+      }
+    }
+
     return response()->json(['batch' => $data]);
   }
 
@@ -150,6 +174,20 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
    */
   public function compute(int $batch): JsonResponse
   {
+    $user = \Illuminate\Support\Facades\Auth::user();
+    if ($user && $user->isPrincipal()) {
+      $batchModel = ResultBatch::find($batch);
+      if ($batchModel) {
+        $assigned = $user->getPrincipalAssignedSectionIds();
+        if (!empty($assigned)) {
+          $cls = \App\Models\StudentClass::where('id', $batchModel->class_id)->where('school_id', $user->school_id)->first();
+          if (!$cls || !in_array((int)$cls->section_id, $assigned)) {
+            return response()->json(['message' => 'You are not assigned to compute results for this section.'], 403);
+          }
+        }
+      }
+    }
+
     $summary = $this->computeService->computeBatch($batch);
 
     return response()->json([
@@ -368,6 +406,16 @@ private function ensureSameSchool(Request $request, ResultBatch $batch): void
   $user = $request->user();
 
   abort_if(! $user || (int) $batch->school_id !== (int) $user->school_id, 403, 'You are not allowed to access this result batch.');
+
+  if ($user->isPrincipal()) {
+    $assignedSectionIds = $user->getPrincipalAssignedSectionIds();
+    if (!empty($assignedSectionIds)) {
+      $cls = \App\Models\StudentClass::where('id', $batch->class_id)->where('school_id', $user->school_id)->first();
+      if (!$cls || !in_array((int)$cls->section_id, $assignedSectionIds)) {
+        abort(403, 'You are not assigned to record or manage results for this section.');
+      }
+    }
+  }
 }
 
 private function ensureCanEnterBatchResults(Request $request, ResultBatch $batch): void

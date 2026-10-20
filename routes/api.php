@@ -28,6 +28,8 @@ use App\Http\Controllers\Backend\AttendanceController;
 use App\Http\Controllers\Backend\TermController;
 use App\Http\Controllers\Backend\TestimonialController;
 use App\Http\Controllers\Backend\BlogController;
+use App\Http\Controllers\Backend\InvestorManagementController;
+use App\Http\Controllers\Backend\InvestorPortalController;
 
 use App\Http\Controllers\ContactController;
 use App\Http\Controllers\ProfileController;
@@ -159,6 +161,7 @@ Route::get('/public/fee-payment/student', [PublicFeePaymentController::class, 's
 Route::post('/public/fee-payment/initialize', [PublicFeePaymentController::class, 'initialize'])->middleware('throttle:30,1');
 Route::get('/public/fee-payment/verify/{reference}', [PublicFeePaymentController::class, 'verify'])->middleware('throttle:60,1');
 Route::get('/public/fee-payment/receipt/{reference}/pdf', [PublicFeePaymentController::class, 'downloadPdfReceipt'])->middleware('throttle:30,1');
+Route::get('/receipt/verify/{token}', [FeePaymentController::class, 'verifyReceiptPublic'])->middleware('throttle:60,1');
 Route::post('/monnify/webhook', [PublicFeePaymentController::class, 'monnifyWebhook'])->name('monnify.webhook');
 Route::post('/public/fee-payment/monnify/webhook', [PublicFeePaymentController::class, 'monnifyWebhook']);
 Route::post('/wema/webhook', [\App\Http\Controllers\Backend\WemaWebhookController::class, 'handle'])->name('wema.webhook');
@@ -212,6 +215,22 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('/user-profile', [ProfileController::class, 'show']);
     Route::match(['put', 'post'], '/user-profile/update', [ProfileController::class, 'update']);
     Route::post('/user/update-password', [ProfileController::class, 'updatePassword']);
+
+    // SchoolProfit Investor Portal Live Dashboard (Tenant-independent)
+    Route::prefix('investor')->group(function () {
+        Route::get('/dashboard', [InvestorPortalController::class, 'dashboard']);
+        Route::get('/disbursements/{id}/receipt', [InvestorPortalController::class, 'getReceiptSlip']);
+    });
+
+    // SuperAdmin Investor Portfolio & Disbursement Management
+    Route::prefix('super-admin/investors')->middleware('superadmin.access:finance,owner')->group(function () {
+        Route::get('/', [InvestorManagementController::class, 'index']);
+        Route::post('/', [InvestorManagementController::class, 'store']);
+        Route::get('/{id}', [InvestorManagementController::class, 'show']);
+        Route::put('/{id}', [InvestorManagementController::class, 'update']);
+        Route::post('/{id}/disbursements', [InvestorManagementController::class, 'recordDisbursement']);
+        Route::delete('/{id}', [InvestorManagementController::class, 'destroy']);
+    });
 });
 
 // These must remain reachable even when billing clearance blocks normal school operations.
@@ -641,7 +660,9 @@ Route::get('/parent/payments/{reference}/receipt/pdf', [ParentStudentFeesControl
     Route::get('/bursar-dashboard/summary', [BursarDashboardController::class, 'summary']);
 Route::get('/bursar-dashboard/recent-payments', [BursarDashboardController::class, 'recentPayments']);
 Route::get('/bursar-dashboard/payment-method-breakdown', [BursarDashboardController::class, 'paymentMethodBreakdown']);
+Route::get('/bursar-dashboard/section-breakdown', [BursarDashboardController::class, 'sectionBreakdown']);
 Route::get('/bursar-dashboard/bank-details', [BursarDashboardController::class, 'bankDetails']);
+Route::get('/bursar-dashboard/revenue-trend', [BursarDashboardController::class, 'revenueTrend']);
 
 Route::post('/parents/register', [ParentController::class, 'register']);
     Route::get('/parents/import/template', [ParentController::class, 'importTemplate']);
@@ -824,6 +845,7 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/student/my-subjects', [StudentController::class, 'mySubjects']);
     //resouces for students
     Route::get('/all-students', [StudentController::class, 'AllStudents']);
+    Route::get('/students/export-all', [StudentController::class, 'exportAllStudents']);
     Route::get('/students/import/template', [StudentController::class, 'studentImportTemplate']);
     Route::post('/students/import/preview', [StudentController::class, 'previewStudentImport']);
     Route::post('/students/import', [StudentController::class, 'importStudents'])
@@ -840,10 +862,13 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/students/edit/{id}', [StudentController::class, 'EditStudents']);
     Route::put('/students/update/{id}', [StudentController::class, 'UpdateStudent']);
     Route::get('/students/{id}/performance', [StudentController::class, 'getStudentPerformance']);
+    Route::get('/students/department-attention', [StudentController::class, 'getDepartmentAttention']);
+    Route::post('/students/{id}/assign-department', [StudentController::class, 'assignDepartment']);
 
    
      Route::get('/student-fees', [StudentFeeController::class, 'index']);
     Route::post('/fees/pay', [FeePaymentController::class, 'payFee']);
+    Route::post('/fees/pay-bulk', [FeePaymentController::class, 'payBulkFees']);
     // Route::get('/student-fees/search/{reg_no}', [StudentFeeController::class, 'searchByRegNo']);
 //   Route::get('/student/my-fees', [StudentFeeController::class, 'MyFee']);
 
@@ -1128,6 +1153,11 @@ Route::get('/teachers/view/{id}', [TeacherController::class, 'viewTeacher']);
 
    Route::get('/students/{studentId}/fees', [FeePaymentController::class, 'showAssignedFees']);
 Route::delete('/student-fees/{studentFeeId}', [FeePaymentController::class, 'removeAssignedFee']);
+Route::post('/fees/concessions/apply', [FeePaymentController::class, 'applyConcession']);
+Route::post('/fees/concessions/{id}/approve', [FeePaymentController::class, 'approveConcession']);
+Route::post('/fees/concessions/{id}/reject', [FeePaymentController::class, 'rejectConcession']);
+Route::get('/fees/concessions/pending', [FeePaymentController::class, 'pendingConcessions']);
+Route::get('/fees/receipt/{paymentId}', [FeePaymentController::class, 'getReceiptDetails']);
 
     Route::post('/fees/assign', [FeePaymentController::class, 'assignStudentFee'])
         ->middleware('subscription.feature:fee_management')

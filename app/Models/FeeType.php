@@ -12,6 +12,12 @@ class FeeType extends Model
     use HasFactory;
     
     protected $guarded = [];
+
+    protected $casts = [
+        'amount' => 'float',
+        'is_discountable' => 'boolean',
+        'is_compulsory' => 'boolean',
+    ];
     
   public function section()
     {

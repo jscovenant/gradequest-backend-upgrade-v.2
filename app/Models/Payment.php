@@ -14,14 +14,25 @@ class Payment extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'amount' => 'decimal:2',
-        'platform_fee' => 'decimal:2',
+        'amount' => 'float',
+        'current_paid' => 'float',
+        'arrears_paid' => 'float',
+        'platform_fee' => 'float',
         'paystack_response' => 'array',
     ];
   
-  public function studentFee()
-{
-    return $this->belongsTo(StudentFee::class);
-}
+    public function studentFee()
+    {
+        return $this->belongsTo(StudentFee::class);
+    }
 
+    public function receiver()
+    {
+        return $this->belongsTo(User::class, 'received_by');
+    }
+
+    public function school()
+    {
+        return $this->belongsTo(SchoolSetting::class, 'school_id');
+    }
 }

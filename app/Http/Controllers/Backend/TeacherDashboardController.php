@@ -81,11 +81,16 @@ class TeacherDashboardController extends Controller
             ? round(($batchesSubmitted / $batchesTotal) * 100) . '%'
             : '0%';
 
+        $deptAttentionService = app(\App\Services\Students\DepartmentAttentionService::class);
+        $deptAttention = $deptAttentionService->getStudentsNeedingAttention((int) $schoolId, (int) $teacherId, 10);
+
         return response()->json([
             'students' => $students,
             'classes'  => $assignedClasses,
             'subjects' => $subjects,
             'results_uploaded' => $completion,
+            'department_attention_count' => (int) $deptAttention['total_count'],
+            'department_attention_summary' => $deptAttention,
         ]);
     }
 
