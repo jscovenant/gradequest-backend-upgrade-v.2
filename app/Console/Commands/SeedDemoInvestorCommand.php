@@ -24,8 +24,8 @@ class SeedDemoInvestorCommand extends Command
         $user = User::updateOrCreate(
             ['email' => $email],
             [
-                'first_name' => 'Tunde',
-                'last_name' => 'Babalola',
+                'firstname' => 'Tunde',
+                'surname' => 'Babalola',
                 'phone' => '08012345678',
                 'role' => User::ROLE_INVESTOR,
                 'password' => Hash::make($password),

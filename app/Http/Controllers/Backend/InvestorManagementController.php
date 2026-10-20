@@ -100,9 +100,13 @@ class InvestorManagementController extends Controller
                 $existingUser->save();
             } elseif (!empty($validated['create_user_account'])) {
                 $password = !empty($validated['user_password']) ? $validated['user_password'] : 'Invest@' . date('Y');
+                $parts = explode(' ', trim($validated['name']));
+                $first = $parts[0] ?? $validated['name'];
+                $last = isset($parts[1]) ? implode(' ', array_slice($parts, 1)) : 'Partner';
+
                 $user = User::create([
-                    'first_name' => explode(' ', $validated['name'])[0] ?? $validated['name'],
-                    'last_name' => explode(' ', $validated['name'])[1] ?? 'Partner',
+                    'firstname' => $first,
+                    'surname' => $last,
                     'email' => $validated['email'],
                     'phone' => $validated['phone'] ?? null,
                     'role' => User::ROLE_INVESTOR,
