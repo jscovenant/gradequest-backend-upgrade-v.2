@@ -169,13 +169,18 @@ class InvestorManagementController extends Controller
 
         $validated = $request->validate([
             'name' => 'sometimes|string|max:150',
+            'email' => 'sometimes|email|max:150|unique:investors,email,' . $investor->id,
             'phone' => 'nullable|string|max:30',
             'bank_name' => 'nullable|string|max:100',
             'account_number' => 'nullable|string|max:30',
             'account_name' => 'nullable|string|max:150',
             'tier' => 'sometimes|in:bronze,silver,gold,custom',
+            'capital_invested' => 'sometimes|numeric|min:1000',
             'equity_percentage' => 'sometimes|numeric|min:0.1|max:100',
             'recoup_percentage' => 'sometimes|numeric|min:1|max:100',
+            'tenure_years' => 'sometimes|integer|min:1|max:20',
+            'investment_date' => 'nullable|date',
+            'contract_ref' => 'nullable|string|max:50',
             'current_phase' => 'sometimes|in:recoup_phase,dividend_phase,completed',
             'status' => 'sometimes|in:active,paused,completed',
             'notes' => 'nullable|string',
@@ -183,10 +188,29 @@ class InvestorManagementController extends Controller
 
         $investor->update($validated);
 
+        // Keep linked login user updated if name/email/phone changed
+        if ($investor->user) {
+            $userUpdates = [];
+            if (!empty($validated['email'])) {
+                $userUpdates['email'] = $validated['email'];
+            }
+            if (!empty($validated['name'])) {
+                $parts = explode(' ', trim($validated['name']));
+                $userUpdates['firstname'] = $parts[0] ?? $validated['name'];
+                $userUpdates['surname'] = isset($parts[1]) ? implode(' ', array_slice($parts, 1)) : 'Partner';
+            }
+            if (isset($validated['phone'])) {
+                $userUpdates['phone'] = $validated['phone'];
+            }
+            if (!empty($userUpdates)) {
+                $investor->user->update($userUpdates);
+            }
+        }
+
         return response()->json([
             'status' => true,
             'message' => 'Investor details updated successfully',
-            'investor' => $investor->load('disbursements'),
+            'investor' => $investor->load(['user:id,email,phone,created_at', 'disbursements']),
         ]);
     }
 
@@ -255,15 +279,20 @@ class InvestorManagementController extends Controller
     /**
      * Remove or archive an investor record.
      */
-    public function destroy(int $id): JsonResponse
+    public function destroy(Request $request, int $id): JsonResponse
     {
         $investor = Investor::findOrFail($id);
 
-        if ($investor->disbursements()->exists()) {
+        if ($investor->disbursements()->exists() && !$request->boolean('force')) {
             return response()->json([
                 'status' => false,
-                'message' => 'Cannot delete investor with existing disbursement payment records. You can set their status to paused instead.',
+                'has_disbursements' => true,
+                'message' => 'Cannot delete investor with existing disbursement payment records. You can set their status to "paused" instead, or check the force delete confirmation.',
             ], 422);
+        }
+
+        if ($request->boolean('force')) {
+            $investor->disbursements()->delete();
         }
 
         $investor->delete();
