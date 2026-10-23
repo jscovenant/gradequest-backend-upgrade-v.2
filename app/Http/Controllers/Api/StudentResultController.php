@@ -61,11 +61,21 @@ public function findByAdmissionNo($admissionNo)
 
     // For Teacher: fetch assigned class IDs
     $allowedLevelIds = collect();
-    if ($auth->role === 'Teacher') {
+    $roleNorm = strtolower((string) ($auth->role ?? ''));
+    if (in_array($roleNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $allowedLevelIds = TeacherEnrollment::query()
-            ->where('user_id', $auth->id)
-            ->where('school_id', $auth->school_id)
-            ->where('enroll', '1')
+            ->where(function ($q) use ($auth) {
+                $q->whereIn('school_id', [(int) $auth->school_id, 0])->orWhereNull('school_id');
+            })
+            ->where(function ($q) use ($auth) {
+                $q->where('user_id', (int) $auth->id);
+                if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                    $q->orWhere('teacher_id', (int) $auth->id);
+                }
+            })
+            ->where(function ($q) {
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+            })
             ->pluck('level_id');
 
         if ($allowedLevelIds->isEmpty()) {
@@ -82,8 +92,8 @@ public function findByAdmissionNo($admissionNo)
         ->where('school_id', $auth->school_id)
         ->with(['level', 'department']);
 
-    // Ã¢Å“â€¦ Restrict teachers to only their assigned class students
-    if ($auth->role === 'Teacher') {
+    // ✅ Restrict teachers to only their assigned class students
+    if (in_array($roleNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $studentQuery->whereIn('level_id', $allowedLevelIds);
     }
 
@@ -385,14 +395,18 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
     $role = strtolower((string) ($authUser->role ?? ''));
     if (in_array($role, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
         $assigned = TeacherEnrollment::query()
-            ->where('school_id', (int) $batchRow->school_id)
+            ->where(function ($q) use ($batchRow) {
+                $q->whereIn('school_id', [(int) $batchRow->school_id, 0])->orWhereNull('school_id');
+            })
             ->where(function ($q) use ($authUser) {
                 $q->where('user_id', (int) $authUser->id);
                 if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
                     $q->orWhere('teacher_id', (int) $authUser->id);
                 }
             })
-            ->where('enroll', '1')
+            ->where(function ($q) {
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+            })
             ->where('level_id', (int) $batchRow->class_id)
             ->exists();
 

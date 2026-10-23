@@ -86,10 +86,17 @@ class AttendanceController extends Controller
         }
 
         // For Teacher: check active enrollments in TeacherEnrollment
-        $enrolledLevelIds = TeacherEnrollment::where('user_id', $auth->id)
-            ->where('school_id', $schoolId)
+        $enrolledLevelIds = TeacherEnrollment::where(function ($q) use ($auth) {
+                $q->where('user_id', $auth->id);
+                if (\Illuminate\Support\Facades\Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                    $q->orWhere('teacher_id', $auth->id);
+                }
+            })
+            ->where(function ($q) use ($schoolId) {
+                $q->whereIn('school_id', [(int) $schoolId, 0])->orWhereNull('school_id');
+            })
             ->where(function ($q) {
-                $q->where('enroll', '1')->orWhere('enroll', 1);
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
             })
             ->pluck('level_id')
             ->filter()
@@ -174,10 +181,17 @@ class AttendanceController extends Controller
 
         // teacher authorization: if teacher has specific assigned classes, restrict to them
         if ($isTeacher && !$isAdmin) {
-            $enrolledLevelIds = TeacherEnrollment::where('user_id', $auth->id)
-                ->where('school_id', $schoolId)
+            $enrolledLevelIds = TeacherEnrollment::where(function ($q) use ($auth) {
+                    $q->where('user_id', $auth->id);
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                        $q->orWhere('teacher_id', $auth->id);
+                    }
+                })
+                ->where(function ($q) use ($schoolId) {
+                    $q->whereIn('school_id', [(int) $schoolId, 0])->orWhereNull('school_id');
+                })
                 ->where(function ($q) {
-                    $q->where('enroll', '1')->orWhere('enroll', 1);
+                    $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
                 })
                 ->pluck('level_id')
                 ->filter()
@@ -275,10 +289,17 @@ class AttendanceController extends Controller
 
         // teacher authorization
         if ($isTeacher && !$isAdmin) {
-            $enrolledLevelIds = TeacherEnrollment::where('user_id', $auth->id)
-                ->where('school_id', $schoolId)
+            $enrolledLevelIds = TeacherEnrollment::where(function ($q) use ($auth) {
+                    $q->where('user_id', $auth->id);
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                        $q->orWhere('teacher_id', $auth->id);
+                    }
+                })
+                ->where(function ($q) use ($schoolId) {
+                    $q->whereIn('school_id', [(int) $schoolId, 0])->orWhereNull('school_id');
+                })
                 ->where(function ($q) {
-                    $q->where('enroll', '1')->orWhere('enroll', 1);
+                    $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
                 })
                 ->pluck('level_id')
                 ->filter()

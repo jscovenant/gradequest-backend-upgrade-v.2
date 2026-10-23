@@ -78,14 +78,18 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
     // ✅ Teacher can only resolve batch for assigned class(es)
     $roleNorm = strtolower((string) ($user->role ?? ''));
     if (in_array($roleNorm, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
-        $allowed = TeacherEnrollment::where('school_id', $schoolId)
+        $allowed = TeacherEnrollment::where(function ($q) use ($schoolId) {
+                $q->whereIn('school_id', [(int) $schoolId, 0])->orWhereNull('school_id');
+            })
             ->where(function ($q) use ($user) {
                 $q->where('user_id', $user->id);
                 if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
                     $q->orWhere('teacher_id', $user->id);
                 }
             })
-            ->where('enroll', '1')
+            ->where(function ($q) {
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+            })
             ->where('level_id', $classId)
             ->exists();
 
@@ -432,14 +436,18 @@ private function ensureCanEnterBatchResults(Request $request, ResultBatch $batch
   abort_if(! in_array($role, ['teacher', 'class_teacher', 'subject_teacher'], true), 403, 'Only authorized school staff can enter or upload results.');
 
   $assigned = TeacherEnrollment::query()
-    ->where('school_id', (int) $batch->school_id)
+    ->where(function ($q) use ($batch) {
+        $q->whereIn('school_id', [(int) $batch->school_id, 0])->orWhereNull('school_id');
+    })
     ->where(function ($q) use ($user) {
         $q->where('user_id', (int) $user->id);
         if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
             $q->orWhere('teacher_id', (int) $user->id);
         }
     })
-    ->where('enroll', '1')
+    ->where(function ($q) {
+        $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+    })
     ->where('level_id', (int) $batch->class_id)
     ->exists();
 

@@ -35,6 +35,11 @@ class StudentFee extends Model
         return $this->belongsTo(AcademicSession::class);
     }
 
+    public function academicSession()
+    {
+        return $this->belongsTo(AcademicSession::class, 'session_id');
+    }
+
     public function term()
     {
         return $this->belongsTo(Term::class);

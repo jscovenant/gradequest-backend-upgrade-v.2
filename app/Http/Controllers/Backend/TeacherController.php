@@ -410,6 +410,7 @@ public function updateTeacher(Request $request, $id)
             [
                 'level_id' => $request->level_id,
                 'school_id' => $auth->school_id,
+                'enroll' => '1',
             ]
         );
     }

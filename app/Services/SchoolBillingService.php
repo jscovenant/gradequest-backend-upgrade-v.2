@@ -2116,12 +2116,13 @@ $unpaid = StudentBillingEntitlement::query()
             'past_arrears_slots' => $pastArrearsSlots,
             'past_arrears_fee' => $pastArrearsSlots * $feePerStudent,
             'wallet_balance' => $walletBalance,
-            'minimum_coverage_percent' => $minCoveragePercent,
-            'minimum_students_required' => $minStudentsRequired,
-            'is_minimum_coverage_met' => $isMinCoverageMet,
-            'shortfall_students' => $shortfallStudents,
-            'shortfall_fee' => $shortfallFee,
-            'min_quota_fee' => $minQuotaFee,
+            'minimum_coverage_percent' => 0,
+            'minimum_students_required' => 1,
+            'minimum_payment_amount' => $totalStudents > 10 ? 5000 : 0,
+            'is_minimum_coverage_met' => true,
+            'shortfall_students' => 0,
+            'shortfall_fee' => 0,
+            'min_quota_fee' => $totalStudents > 10 ? 5000 : 0,
             'coverage_percent' => $coveragePercent,
             'session_id' => $sessionId,
             'term_id' => $termId,
@@ -2191,7 +2192,8 @@ $unpaid = StudentBillingEntitlement::query()
     }
 
     /**
-     * Validate that clearing the specified students satisfies the 70% minimum population coverage threshold.
+     * Validate clearance policy: flexible individual student selection.
+     * For schools with more than 10 students, the minimum clearance selection must not be less than ₦5,000.
      */
     public function validateMinimumCoverageForClearance(
         int $schoolId,
@@ -2199,86 +2201,45 @@ $unpaid = StudentBillingEntitlement::query()
         int $sessionId,
         ?int $termId = null
     ): array {
-        $policy = $this->policy();
-        $minCoveragePercent = (int) ($policy->online_minimum_coverage_percent ?? 70);
+        $cleanStudentIds = array_values(array_unique(array_filter(array_map('intval', $studentIdsToClear))));
+        $selectedCount = count($cleanStudentIds);
 
-        if ($minCoveragePercent <= 0) {
-            return ['allowed' => true];
+        if ($selectedCount === 0) {
+            return [
+                'allowed' => false,
+                'message' => 'Please select at least one student for clearance.',
+            ];
         }
 
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
         $totalActiveStudents = User::where('school_id', $schoolId)
             ->whereRaw('LOWER(role) = ?', ['student'])
             ->where('status', 1)
             ->count();
 
-        if ($totalActiveStudents === 0) {
-            return ['allowed' => true];
-        }
+        // Flexible policy: if school has more than 10 students, minimum selection fee is ₦5,000
+        $minThreshold = 5000;
+        $totalEstimatedFee = $selectedCount * $feePerStudent;
 
-        $minStudentsRequired = (int) ceil(($totalActiveStudents * $minCoveragePercent) / 100);
-
-        // Find which active students are ALREADY paid/cleared for this session and term
-        $alreadyClearedStudentIds = StudentBillingEntitlement::query()
-            ->join('users', 'users.id', '=', 'student_billing_entitlements.student_id')
-            ->where('student_billing_entitlements.school_id', $schoolId)
-            ->where('student_billing_entitlements.session_id', $sessionId)
-            ->when($termId, fn ($q) => $q->where('student_billing_entitlements.term_id', $termId))
-            ->whereIn('student_billing_entitlements.status', ['paid', 'override'])
-            ->where('users.status', 1)
-            ->whereRaw('LOWER(users.role) = ?', ['student'])
-            ->pluck('student_billing_entitlements.student_id')
-            ->unique()
-            ->toArray();
-
-        $alreadyClearedCount = count($alreadyClearedStudentIds);
-
-        // If the school has ALREADY met or exceeded the 70% threshold, allow any incremental clearance
-        if ($alreadyClearedCount >= $minStudentsRequired) {
-            return [
-                'allowed' => true,
-                'minimum_coverage_percent' => $minCoveragePercent,
-                'total_active_students' => $totalActiveStudents,
-                'min_students_required' => $minStudentsRequired,
-                'already_cleared_count' => $alreadyClearedCount,
-                'is_already_satisfied' => true,
-            ];
-        }
-
-        // Active students being cleared in this transaction
-        $validClearingStudentIds = User::where('school_id', $schoolId)
-            ->whereIn('id', $studentIdsToClear)
-            ->whereRaw('LOWER(role) = ?', ['student'])
-            ->where('status', 1)
-            ->pluck('id')
-            ->toArray();
-
-        $combinedClearedStudentIds = array_unique(array_merge($alreadyClearedStudentIds, $validClearingStudentIds));
-        $combinedCount = count($combinedClearedStudentIds);
-
-        if ($combinedCount < $minStudentsRequired) {
-            $shortfall = $minStudentsRequired - $alreadyClearedCount;
-            $attempted = count($validClearingStudentIds);
-
+        if ($totalActiveStudents > 10 && $totalEstimatedFee < $minThreshold) {
+            $minStudentsNeeded = (int) ceil($minThreshold / max(1, $feePerStudent));
             return [
                 'allowed' => false,
-                'minimum_coverage_percent' => $minCoveragePercent,
-                'total_active_students' => $totalActiveStudents,
-                'min_students_required' => $minStudentsRequired,
-                'already_cleared_count' => $alreadyClearedCount,
-                'attempted_clearing_count' => $attempted,
-                'combined_cleared_count' => $combinedCount,
-                'shortfall' => $shortfall,
-                'message' => "SchoolProfit minimum population policy: Your school has {$totalActiveStudents} active enrolled students. You must clear platform fees for at least {$minCoveragePercent}% of your total student population (minimum {$minStudentsRequired} students) to activate platform services for this term. Currently cleared: {$alreadyClearedCount}. You selected {$attempted} student(s). Please select at least {$shortfall} student(s) to reach the 70% threshold.",
+                'minimum_coverage_percent' => 0,
+                'min_payment_threshold' => $minThreshold,
+                'selected_count' => $selectedCount,
+                'min_students_needed' => $minStudentsNeeded,
+                'message' => "Flexible Platform Policy: For schools with more than 10 active students, the minimum clearance selection is ₦" . number_format($minThreshold) . ". You selected {$selectedCount} student(s) totaling ₦" . number_format($totalEstimatedFee) . ". Please select at least {$minStudentsNeeded} student(s) to reach the ₦" . number_format($minThreshold) . " minimum.",
             ];
         }
 
         return [
             'allowed' => true,
-            'minimum_coverage_percent' => $minCoveragePercent,
+            'minimum_coverage_percent' => 0,
             'total_active_students' => $totalActiveStudents,
-            'min_students_required' => $minStudentsRequired,
-            'already_cleared_count' => $alreadyClearedCount,
-            'is_already_satisfied' => false,
+            'min_students_required' => 1,
+            'selected_count' => $selectedCount,
+            'is_already_satisfied' => true,
         ];
     }
 
