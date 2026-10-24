@@ -190,6 +190,16 @@ public function findByAdmissionNo($admissionNo)
             ->where('session', $currentSessionName)
             ->first();
 
+        if (!$batch && $student->level_id) {
+            $batch = $this->repo->resolveBatch(
+                $schoolId,
+                (int) $student->level_id,
+                $activeTermName,
+                $currentSessionName,
+                (int) $auth->id
+            );
+        }
+
         $existingPayload = null;
         if ($batch) {
             $existing = $this->repo->getV2StudentResult($batch->id, $student->id);
