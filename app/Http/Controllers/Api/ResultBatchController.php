@@ -259,9 +259,9 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
     $this->ensureCanManageResultPublication($request, $batch);
 
     $summary = $this->batchReviewSummary($batch);
-    if (! $summary['is_complete']) {
+    if ($summary['completed_students'] === 0) {
       return response()->json([
-        'message' => 'Some students do not have saved results yet. Complete all student results before approval.',
+        'message' => 'No student results have been saved in this batch yet. Teachers must enter and save student results before approval.',
         'review' => $summary,
       ], 422);
     }
@@ -271,6 +271,13 @@ public function resolve(ResolveBatchRequest $request): JsonResponse
         'message' => 'Some result alerts still need review before approval.',
         'review' => $summary,
       ], 422);
+    }
+
+    // Auto-compute batch rankings and positions seamlessly before approval
+    try {
+      $this->computeService->computeBatch($batch);
+    } catch (\Throwable $e) {
+      \Illuminate\Support\Facades\Log::warning('Auto compute on approval notice: ' . $e->getMessage());
     }
 
     $batch->forceFill([
@@ -524,9 +531,9 @@ private function batchReviewSummary(ResultBatch $batch): array
     'missing_students' => $missingStudents,
     'open_alerts' => $openAlerts,
     'open_high_alerts' => $openHighAlerts,
-    'is_complete' => $totalStudents > 0 && $missingCount === 0,
-    'can_approve' => $totalStudents > 0 && $missingCount === 0 && $openHighAlerts === 0,
-    'can_publish' => in_array($batch->status, ['approved', 'published'], true) && $totalStudents > 0 && $missingCount === 0 && $openHighAlerts === 0,
+    'is_complete' => $completedStudents > 0,
+    'can_approve' => $completedStudents > 0 && $openHighAlerts === 0,
+    'can_publish' => in_array($batch->status, ['approved', 'published'], true) && $completedStudents > 0 && $openHighAlerts === 0,
     'simple_status' => $simpleStatus,
   ];
 }

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Backend;
 
 use App\Http\Controllers\Controller;
+use App\Models\AcademicSession;
+use App\Models\Term;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -282,10 +284,33 @@ class TeacherDashboardController extends Controller
             ];
         })->values();
 
-        $batches = DB::table('result_batches as b')
+        $activeTermName = Term::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->where('status', 'Active')
+            ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+            ->orderBy('id')
+            ->value('name');
+
+        $activeSessionName = AcademicSession::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->where('is_current', 1)
+            ->value('name')
+            ?: AcademicSession::where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where('status', 'Active')
+                ->orderByDesc('id')
+                ->value('name');
+
+        $batchQuery = DB::table('result_batches as b')
             ->leftJoin('student_classes as c', 'c.id', '=', 'b.class_id')
             ->where('b.school_id', $schoolId)
-            ->whereIn('b.class_id', $assignedClassIds)
+            ->whereIn('b.class_id', $assignedClassIds);
+
+        if ($activeTermName && $activeSessionName) {
+            $batchQuery->where('b.term', $activeTermName)->where('b.session', $activeSessionName);
+        }
+
+        $batches = $batchQuery
             ->select('b.id', 'b.class_id', 'b.term', 'b.session', 'b.status', 'c.name as class_name')
             ->orderByDesc('b.created_at')
             ->get();

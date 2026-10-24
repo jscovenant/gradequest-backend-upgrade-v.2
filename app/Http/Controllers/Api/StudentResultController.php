@@ -107,7 +107,10 @@ public function findByAdmissionNo($admissionNo)
 
     $schoolId = (int) $auth->school_id;
 
-    $activeTermName = Term::query()
+    $requestedTerm = request()->query('term');
+    $requestedSession = request()->query('session');
+
+    $activeTermName = $requestedTerm ?: Term::query()
         ->where('school_id', $schoolId)
         ->whereNull('archived_at')
         ->where('status', 'Active')
@@ -115,7 +118,7 @@ public function findByAdmissionNo($admissionNo)
         ->orderBy('id')
         ->value('name');
 
-    $currentSessionName = AcademicSession::query()
+    $currentSessionName = $requestedSession ?: AcademicSession::query()
         ->where('school_id', $schoolId)
         ->whereNull('archived_at')
         ->where('is_current', 1)
