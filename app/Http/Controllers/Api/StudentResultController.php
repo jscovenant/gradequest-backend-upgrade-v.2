@@ -706,19 +706,36 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
           }
       }
 
-      $role = strtolower((string) $authUser->role);
-      if ($role === 'teacher') {
+      $role = strtolower(str_replace([' ', '-'], '_', trim((string) ($authUser->role ?? ''))));
+
+      $isTeacherRole = in_array($role, ['teacher', 'class_teacher', 'subject_teacher', 'staff'], true);
+      $isAdminRole = in_array($role, [
+          'admin', 'principal', 'super_admin', 'superadmin', 'proprietor', 'owner',
+          'school_owner', 'school_admin', 'head_teacher', 'headteacher', 'headmaster',
+          'headmistress', 'director', 'platform_staff'
+      ], true) || $authUser->isPrincipal() || $authUser->isAdmin();
+
+      if ($isTeacherRole && ! $isAdminRole) {
           $assigned = TeacherEnrollment::query()
-              ->where('school_id', (int) $batchModel->school_id)
-              ->where('user_id', (int) $authUser->id)
-              ->where('enroll', '1')
+              ->where(function ($q) use ($batchModel) {
+                  $q->whereIn('school_id', [(int) $batchModel->school_id, 0])->orWhereNull('school_id');
+              })
+              ->where(function ($q) use ($authUser) {
+                  $q->where('user_id', (int) $authUser->id);
+                  if (Schema::hasColumn('teacher_enrollments', 'teacher_id')) {
+                      $q->orWhere('teacher_id', (int) $authUser->id);
+                  }
+              })
+              ->where(function ($q) {
+                  $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+              })
               ->where('level_id', (int) $batchModel->class_id)
               ->exists();
 
           if (! $assigned) {
               return response()->json(['message' => 'You can only generate comments for students in your assigned class.'], 403);
           }
-      } elseif (! in_array($role, ['admin', 'principal', 'super admin', 'super-admin', 'superadmin'], true)) {
+      } elseif (! $isAdminRole && ! $isTeacherRole) {
           return response()->json(['message' => 'Only authorized school staff can generate result comments.'], 403);
       }
 

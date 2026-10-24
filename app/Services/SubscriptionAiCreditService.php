@@ -135,7 +135,7 @@ class SubscriptionAiCreditService
             ]);
         }
 
-        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
+        if ($user && ! in_array(strtolower(str_replace([' ', '-'], '_', trim((string) ($user->role ?? '')))), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'headmaster', 'headmistress', 'super_admin', 'superadmin', 'school_owner', 'school_admin'], true)) {
             $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
                 ->where('school_id', $schoolId)
                 ->where('user_id', $user->id)
@@ -171,7 +171,7 @@ class SubscriptionAiCreditService
                 ]);
             }
 
-            if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
+            if ($user && ! in_array(strtolower(str_replace([' ', '-'], '_', trim((string) ($user->role ?? '')))), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'headmaster', 'headmistress', 'super_admin', 'superadmin', 'school_owner', 'school_admin'], true)) {
                 $allocation = \App\Models\SchoolStaffAiCreditAllocation::query()
                     ->where('school_id', $schoolId)
                     ->where('user_id', $user->id)
@@ -338,7 +338,7 @@ class SubscriptionAiCreditService
         $policy = $this->policy();
 
         $userAllocation = null;
-        if ($user && ! in_array(strtolower((string) ($user->role ?? '')), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'super-admin'], true)) {
+        if ($user && ! in_array(strtolower(str_replace([' ', '-'], '_', trim((string) ($user->role ?? '')))), ['admin', 'owner', 'proprietor', 'principal', 'headteacher', 'head_teacher', 'headmaster', 'headmistress', 'super_admin', 'superadmin', 'school_owner', 'school_admin'], true)) {
             $alloc = \App\Models\SchoolStaffAiCreditAllocation::query()
                 ->where('school_id', $schoolId)
                 ->where('user_id', $user->id)
