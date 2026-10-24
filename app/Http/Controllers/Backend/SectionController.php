@@ -26,7 +26,8 @@ class SectionController extends Controller
         $schoolId = Auth::user()->school_id;
 
         $request->validate([
-            'name' => 'required|string|max:255'
+            'name' => 'required|string|max:255',
+            'stage' => 'nullable|string|in:early_years,basic,secondary',
         ]);
 
         if (Section::where('name', $request->name)
@@ -37,8 +38,21 @@ class SectionController extends Controller
             return response()->json(['error' => 'Section name already exists'], 409);
         }
 
+        $detectedStage = $request->input('stage');
+        if (!$detectedStage) {
+            $n = strtolower((string) $request->name);
+            if (preg_match('/junior|senior|secondary|jss|sss|college|high/i', $n)) {
+                $detectedStage = 'secondary';
+            } elseif (preg_match('/nursery|creche|kindergarten|kg|early|toddler|playgroup/i', $n)) {
+                $detectedStage = 'early_years';
+            } else {
+                $detectedStage = 'basic';
+            }
+        }
+
         $section = Section::create([
             'name' => ucfirst($request->name),
+            'stage' => $detectedStage,
             'school_id' => $schoolId,
         ]);
 
@@ -58,7 +72,10 @@ class SectionController extends Controller
 
     public function update(Request $request, $id)
     {
-        $request->validate(['name' => 'required|string|max:255']);
+        $request->validate([
+            'name' => 'required|string|max:255',
+            'stage' => 'nullable|string|in:early_years,basic,secondary',
+        ]);
         $schoolId = Auth::user()->school_id;
 
         $section = Section::where('school_id', $schoolId)
@@ -74,7 +91,11 @@ class SectionController extends Controller
             return response()->json(['error' => 'Section name already exists'], 409);
         }
 
-        $section->update(['name' => ucfirst($request->name)]);
+        $updateData = ['name' => ucfirst($request->name)];
+        if ($request->filled('stage')) {
+            $updateData['stage'] = $request->stage;
+        }
+        $section->update($updateData);
 
         return response()->json([
             'message' => 'Section updated successfully',

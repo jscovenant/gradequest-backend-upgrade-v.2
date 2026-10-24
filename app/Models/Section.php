@@ -42,4 +42,24 @@ class Section extends Model
     {
         return $this->hasMany(GradingScale::class, 'section_id', 'id')->orderByRaw('CAST(min AS DECIMAL(8,2)) DESC');
     }
+
+    public function isSecondary(): bool
+    {
+        $st = strtolower(trim((string) ($this->stage ?? '')));
+        if ($st === 'secondary') return true;
+        if ($st === 'basic' || $st === 'early_years') return false;
+        return (bool) preg_match('/junior|senior|secondary|jss|sss|college|high/i', (string) $this->name);
+    }
+
+    public function isEarlyYears(): bool
+    {
+        $st = strtolower(trim((string) ($this->stage ?? '')));
+        if ($st === 'early_years') return true;
+        return (bool) preg_match('/nursery|creche|kindergarten|kg|early|toddler|playgroup/i', (string) $this->name);
+    }
+
+    public function isBasic(): bool
+    {
+        return !$this->isSecondary() && !$this->isEarlyYears();
+    }
 }

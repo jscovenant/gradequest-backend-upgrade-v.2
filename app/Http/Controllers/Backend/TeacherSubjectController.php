@@ -38,11 +38,14 @@ class TeacherSubjectController extends Controller
             'teacher_id' => ['required', 'integer', 'exists:users,id'],
             'subject_ids' => ['present', 'array'],
             'subject_ids.*' => ['integer', 'exists:subjects,id'],
+            'class_id' => ['nullable', 'integer', 'exists:student_classes,id'],
             'sync' => ['nullable', 'boolean'],
         ]);
 
         $teacher = $this->teacherQuery($schoolId)->find($data['teacher_id']);
         abort_unless($teacher, 422, 'Selected teacher is invalid for this school.');
+
+        $targetClassId = !empty($data['class_id']) ? (int) $data['class_id'] : null;
 
         $subjectIds = collect($data['subject_ids'] ?? [])
             ->map(fn ($id) => (int) $id)
@@ -50,7 +53,7 @@ class TeacherSubjectController extends Controller
             ->unique()
             ->values();
 
-        $eligibleSubjectIds = $this->eligibleSubjectsForTeacher($schoolId, (int) $teacher->id)
+        $eligibleSubjectIds = $this->eligibleSubjectsForTeacher($schoolId, (int) $teacher->id, $targetClassId)
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->all();
@@ -58,11 +61,14 @@ class TeacherSubjectController extends Controller
         $invalid = $subjectIds->reject(fn ($id) => in_array((int) $id, $eligibleSubjectIds, true))->values();
         abort_if($invalid->isNotEmpty(), 422, 'One or more selected subjects do not match this teacher assigned class or school.');
 
-        DB::transaction(function () use ($teacher, $subjectIds, $data) {
+        DB::transaction(function () use ($teacher, $subjectIds, $data, $schoolId, $targetClassId) {
             if ((bool) ($data['sync'] ?? false)) {
-                TeacherSubject::query()
-                    ->where('teacher_id', (int) $teacher->id)
-                    ->whereNotIn('subject_id', $subjectIds->all() ?: [0])
+                $delQuery = TeacherSubject::query()
+                    ->where('teacher_id', (int) $teacher->id);
+                if ($targetClassId !== null) {
+                    $delQuery->where('class_id', $targetClassId);
+                }
+                $delQuery->whereNotIn('subject_id', $subjectIds->all() ?: [0])
                     ->delete();
             }
 
@@ -70,6 +76,9 @@ class TeacherSubjectController extends Controller
                 TeacherSubject::query()->updateOrCreate([
                     'teacher_id' => (int) $teacher->id,
                     'subject_id' => (int) $subjectId,
+                    'class_id' => $targetClassId,
+                ], [
+                    'school_id' => $schoolId,
                 ]);
             }
         });
@@ -127,7 +136,7 @@ class TeacherSubjectController extends Controller
     {
         return User::query()
             ->where('school_id', $schoolId)
-            ->whereRaw('LOWER(role) = ?', ['teacher']);
+            ->whereIn(DB::raw('LOWER(role)'), ['teacher', 'class_teacher', 'subject_teacher']);
     }
 
     private function teachersPayload(int $schoolId)
@@ -178,20 +187,24 @@ class TeacherSubjectController extends Controller
         $query = TeacherSubject::query()
             ->join('users as t', 't.id', '=', 'teacher_subjects.teacher_id')
             ->join('subjects as s', 's.id', '=', 'teacher_subjects.subject_id')
+            ->leftJoin('student_classes as c', 'c.id', '=', 'teacher_subjects.class_id')
             ->leftJoin('sections as sec', 'sec.id', '=', 's.section_id')
             ->leftJoin('departments as dep', 'dep.id', '=', 's.department_id')
             ->where('t.school_id', $schoolId)
             ->when(Schema::hasColumn('subjects', 'school_id'), fn ($q) => $q->where('s.school_id', $schoolId))
-            ->whereRaw('LOWER(t.role) = ?', ['teacher'])
+            ->whereIn(DB::raw('LOWER(t.role)'), ['teacher', 'class_teacher', 'subject_teacher'])
             ->select([
+                'teacher_subjects.id as assignment_id',
                 'teacher_subjects.teacher_id',
                 'teacher_subjects.subject_id',
+                'teacher_subjects.class_id',
+                'c.name as class_name',
                 't.firstname as teacher_firstname',
                 't.surname as teacher_surname',
                 's.name as subject_name',
                 's.section_id',
                 's.department_id',
-                's.class_id',
+                's.class_id as subject_class_id',
                 'sec.name as section_name',
                 'dep.name as department_name',
             ])
@@ -216,8 +229,11 @@ class TeacherSubjectController extends Controller
         return $query
             ->get()
             ->map(fn ($row) => [
+                'id' => (int) ($row->assignment_id ?? 0),
                 'teacher_id' => (int) $row->teacher_id,
                 'subject_id' => (int) $row->subject_id,
+                'class_id' => $row->class_id ? (int) $row->class_id : null,
+                'class_name' => $row->class_name,
                 'teacher' => [
                     'id' => (int) $row->teacher_id,
                     'firstname' => $row->teacher_firstname,
@@ -228,7 +244,7 @@ class TeacherSubjectController extends Controller
                     'name' => $row->subject_name,
                     'section_id' => $row->section_id ? (int) $row->section_id : null,
                     'department_id' => $row->department_id ? (int) $row->department_id : null,
-                    'class_id' => $row->class_id ? (int) $row->class_id : null,
+                    'class_id' => $row->subject_class_id ? (int) $row->subject_class_id : null,
                     'section_name' => $row->section_name,
                     'department_name' => $row->department_name,
                 ],
@@ -272,13 +288,36 @@ class TeacherSubjectController extends Controller
         return $query;
     }
 
-    private function eligibleSubjectsForTeacher(int $schoolId, int $teacherId)
+    private function eligibleSubjectsForTeacher(int $schoolId, int $teacherId, ?int $classId = null)
     {
+        $query = $this->subjectsQuery($schoolId);
+
+        if ($classId) {
+            $cls = StudentClass::where('school_id', $schoolId)->find($classId);
+            if ($cls) {
+                if ($cls->section_id) {
+                    $query->where(function ($inner) use ($cls) {
+                        $inner->whereNull('subjects.section_id')->orWhere('subjects.section_id', $cls->section_id);
+                    });
+                }
+                if (Schema::hasColumn('subjects', 'class_id')) {
+                    $query->where(function ($inner) use ($cls) {
+                        $inner->whereNull('subjects.class_id')->orWhere('subjects.class_id', $cls->id)->orWhere('subjects.class_id', 0);
+                    });
+                }
+            }
+            return $query;
+        }
+
         $assignedClasses = $this->teacherAssignedClasses($schoolId, $teacherId);
         $levelIds = collect($assignedClasses)->pluck('id')->filter()->map(fn ($id) => (int) $id)->values()->all();
         $sectionIds = collect($assignedClasses)->pluck('section_id')->filter()->map(fn ($id) => (int) $id)->unique()->values()->all();
 
-        $query = $this->subjectsQuery($schoolId);
+        // If teacher is NOT enrolled as class teacher, they are a pure subject teacher:
+        // Allow all subjects in the school
+        if (empty($assignedClasses)) {
+            return $query;
+        }
 
         if (! empty($sectionIds)) {
             $query->where(function ($inner) use ($sectionIds) {

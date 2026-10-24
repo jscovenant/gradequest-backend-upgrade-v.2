@@ -449,6 +449,94 @@ public function schoolsetting()
     return $this->hasMany(TeacherEnrollment::class, 'user_id');
 }
 
+    public function teacherSubjects()
+{
+    return $this->hasMany(TeacherSubject::class, 'teacher_id');
+}
+
+    public function isAdminOrPrincipal(): bool
+{
+    $norm = self::normalizeRole($this->role);
+    return in_array($norm, ['admin', 'super_admin', 'proprietor', 'principal', 'owner', 'superadmin', 'super admin'], true);
+}
+
+    /**
+     * Check if this teacher is an enrolled Form Master / Class Teacher for a given class ID.
+     */
+    public function isClassTeacherForClass(int $classId): bool
+    {
+        if ($this->isAdminOrPrincipal()) {
+            return true;
+        }
+
+        return $this->teacherEnrollments()
+            ->where('level_id', $classId)
+            ->where(function ($q) {
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+            })
+            ->exists();
+    }
+
+    /**
+     * Check if this teacher is assigned to a subject (and optionally a specific class).
+     */
+    public function isSubjectTeacherForSubject(int $subjectId, ?int $classId = null): bool
+    {
+        if ($this->isAdminOrPrincipal()) {
+            return true;
+        }
+
+        $query = $this->teacherSubjects()->where('subject_id', $subjectId);
+        if ($classId !== null) {
+            $query->where(function ($q) use ($classId) {
+                $q->where('class_id', $classId)->orWhereNull('class_id');
+            });
+        }
+
+        return $query->exists();
+    }
+
+    /**
+     * Class IDs where the teacher is Form Master (Class Teacher).
+     */
+    public function assignedClassTeacherLevelIds(): array
+    {
+        return $this->teacherEnrollments()
+            ->where(function ($q) {
+                $q->whereIn('enroll', ['1', 1, true])->orWhereNull('enroll');
+            })
+            ->pluck('level_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Class IDs where the teacher is a Subject Teacher.
+     */
+    public function assignedSubjectLevelIds(): array
+    {
+        return $this->teacherSubjects()
+            ->whereNotNull('class_id')
+            ->pluck('class_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * All class IDs this teacher teaches in (either as Class Teacher or Subject Teacher).
+     */
+    public function allAssignedLevelIds(): array
+    {
+        return array_values(array_unique(array_merge(
+            $this->assignedClassTeacherLevelIds(),
+            $this->assignedSubjectLevelIds()
+        )));
+    }
+
 public function school()
 {
     return $this->belongsTo(SchoolSetting::class);
