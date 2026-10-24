@@ -713,7 +713,7 @@ public function upsert(UpsertStudentResultRequest $request, int $batch, int $stu
           'admin', 'principal', 'super_admin', 'superadmin', 'proprietor', 'owner',
           'school_owner', 'school_admin', 'head_teacher', 'headteacher', 'headmaster',
           'headmistress', 'director', 'platform_staff'
-      ], true) || $authUser->isPrincipal() || $authUser->isAdmin();
+      ], true) || $authUser->isPrincipal() || $authUser->isProprietor() || $authUser->isSuperAdminUser();
 
       if ($isTeacherRole && ! $isAdminRole) {
           $assigned = TeacherEnrollment::query()
