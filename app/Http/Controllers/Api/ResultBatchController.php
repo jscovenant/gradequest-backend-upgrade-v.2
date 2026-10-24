@@ -569,16 +569,6 @@ public function resultForm(int $batchId, int $studentId)
         ->orderBy('id', 'asc')
         ->value('name');
 
-    // OPTION B: block mismatch
-    if ($activeTermName && strcasecmp((string) $activeTermName, (string) $batch->term) !== 0) {
-        return response()->json([
-            'message' => "Batch term ({$batch->term}) does not match ACTIVE term ({$activeTermName}). Please resolve a new batch for the active term.",
-            'batch_term' => $batch->term,
-            'active_term' => $activeTermName,
-            'batch_id' => $batch->id,
-        ], 409);
-    }
-
     $billingStatus = $this->schoolBillingService->resultEntryStatus(
         $schoolId,
         $student->id,
