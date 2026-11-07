@@ -205,7 +205,7 @@ class CbtExamController extends Controller
     {
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $this->normalizeExamData($this->validateExam($request));
         $this->ensureExamSetupBelongsToSchool($request, $data);
@@ -479,7 +479,7 @@ class CbtExamController extends Controller
     {
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $request->validate([
             'title' => ['required', 'string', 'max:255'],
@@ -503,7 +503,7 @@ class CbtExamController extends Controller
     {
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $request->validate([
             'section_id' => ['nullable', 'exists:cbt_exam_sections,id'],
@@ -532,7 +532,7 @@ class CbtExamController extends Controller
     {
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $this->validateQuestion($request);
 
@@ -575,7 +575,7 @@ class CbtExamController extends Controller
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $request->validate([
             'file' => ['required', 'file', 'mimes:docx,xlsx,xls,csv', 'max:5120'],
@@ -613,24 +613,32 @@ class CbtExamController extends Controller
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
         abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before generating questions.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam already has student attempts and questions cannot be generated.');
 
         $aiCredits = app(SubscriptionAiCreditService::class);
         $creditCost = $aiCredits->costForFeature('ai_cbt_question_generator');
         $aiCredits->assertCreditsAvailable((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, $request->user());
 
-        if (!$request->has('question_count') && $request->has('count')) {
-            $request->merge(['question_count' => $request->input('count')]);
+        $rawCount = $request->input('question_count') ?? $request->input('count') ?? 20;
+        $cleanCount = is_numeric($rawCount) ? (int) round((float) $rawCount) : 20;
+        if ($cleanCount < 1) $cleanCount = 1;
+        if ($cleanCount > 80) $cleanCount = 80;
+        $request->merge(['question_count' => $cleanCount]);
+
+        $formats = $request->input('formats');
+        if (is_string($formats)) {
+            $decoded = json_decode($formats, true);
+            $formats = is_array($decoded) ? $decoded : array_filter(array_map('trim', explode(',', $formats)));
         }
-        if (!$request->has('question_count') || empty($request->input('question_count'))) {
-            $request->merge(['question_count' => 20]);
+        if (!is_array($formats) || empty($formats)) {
+            $formats = ['single_choice'];
         }
-        if (!$request->has('formats') || empty($request->input('formats'))) {
-            $request->merge(['formats' => ['single_choice']]);
-        }
-        if (!$request->has('marks_per_question') || empty($request->input('marks_per_question'))) {
-            $request->merge(['marks_per_question' => 1]);
-        }
+        $request->merge(['formats' => array_values($formats)]);
+
+        $rawMarks = $request->input('marks_per_question', 1);
+        $cleanMarks = is_numeric($rawMarks) ? (float) $rawMarks : 1.0;
+        if ($cleanMarks <= 0) $cleanMarks = 1.0;
+        $request->merge(['marks_per_question' => $cleanMarks]);
 
         $data = $request->validate([
             'source_file' => ['nullable', 'file', 'mimes:docx,txt', 'max:5120'],
@@ -743,7 +751,7 @@ class CbtExamController extends Controller
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         $aiAccess = app(\App\Services\SubscriptionGate::class)->inspect($request->user(), 'ai_cbt_question_generator');
         abort_unless((bool) ($aiAccess['allowed'] ?? false), (int) ($aiAccess['status'] ?? 403), $aiAccess['message'] ?? 'This AI feature is not included in your current package.');
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before importing AI questions.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam already has student attempts and questions cannot be imported.');
 
         $data = $request->validate([
             'draft' => ['required', 'array'],
@@ -1056,7 +1064,7 @@ Fruits | 4 | 200',
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $directory = public_path('uploads/cbt/questions');
         if (! File::isDirectory($directory)) {
@@ -1099,7 +1107,7 @@ Fruits | 4 | 200',
         $exam = $question->exam;
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
 
         $data = $this->validateQuestion($request);
         $options = $data['options'] ?? [];
@@ -1125,7 +1133,7 @@ Fruits | 4 | 200',
         $exam = $question->exam;
         $this->ensureSameSchool($request, $exam);
         $this->ensureTeacherCanAccessExam($request->user(), $exam);
-        abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
+        abort_if($exam->attempts()->exists(), 422, 'This CBT exam has already been attempted by students and cannot be modified or rescheduled.');
         abort_if($exam->attempts()->exists(), 422, 'This question cannot be deleted because students have already started this exam.');
         abort_if($question->answers()->exists(), 422, 'This question cannot be deleted because it already has student answers.');
 
