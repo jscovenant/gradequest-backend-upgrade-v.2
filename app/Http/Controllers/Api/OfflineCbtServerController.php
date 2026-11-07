@@ -9,6 +9,8 @@ use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -241,8 +243,13 @@ class OfflineCbtServerController extends Controller
 
         $bundle = $this->requireActiveBundle();
         $exam = $this->examFromBundle($bundle, (int) $attempt->exam_id);
-        $questionIds = collect($exam['questions'] ?? [])->pluck('id')->map(fn ($id) => (int) $id)->all();
-        abort_unless(in_array((int) $data['question_id'], $questionIds, true), 422, 'Selected question does not belong to this exam.');
+        $questionRow = collect($exam['questions'] ?? [])->first(fn ($q) => (int) ($q['id'] ?? 0) === (int) $data['question_id']);
+        abort_unless($questionRow, 422, 'Selected question does not belong to this exam.');
+        abort_if(
+            ($questionRow['question_type'] ?? '') === 'theory',
+            422,
+            'Theory questions are for reading only and must be answered on your paper answer sheet using a pen.'
+        );
 
         $answers = collect($attempt->answers ?? [])
             ->reject(fn ($answer) => (int) ($answer['question_id'] ?? 0) === (int) $data['question_id'])
@@ -290,6 +297,34 @@ class OfflineCbtServerController extends Controller
         ]);
 
         return response()->json(['message' => 'Offline CBT event recorded.']);
+    }
+
+    public function completeObjective(Request $request, string $uuid): JsonResponse
+    {
+        $this->ensureEnabled();
+
+        $attempt = $this->attemptByUuid($uuid);
+        abort_unless($attempt->status === 'in_progress', 422, 'This offline attempt is no longer active.');
+
+        $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+        $metadata['section_a_completed'] = true;
+        $metadata['section_a_completed_at'] = now()->toIso8601String();
+        $metadata['events'] = $metadata['events'] ?? [];
+        $metadata['events'][] = [
+            'event_type' => 'section_a_completed',
+            'severity' => 'low',
+            'metadata' => [],
+            'occurred_at' => now()->toIso8601String(),
+        ];
+
+        $attempt->update([
+            'metadata' => $metadata,
+        ]);
+
+        return response()->json([
+            'message' => 'Section A (Objective Questions) completed on local CBT server.',
+            'attempt' => $this->attemptPayload($attempt->fresh()),
+        ]);
     }
 
     public function submitAttempt(string $uuid): JsonResponse
@@ -349,6 +384,142 @@ class OfflineCbtServerController extends Controller
         }, $fileName, ['Content-Type' => 'application/json']);
     }
 
+    /**
+     * Direct Cloud Pull: Pulls exam bundle directly from GradeQuest Cloud without file download
+     */
+    public function cloudPullBundle(Request $request): JsonResponse
+    {
+        $this->ensureEnabled();
+
+        $data = $request->validate([
+            'cloud_url' => ['nullable', 'string'],
+            'license_key' => ['required', 'string'],
+            'admin_email' => ['nullable', 'email'],
+            'admin_password' => ['nullable', 'string'],
+        ]);
+
+        $cloudUrl = rtrim($data['cloud_url'] ?: (config('app.url') && !in_array(parse_url(config('app.url'), PHP_URL_HOST), ['localhost', '127.0.0.1']) ? config('app.url') : 'https://gradequestschool.com.ng'), '/');
+        $endpoint = $cloudUrl . '/api/cbt/offline/direct-sync/bundle';
+
+        try {
+            $response = Http::withoutVerifying()
+                ->timeout(60)
+                ->post($endpoint, [
+                    'license_key' => trim($data['license_key']),
+                    'admin_email' => $data['admin_email'] ?? null,
+                    'admin_password' => $data['admin_password'] ?? null,
+                ]);
+
+            if ($response->failed()) {
+                $err = $response->json('message') ?: ('Cloud server responded with status ' . $response->status());
+                return response()->json(['message' => $err], 422);
+            }
+
+            $bundle = $response->json('bundle');
+            abort_unless(is_array($bundle), 422, 'Cloud server did not return a valid exam package.');
+            abort_unless(is_array($bundle['students'] ?? null), 422, 'Cloud bundle contains no student data.');
+            abort_unless(is_array($bundle['exams'] ?? null), 422, 'Cloud bundle contains no exam data.');
+
+            $record = DB::transaction(function () use ($bundle) {
+                OfflineCbtBundle::query()->update(['is_active' => false]);
+
+                return OfflineCbtBundle::create([
+                    'school_id' => $bundle['school']['id'] ?? null,
+                    'license_id' => $bundle['license']['id'] ?? null,
+                    'license_key' => $bundle['license']['license_key'] ?? null,
+                    'school_name' => $bundle['school']['name'] ?? 'School',
+                    'bundle_signature' => $bundle['bundle_signature'] ?? null,
+                    'generated_at' => $bundle['generated_at'] ?? null,
+                    'imported_at' => now(),
+                    'is_active' => true,
+                    'payload' => $bundle,
+                ]);
+            });
+
+            $summary = $this->bundleSummary($record);
+            return response()->json([
+                'message' => 'Exam package successfully pulled directly from Cloud! ' . ($summary['exams_count'] ?? 0) . ' exam(s) and ' . ($summary['students_count'] ?? 0) . ' student(s) installed.',
+                'bundle' => $summary,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Could not connect to Cloud server: ' . $e->getMessage()], 500);
+        }
+    }
+
+    /**
+     * Direct Cloud Push: Pushes completed exam results back to GradeQuest Cloud without file export
+     */
+    public function cloudPushResults(Request $request): JsonResponse
+    {
+        $this->ensureEnabled();
+
+        $bundle = $this->requireActiveBundle();
+        $licenseKey = $request->input('license_key') ?: ($bundle->license_key ?? ($bundle->payload['license']['license_key'] ?? null));
+        abort_unless($licenseKey, 422, 'License key not found. Please provide your license key.');
+
+        $data = $request->validate([
+            'cloud_url' => ['nullable', 'string'],
+            'admin_email' => ['nullable', 'email'],
+            'admin_password' => ['nullable', 'string'],
+        ]);
+
+        $cloudUrl = rtrim($data['cloud_url'] ?: (config('app.url') && !in_array(parse_url(config('app.url'), PHP_URL_HOST), ['localhost', '127.0.0.1']) ? config('app.url') : 'https://gradequestschool.com.ng'), '/');
+        $endpoint = $cloudUrl . '/api/cbt/offline/direct-sync/results';
+
+        $attempts = $bundle->attempts()
+            ->where('status', 'submitted')
+            ->orderBy('submitted_at')
+            ->get()
+            ->map(fn (OfflineCbtAttempt $attempt) => [
+                'offline_attempt_uuid' => $attempt->offline_attempt_uuid,
+                'exam_id' => (int) $attempt->exam_id,
+                'student_id' => (int) $attempt->student_id,
+                'started_at' => optional($attempt->started_at)->toIso8601String(),
+                'submitted_at' => optional($attempt->submitted_at)->toIso8601String(),
+                'device_name' => $attempt->device_name,
+                'ip_address' => $attempt->ip_address,
+                'events_count' => (int) $attempt->events_count,
+                'answers' => $attempt->answers ?: [],
+            ])
+            ->values()
+            ->all();
+
+        if (empty($attempts)) {
+            return response()->json(['message' => 'No submitted student attempts found to push.'], 422);
+        }
+
+        $syncReference = 'offline-cloud-push-' . ($bundle->school_id ?: 'school') . '-' . now()->format('YmdHis') . '-' . Str::upper(Str::random(5));
+
+        try {
+            $response = Http::withoutVerifying()
+                ->timeout(120)
+                ->post($endpoint, [
+                    'license_key' => trim($licenseKey),
+                    'sync_reference' => $syncReference,
+                    'attempts' => $attempts,
+                    'admin_email' => $data['admin_email'] ?? null,
+                    'admin_password' => $data['admin_password'] ?? null,
+                ]);
+
+            if ($response->failed()) {
+                $err = $response->json('message') ?: ('Cloud sync failed with status ' . $response->status());
+                return response()->json(['message' => $err], 422);
+            }
+
+            if (Schema::hasColumn('offline_cbt_attempts', 'is_synced')) {
+                $bundle->attempts()->where('status', 'submitted')->update(['is_synced' => true]);
+            }
+
+            $summary = $response->json('summary') ?? [];
+            return response()->json([
+                'message' => 'Successfully pushed ' . count($attempts) . ' student result(s) directly to GradeQuest Cloud! Scores recorded in report cards.',
+                'summary' => $summary,
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Could not connect to Cloud server: ' . $e->getMessage()], 500);
+        }
+    }
+
     private function ensureEnabled(): void
     {
         abort_unless(app()->environment('local') || (bool) env('OFFLINE_CBT_SERVER_ENABLED', false), 403, 'Offline CBT server is not enabled on this installation.');
@@ -405,7 +576,7 @@ class OfflineCbtServerController extends Controller
             ->all();
 
         $links = collect($ips)
-            ->map(fn ($ip) => "http://{$ip}:8088/cbt/offline-runner")
+            ->map(fn ($ip) => "http://{$ip}:8088/cbt/student")
             ->values()
             ->all();
 
@@ -465,14 +636,34 @@ class OfflineCbtServerController extends Controller
 
     private function examPaperPayload(array $exam): array
     {
-        $questions = collect($exam['questions'] ?? [])
+        $allQuestions = collect($exam['questions'] ?? [])
             ->sortBy(fn ($question) => (int) ($question['sort_order'] ?? 0))
+            ->values();
+
+        $objectiveQuestions = $allQuestions
+            ->filter(fn ($q) => ($q['question_type'] ?? 'single_choice') !== 'theory')
             ->values()
             ->all();
 
         if ($exam['shuffle_questions'] ?? false) {
-            $questions = collect($questions)->shuffle()->values()->all();
+            $objectiveQuestions = collect($objectiveQuestions)->shuffle()->values()->all();
         }
+
+        $theoryQuestions = $allQuestions
+            ->filter(fn ($q) => ($q['question_type'] ?? '') === 'theory')
+            ->values()
+            ->map(fn ($q, int $idx) => [
+                'id' => (int) ($q['id'] ?? 0),
+                'number' => $idx + 1,
+                'question_type' => 'theory',
+                'question_text' => $q['question_text'] ?? '',
+                'instructions' => $q['instructions'] ?? null,
+                'marks' => (float) ($q['marks'] ?? 0),
+                'diagram_url' => $q['diagram_url'] ?? null,
+            ])
+            ->all();
+
+        $includeTheory = (bool) (($exam['include_theory'] ?? true) && count($theoryQuestions) > 0);
 
         return [
             'id' => (int) ($exam['id'] ?? 0),
@@ -482,10 +673,18 @@ class OfflineCbtServerController extends Controller
             'shuffle_options' => (bool) ($exam['shuffle_options'] ?? false),
             'calculator_enabled' => (bool) ($exam['calculator_enabled'] ?? false),
             'general_instructions' => $exam['general_instructions'] ?? null,
+            'include_theory' => $includeTheory,
+            'theory_instructions' => $exam['theory_instructions'] ?? null,
+            'theory_section' => [
+                'enabled' => $includeTheory,
+                'instructions' => $exam['theory_instructions'] ?? null,
+                'total_marks' => (float) collect($theoryQuestions)->sum('marks'),
+                'questions' => $includeTheory ? $theoryQuestions : [],
+            ],
             'subject' => $exam['subject'] ?? null,
             'class' => $exam['class'] ?? null,
             'question_groups' => $exam['question_groups'] ?? [],
-            'questions' => $questions,
+            'questions' => $objectiveQuestions,
         ];
     }
 
