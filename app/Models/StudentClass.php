@@ -16,7 +16,25 @@ class StudentClass extends Model
 
     protected $casts = [
         'archived_at' => 'datetime',
+        'cbt_enabled' => 'boolean',
     ];
+
+    /**
+     * Check if CBT is enabled for this class, checking both the class attribute
+     * and the school's fee access policy disabled list.
+     */
+    public function isCbtEnabled(?array $schoolDisabledIds = null): bool
+    {
+        if ($schoolDisabledIds !== null && in_array((int) $this->id, $schoolDisabledIds, true)) {
+            return false;
+        }
+
+        if (array_key_exists('cbt_enabled', $this->attributes)) {
+            return (bool) $this->attributes['cbt_enabled'];
+        }
+
+        return true;
+    }
 
     
     public function user()

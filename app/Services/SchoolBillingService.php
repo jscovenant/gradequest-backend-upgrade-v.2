@@ -240,7 +240,7 @@ class SchoolBillingService
                 ->whereIn('status', ['paid', 'override'])
                 ->count();
 
-            $totalAmount = $students->count() * $pricePerStudent;
+            $totalAmount = (float) ($billingProfile['current_invoice_amount'] ?? ($students->count() * $pricePerStudent));
 
             $invoice = SchoolProfitTermInvoice::firstOrNew([
                 'school_id' => $schoolId,
@@ -256,7 +256,20 @@ class SchoolBillingService
                 $invoice->created_by = $actorId;
             }
 
-            $alreadyPaidAmount = max((float) ($invoice->amount_paid ?? 0), $clearedCount * $pricePerStudent);
+            $alreadyPaidAmount = (float) ($invoice->amount_paid ?? 0);
+            if ($alreadyPaidAmount <= 0 && $clearedCount > 0) {
+                $clearedStudentIds = StudentBillingEntitlement::where('school_id', $schoolId)
+                    ->where('session_id', $sessionId)
+                    ->where('term_id', $termId)
+                    ->whereIn('status', ['paid', 'override'])
+                    ->pluck('student_id')
+                    ->all();
+                $clearedTotal = 0.0;
+                foreach ($clearedStudentIds as $cId) {
+                    $clearedTotal += (float) $this->pricePerStudentForSchool($schoolId, null, (int) $cId);
+                }
+                $alreadyPaidAmount = max($alreadyPaidAmount, $clearedTotal);
+            }
             $amountPaid = min($alreadyPaidAmount, $totalAmount);
             $balance = max(0, $totalAmount - $amountPaid);
 
@@ -1653,7 +1666,33 @@ $unpaid = StudentBillingEntitlement::query()
         ];
     }
 
-    public function pricePerStudentForSchool(int $schoolId): float
+    /**
+     * Check if CBT is disabled for a specific class in this school.
+     */
+    public function isClassCbtDisabled(int $schoolId, ?int $classId): bool
+    {
+        if (! $classId || $classId <= 0) {
+            return false;
+        }
+
+        $school = SchoolSetting::find($schoolId);
+        $rawPolicy = $school?->fee_access_policy;
+        $policyArray = is_array($rawPolicy) ? $rawPolicy : (json_decode((string) $rawPolicy, true) ?: []);
+        $disabledIds = array_map('intval', (array) ($policyArray['cbt_disabled_class_ids'] ?? []));
+
+        if (in_array((int) $classId, $disabledIds, true)) {
+            return true;
+        }
+
+        $class = StudentClass::where('school_id', $schoolId)->find($classId);
+        if ($class && array_key_exists('cbt_enabled', $class->attributes) && ! (bool) $class->cbt_enabled) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function pricePerStudentForSchool(int $schoolId, ?int $classId = null, ?int $studentId = null): float
     {
         $school = SchoolSetting::find($schoolId);
         $rawPolicy = $school?->fee_access_policy;
@@ -1662,15 +1701,29 @@ $unpaid = StudentBillingEntitlement::query()
         $tier = $policyArray['active_edition_tier'] ?? ($school?->active_edition_tier ?: 'standard_cbt');
 
         $globalPolicy = $this->policy();
-        $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 300.00);
-        $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 500.00));
+        // Basic Plan platform fee rate is 500 naira per student
+        $basicPrice = (float) ($globalPolicy->basic_tier_price_per_student ?? 500.00);
+        if ($basicPrice < 500.00) {
+            $basicPrice = 500.00;
+        }
+        $cbtPrice = (float) ($globalPolicy->standard_cbt_tier_price_per_student ?? ($globalPolicy->platform_fee_per_student ?? 1000.00));
         $annualMultiplier = (float) ($globalPolicy->annual_full_session_multiplier ?? 3.00);
         $annualDiscount = (float) ($globalPolicy->annual_session_discount_percent ?? 0.00);
 
+        if (! $classId && $studentId) {
+            $student = User::where('school_id', $schoolId)->find($studentId);
+            $classId = (int) ($student?->level_id ?? 0);
+        }
+
+        // If this class has CBT disabled in a Full CBT Package, charge according to the Basic Plan rate (500 per student)
+        $isClassCbtDisabled = $classId && $this->isClassCbtDisabled($schoolId, $classId);
+
         $basePrice = match ($tier) {
             'basic_result' => $basicPrice,
-            'annual_full_session' => round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2),
-            default => $cbtPrice,
+            'annual_full_session' => $isClassCbtDisabled
+                ? $basicPrice
+                : round($cbtPrice * $annualMultiplier * (1 - ($annualDiscount / 100)), 2),
+            default => $isClassCbtDisabled ? $basicPrice : $cbtPrice,
         };
 
         $promo = $this->promoCoverageForSchool($schoolId);
@@ -1684,7 +1737,8 @@ $unpaid = StudentBillingEntitlement::query()
 
     public function clearStudentFromWallet(int $schoolId, int $studentId, int $sessionId, int $termId, ?int $actorId = null): array
     {
-        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $student = User::where('school_id', $schoolId)->findOrFail($studentId);
+        $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId, (int) ($student->level_id ?? 0), (int) $studentId);
         $student = User::where('school_id', $schoolId)->findOrFail($studentId);
         $session = AcademicSession::where('school_id', $schoolId)->findOrFail($sessionId);
         $term = Term::where('school_id', $schoolId)->findOrFail($termId);
@@ -2074,6 +2128,11 @@ $unpaid = StudentBillingEntitlement::query()
 
         $pastArrearsSlots = 0;
         if ($activeStudentIds->isNotEmpty()) {
+            if ($sessionId && $termId) {
+                foreach ($activeStudentIds as $stId) {
+                    $this->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $stId, (int) $sessionId, (int) $termId);
+                }
+            }
             $pastArrearsSlots = StudentBillingEntitlement::where('school_id', $schoolId)
                 ->whereIn('student_id', $activeStudentIds)
                 ->whereNotIn('status', ['paid', 'override'])
@@ -2110,11 +2169,14 @@ $unpaid = StudentBillingEntitlement::query()
             'pending_count' => $pendingCount,
             'terms_count' => $termsCount,
             'fee_per_student' => $feePerStudent,
+            'current_term_fee' => $pendingCount * $feePerStudent,
             'term_clearance_fee' => $pendingCount * $feePerStudent,
             'session_clearance_fee' => $sessionPendingSlots * $feePerStudent,
             'session_pending_slots' => $sessionPendingSlots,
             'past_arrears_slots' => $pastArrearsSlots,
             'past_arrears_fee' => $pastArrearsSlots * $feePerStudent,
+            'total_term_payable' => ($pendingCount * $feePerStudent) + ($pastArrearsSlots * $feePerStudent),
+            'total_session_payable' => ($sessionPendingSlots * $feePerStudent) + ($pastArrearsSlots * $feePerStudent),
             'wallet_balance' => $walletBalance,
             'minimum_coverage_percent' => 0,
             'minimum_students_required' => 1,
@@ -2483,9 +2545,17 @@ $unpaid = StudentBillingEntitlement::query()
         }
         $message .= " (Total: ₦" . number_format($totalFee, 2) . ").";
 
+        $clearedStudentsList = User::where('school_id', $schoolId)
+            ->whereIn('id', $clearedStudentIds)
+            ->get(['id', 'firstname', 'surname', 'reg_no']);
+
         return [
             'success' => true,
             'message' => $message,
+            'reference' => $referenceId,
+            'channel' => 'wallet',
+            'paid_at' => now()->toIso8601String(),
+            'school_name' => $school->school_name ?? $school->name ?? 'School',
             'cleared_students_count' => count($clearedStudentIds),
             'cleared_slots' => $slotCount,
             'current_slots' => $currentSlotsCount,
@@ -2494,6 +2564,17 @@ $unpaid = StudentBillingEntitlement::query()
             'fee_per_student' => $feePerStudent,
             'wallet_balance' => (float) ($updatedWallet?->balance ?? 0),
             'cleared_student_ids' => $clearedStudentIds,
+            'cleared_students' => $clearedStudentsList,
+            'payment' => [
+                'reference' => $referenceId,
+                'amount' => $totalFee,
+                'status' => 'successful',
+                'channel' => 'wallet',
+                'paid_at' => now()->toIso8601String(),
+                'school_name' => $school->school_name ?? $school->name ?? 'School',
+                'cleared_students_count' => count($clearedStudentIds),
+                'students' => $clearedStudentsList,
+            ],
         ];
     }
 
@@ -2544,25 +2625,42 @@ $unpaid = StudentBillingEntitlement::query()
             ->orderBy('firstname')
             ->get(['id', 'firstname', 'surname', 'reg_no', 'level_id']);
 
+        if ($sessionId && $termId) {
+            foreach ($allMatchingStudents as $mStudent) {
+                $this->autoWaiveZeroActivityPastEntitlements($schoolId, (int) $mStudent->id, (int) $sessionId, (int) $termId);
+            }
+        }
+
         $entitlements = StudentBillingEntitlement::where('school_id', $schoolId)
             ->where('session_id', $sessionId)
             ->get()
             ->groupBy('student_id');
 
-        $pastArrearsCounts = StudentBillingEntitlement::where('school_id', $schoolId)
-            ->whereNotIn('status', ['paid', 'override'])
+        $pastArrearsEntitlements = StudentBillingEntitlement::where('student_billing_entitlements.school_id', $schoolId)
+            ->leftJoin('academic_sessions', 'academic_sessions.id', '=', 'student_billing_entitlements.session_id')
+            ->leftJoin('terms', 'terms.id', '=', 'student_billing_entitlements.term_id')
+            ->whereNotIn('student_billing_entitlements.status', ['paid', 'override'])
             ->where(function ($q) use ($sessionId, $termId) {
-                $q->where('session_id', '<', $sessionId)
+                $q->where('student_billing_entitlements.session_id', '<', $sessionId)
                   ->orWhere(function ($sub) use ($sessionId, $termId) {
-                      $sub->where('session_id', '=', $sessionId)
-                          ->where('term_id', '<', $termId);
+                      $sub->where('student_billing_entitlements.session_id', '=', $sessionId)
+                          ->where('student_billing_entitlements.term_id', '<', $termId);
                   });
             })
-            ->select('student_id', DB::raw('count(*) as count'))
-            ->groupBy('student_id')
-            ->pluck('count', 'student_id');
+            ->get([
+                'student_billing_entitlements.id',
+                'student_billing_entitlements.student_id',
+                'student_billing_entitlements.session_id',
+                'student_billing_entitlements.term_id',
+                'student_billing_entitlements.status',
+                'academic_sessions.name as session_name',
+                'terms.name as term_name',
+            ])
+            ->groupBy('student_id');
 
         $feePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $currentSessionName = $currentSession?->name ?? 'Current Session';
+        $currentTermName = $currentTerm?->name ?? 'Current Term';
 
         $roster = [];
         $totalClearedCount = 0;
@@ -2598,9 +2696,27 @@ $unpaid = StudentBillingEntitlement::query()
             }
 
             $className = $std->level?->name ?? 'Unassigned';
-            $arrearsCount = (int) ($pastArrearsCounts[$std->id] ?? 0);
+
+            $pastEnts = $pastArrearsEntitlements->get($std->id, collect());
+            $arrearsBreakdown = $pastEnts->map(function ($ent) use ($feePerStudent) {
+                $sName = $ent->session_name ?: "Session #{$ent->session_id}";
+                $tName = $ent->term_name ?: "Term #{$ent->term_id}";
+                return [
+                    'entitlement_id' => (int) $ent->id,
+                    'session_id' => (int) $ent->session_id,
+                    'session_name' => $sName,
+                    'term_id' => (int) $ent->term_id,
+                    'term_name' => $tName,
+                    'label' => "{$sName} {$tName}",
+                    'amount' => $feePerStudent,
+                ];
+            })->values()->all();
+
+            $arrearsCount = count($arrearsBreakdown);
+            $previousOutstandingBalance = $arrearsCount * $feePerStudent;
+            $currentTermFee = $isTermPaid ? 0.0 : $feePerStudent;
+            $totalAmountPayable = $currentTermFee + $previousOutstandingBalance;
             $totalUnpaidSlots = ($isTermPaid ? 0 : 1) + $arrearsCount;
-            $totalFeeRequired = $totalUnpaidSlots * $feePerStudent;
 
             $roster[] = [
                 'id' => (int) $std->id,
@@ -2617,7 +2733,12 @@ $unpaid = StudentBillingEntitlement::query()
                 'arrears_terms_count' => $arrearsCount,
                 'has_past_arrears' => $arrearsCount > 0,
                 'total_unpaid_slots' => $totalUnpaidSlots,
-                'total_fee_required' => $totalFeeRequired,
+                'total_fee_required' => $totalAmountPayable,
+                'current_term_fee' => $currentTermFee,
+                'current_period_label' => "{$currentSessionName} • {$currentTermName}",
+                'previous_outstanding_balance' => $previousOutstandingBalance,
+                'arrears_breakdown' => $arrearsBreakdown,
+                'total_amount_payable' => $totalAmountPayable,
                 'covered_at' => $currentTermEnt?->covered_at?->toIso8601String(),
                 'grace_until' => $currentTermEnt?->grace_until?->toIso8601String(),
             ];
@@ -2657,11 +2778,28 @@ $unpaid = StudentBillingEntitlement::query()
     public function billingProfile(int $schoolId): array
     {
         $settings = $this->settingsForSchool($schoolId);
-        $activeStudentCount = $this->activeStudents($schoolId)->count();
-        $pricePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
+        $students = $this->activeStudents($schoolId);
+        $activeStudentCount = $students->count();
+        $defaultPricePerStudent = (float) $this->pricePerStudentForSchool($schoolId);
         $revenueModel = $settings->payment_mode === 'online'
             ? 'online_transaction_fee'
             : 'offline_term_invoice';
+
+        $totalInvoiceAmount = 0.0;
+        $cbtStudentCount = 0;
+        $basicStudentCount = 0;
+
+        foreach ($students as $student) {
+            $classId = (int) ($student->level_id ?? 0);
+            $fee = (float) $this->pricePerStudentForSchool($schoolId, $classId ?: null, (int) $student->id);
+            $totalInvoiceAmount += $fee;
+
+            if ($this->isClassCbtDisabled($schoolId, $classId)) {
+                $basicStudentCount++;
+            } else {
+                $cbtStudentCount++;
+            }
+        }
 
         return [
             'package' => [
@@ -2673,12 +2811,15 @@ $unpaid = StudentBillingEntitlement::query()
                 'access_model' => 'pay_as_you_go',
             ],
             'subscription' => null,
-            'price_per_student' => $pricePerStudent,
+            'price_per_student' => $defaultPricePerStudent,
             'active_student_count' => $activeStudentCount,
             'billable_student_count' => $activeStudentCount,
             'student_limit' => null,
-            'current_invoice_amount' => $activeStudentCount * $pricePerStudent,
-            'next_billing_estimate_amount' => $activeStudentCount * $pricePerStudent,
+            'current_invoice_amount' => round($totalInvoiceAmount, 2),
+            'next_billing_estimate_amount' => round($totalInvoiceAmount, 2),
+            'cbt_student_count' => $cbtStudentCount,
+            'basic_student_count' => $basicStudentCount,
+            'has_mixed_cbt_classes' => $basicStudentCount > 0 && $cbtStudentCount > 0,
             'revenue_model' => $revenueModel,
             'payment_mode' => $settings->payment_mode,
             'subscription_coverage' => null,
@@ -2750,6 +2891,32 @@ $unpaid = StudentBillingEntitlement::query()
         ?int $actorId = null,
         ?array $gatewayData = null
     ): array {
+        // Idempotency check: if this reference was already successfully processed
+        if (!empty($reference)) {
+            $existingPayment = SchoolProfitInvoicePayment::where('reference', $reference)
+                ->where('status', 'successful')
+                ->first();
+            if ($existingPayment) {
+                $paystackResp = is_array($existingPayment->paystack_response) ? $existingPayment->paystack_response : [];
+                $existingCount = (int) ($paystackResp['cleared_students_count'] ?? count($studentIds));
+                $studentsList = User::where('school_id', $schoolId)
+                    ->whereIn('id', $studentIds)
+                    ->get(['id', 'firstname', 'surname', 'reg_no']);
+
+                return [
+                    'success' => true,
+                    'already_applied' => true,
+                    'message' => "Payment reference {$reference} has already been verified and clearance applied.",
+                    'cleared_students_count' => $existingCount,
+                    'cleared_slots' => $existingCount,
+                    'total_fee' => (float) $existingPayment->amount,
+                    'fee_per_student' => (float) $this->pricePerStudentForSchool($schoolId),
+                    'cleared_student_ids' => $studentIds,
+                    'cleared_students' => $studentsList,
+                ];
+            }
+        }
+
         return DB::transaction(function () use (
             $schoolId, $type, $studentIds, $sessionId, $termId, $isFullSession, $reference, $channel, $actorId, $gatewayData
         ) {
@@ -2926,6 +3093,10 @@ $unpaid = StudentBillingEntitlement::query()
                 'total_fee' => $totalFee,
             ]);
 
+            $clearedStudentsList = User::where('school_id', $schoolId)
+                ->whereIn('id', $clearedStudentIds)
+                ->get(['id', 'firstname', 'surname', 'reg_no']);
+
             return [
                 'success' => true,
                 'message' => "Successfully cleared " . count($clearedStudentIds) . " student(s) (" . $slotCount . " term-slots).",
@@ -2934,6 +3105,7 @@ $unpaid = StudentBillingEntitlement::query()
                 'total_fee' => $totalFee,
                 'fee_per_student' => $feePerStudent,
                 'cleared_student_ids' => $clearedStudentIds,
+                'cleared_students' => $clearedStudentsList,
             ];
         });
     }

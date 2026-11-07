@@ -225,4 +225,212 @@ class StudentClassController extends Controller
             'archived' => false,
         ]);
     }
+
+    /**
+     * Ensure only Proprietor, Principal, Operator, or SuperAdmin can manage CBT class settings.
+     */
+    private function ensureCanManageCbtSettings($user): void
+    {
+        if (! $user) {
+            abort(401, 'Unauthenticated');
+        }
+
+        $isAllowed = $user->isProprietor() 
+            || $user->isPrincipal() 
+            || $user->isOperator() 
+            || $user->isSuperAdminUser()
+            || in_array(strtolower(trim((string) $user->role)), ['owner', 'proprietor', 'principal', 'operator', 'admin', 'superadmin'], true);
+
+        abort_unless($isAllowed, 403, 'Unauthorized. Only Proprietor, Principal, or School Operator can access and manage class-level CBT settings.');
+    }
+
+    /**
+     * Retrieve class-level CBT status and platform fee breakdown.
+     */
+    public function cbtSettings(Request $request)
+    {
+        $user = $request->user();
+        $this->ensureCanManageCbtSettings($user);
+        $schoolId = (int) $user->school_id;
+
+        $cbtAccess = app(\App\Services\CbtAccessService::class);
+        $policyService = app(\App\Services\SchoolFeeAccessPolicyService::class);
+
+        $isFullCbt = $cbtAccess->hasFullCbtPackage($schoolId);
+        $policy = $policyService->policyForSchool($schoolId);
+
+        $cbtRate = (float) ($policy['standard_cbt_tier_price'] ?? ($policy['platform_fee_amount'] ?? 1000.00));
+        $basicRate = (float) ($policy['basic_tier_price'] ?? 500.00);
+        if ($basicRate < 500.00) {
+            $basicRate = 500.00;
+        }
+
+        $disabledClassIds = array_map('intval', (array) ($policy['cbt_disabled_class_ids'] ?? []));
+
+        $classes = StudentClass::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->with('section:id,name')
+            ->withCount(['students' => function ($q) use ($schoolId) {
+                $q->where('school_id', $schoolId)
+                  ->where('role', 'Student')
+                  ->where('student_status', 'active');
+            }])
+            ->orderBy('name', 'asc')
+            ->get();
+
+        $classItems = $classes->map(function ($class) use ($isFullCbt, $disabledClassIds, $cbtRate, $basicRate) {
+            $cbtEnabled = $isFullCbt && ! in_array((int) $class->id, $disabledClassIds, true);
+            if ($isFullCbt && array_key_exists('cbt_enabled', $class->attributes)) {
+                $cbtEnabled = (bool) $class->cbt_enabled && ! in_array((int) $class->id, $disabledClassIds, true);
+            }
+
+            $rate = $cbtEnabled ? $cbtRate : $basicRate;
+            $studentCount = (int) $class->students_count;
+            $totalClassFee = $studentCount * $rate;
+
+            return [
+                'id' => $class->id,
+                'name' => $class->name,
+                'class_group' => $class->class_group,
+                'section_id' => $class->section_id,
+                'section_name' => $class->section?->name,
+                'cbt_enabled' => $cbtEnabled,
+                'student_count' => $studentCount,
+                'platform_fee_per_student' => $rate,
+                'total_platform_fee' => $totalClassFee,
+                'package_label' => $cbtEnabled ? 'Full CBT Package' : 'Basic Plan (Results Only)',
+            ];
+        });
+
+        $cbtClassesCount = $classItems->where('cbt_enabled', true)->count();
+        $basicClassesCount = $classItems->where('cbt_enabled', false)->count();
+        $cbtStudentsCount = $classItems->where('cbt_enabled', true)->sum('student_count');
+        $basicStudentsCount = $classItems->where('cbt_enabled', false)->sum('student_count');
+        $projectedTotal = $classItems->sum('total_platform_fee');
+
+        return response()->json([
+            'is_full_cbt_package' => $isFullCbt,
+            'active_edition_tier' => $policy['active_edition_tier'] ?? 'standard_cbt',
+            'cbt_rate_per_student' => $cbtRate,
+            'basic_rate_per_student' => $basicRate,
+            'summary' => [
+                'total_classes' => $classItems->count(),
+                'cbt_classes_count' => $cbtClassesCount,
+                'basic_classes_count' => $basicClassesCount,
+                'total_students' => $cbtStudentsCount + $basicStudentsCount,
+                'cbt_students_count' => $cbtStudentsCount,
+                'basic_students_count' => $basicStudentsCount,
+                'projected_total_fee' => $projectedTotal,
+                'has_mixed_structure' => $cbtClassesCount > 0 && $basicClassesCount > 0,
+            ],
+            'classes' => $classItems,
+        ]);
+    }
+
+    /**
+     * Bulk update class-level CBT settings.
+     */
+    public function updateCbtSettings(Request $request)
+    {
+        $user = $request->user();
+        $this->ensureCanManageCbtSettings($user);
+        $schoolId = (int) $user->school_id;
+
+        $cbtAccess = app(\App\Services\CbtAccessService::class);
+        abort_unless(
+            $cbtAccess->hasFullCbtPackage($schoolId),
+            422,
+            'Class-level CBT control is only available for schools on the Full CBT Package. Your school is currently on the Basic Result Plan.'
+        );
+
+        $validated = $request->validate([
+            'classes' => 'required|array|min:1',
+            'classes.*.id' => 'required|integer|exists:student_classes,id',
+            'classes.*.cbt_enabled' => 'required|boolean',
+        ]);
+
+        $school = \App\Models\SchoolSetting::findOrFail($schoolId);
+        $rawPolicy = $school->fee_access_policy;
+        $policy = is_array($rawPolicy) ? $rawPolicy : (json_decode((string) $rawPolicy, true) ?: []);
+        $disabledIds = array_map('intval', (array) ($policy['cbt_disabled_class_ids'] ?? []));
+
+        foreach ($validated['classes'] as $item) {
+            $classId = (int) $item['id'];
+            $enabled = (bool) $item['cbt_enabled'];
+
+            $class = StudentClass::where('school_id', $schoolId)->find($classId);
+            if ($class) {
+                $class->forceFill(['cbt_enabled' => $enabled])->save();
+            }
+
+            if (! $enabled) {
+                if (! in_array($classId, $disabledIds, true)) {
+                    $disabledIds[] = $classId;
+                }
+            } else {
+                $disabledIds = array_values(array_filter($disabledIds, fn ($id) => $id !== $classId));
+            }
+        }
+
+        $policy['cbt_disabled_class_ids'] = array_values(array_unique($disabledIds));
+        $school->forceFill(['fee_access_policy' => $policy])->save();
+
+        return response()->json([
+            'message' => 'Class-level CBT settings updated successfully. Platform fee and examination access have been adjusted.',
+            'cbt_disabled_class_ids' => $policy['cbt_disabled_class_ids'],
+        ]);
+    }
+
+    /**
+     * Single class toggle for CBT.
+     */
+    public function toggleCbt(Request $request, $id)
+    {
+        $user = $request->user();
+        $this->ensureCanManageCbtSettings($user);
+        $schoolId = (int) $user->school_id;
+
+        $cbtAccess = app(\App\Services\CbtAccessService::class);
+        abort_unless(
+            $cbtAccess->hasFullCbtPackage($schoolId),
+            422,
+            'Class-level CBT control is only available for schools on the Full CBT Package. Your school is currently on the Basic Result Plan.'
+        );
+
+        $class = StudentClass::where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->findOrFail($id);
+
+        $school = \App\Models\SchoolSetting::findOrFail($schoolId);
+        $rawPolicy = $school->fee_access_policy;
+        $policy = is_array($rawPolicy) ? $rawPolicy : (json_decode((string) $rawPolicy, true) ?: []);
+        $disabledIds = array_map('intval', (array) ($policy['cbt_disabled_class_ids'] ?? []));
+
+        $currentEnabled = $class->isCbtEnabled($disabledIds);
+        $enabled = $request->has('cbt_enabled')
+            ? $request->boolean('cbt_enabled')
+            : ! $currentEnabled;
+
+        $class->forceFill(['cbt_enabled' => $enabled])->save();
+
+        if (! $enabled) {
+            if (! in_array((int) $class->id, $disabledIds, true)) {
+                $disabledIds[] = (int) $class->id;
+            }
+        } else {
+            $disabledIds = array_values(array_filter($disabledIds, fn ($dId) => $dId !== (int) $class->id));
+        }
+
+        $policy['cbt_disabled_class_ids'] = array_values(array_unique($disabledIds));
+        $school->forceFill(['fee_access_policy' => $policy])->save();
+
+        return response()->json([
+            'message' => $enabled
+                ? "CBT enabled for {$class->name}. Students will be charged at the Full CBT Package rate."
+                : "CBT disabled for {$class->name}. Students will automatically be charged at the Basic Plan rate of ₦500.",
+            'class_id' => $class->id,
+            'cbt_enabled' => $enabled,
+            'platform_fee_per_student' => $enabled ? 1000 : 500,
+        ]);
+    }
 }

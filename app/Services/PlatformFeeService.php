@@ -13,6 +13,24 @@ class PlatformFeeService
     }
 
     /**
+     * Check if the platform fee has already been confirmed/paid for this term.
+     */
+    public function hasPaidForFee(?StudentFee $studentFee): bool
+    {
+        if (! $studentFee) {
+            return false;
+        }
+
+        return PlatformFeeCharge::where([
+            'school_id' => (int) $studentFee->school_id,
+            'student_id' => (int) $studentFee->student_id,
+            'session_id' => (int) $studentFee->session_id,
+            'term_id' => (int) $studentFee->term_id,
+            'status' => 'confirmed',
+        ])->exists();
+    }
+
+    /**
      * Flat platform fee, in naira, charged once per student_fee record
      * (i.e. once per student per term per academic session).
      */
@@ -25,7 +43,13 @@ class PlatformFeeService
                 return 0;
             }
 
-            return (int) round($this->billing->pricePerStudentForSchool($schoolId));
+            $classId = (int) ($studentFee->class_id ?? 0);
+            if (! $classId && $studentFee->student_id) {
+                $student = \App\Models\User::find($studentFee->student_id);
+                $classId = (int) ($student?->level_id ?? 0);
+            }
+
+            return (int) round($this->billing->pricePerStudentForSchool($schoolId, $classId ?: null, (int) $studentFee->student_id));
         }
 
         $globalPolicy = DB::table('gradequest_billing_policies')->orderByDesc('id')->first();
@@ -36,8 +60,8 @@ class PlatformFeeService
      * Decide how much of the incoming installment (if any) should be
      * routed to SchoolProfit's main account as the one-time platform fee.
      *
-     * Returns 0 if the fee has already been collected — or is currently
-     * being collected by another in-flight payment — for this student_fee.
+     * Returns 0 if the fee has already been collected â€” or is currently
+     * being collected by another in-flight payment â€” for this student_fee.
      */
     public function resolveCharge(StudentFee $studentFee, int $installmentNaira, string $reference): int
     {
@@ -76,7 +100,7 @@ class PlatformFeeService
             $fee = $this->feeAmountNaira($studentFee);
 
             if ($installmentNaira < $fee) {
-                return 0; // this installment is too small to bear the flat fee — wait for a bigger one
+                return 0; // this installment is too small to bear the flat fee â€” wait for a bigger one
             }
 
             PlatformFeeCharge::updateOrCreate($periodIdentity, [
@@ -91,7 +115,7 @@ class PlatformFeeService
 
     /**
      * Called once a charge that carried the platform fee is confirmed
-     * successful — locks the claim in for the rest of the term/session.
+     * successful â€” locks the claim in for the rest of the term/session.
      */
     public function confirmCharge(string $reference): void
     {
@@ -101,7 +125,7 @@ class PlatformFeeService
 
     /**
      * Called if a charge that carried a pending fee claim ends up
-     * failing — frees the claim immediately so the next installment
+     * failing â€” frees the claim immediately so the next installment
      * attempt doesn't have to wait out the 30-minute staleness window.
      */
     public function releaseCharge(string $reference): void

@@ -9,6 +9,7 @@ use App\Models\CbtExam;
 use App\Models\CbtOfflineLicense;
 use App\Models\CbtQuestion;
 use App\Models\CbtSyncLog;
+use App\Models\ResultBatch;
 use App\Models\SchoolSetting;
 use App\Models\User;
 use App\Services\CbtAccessService;
@@ -16,6 +17,8 @@ use App\Services\SchoolFeeAccessPolicyService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -197,6 +200,7 @@ class CbtOfflineLicenseController extends Controller
                     ->where('student_id', $student->id)
                     ->max('attempt_number')) + 1);
 
+                $objectiveTotalMarks = (float) $exam->questions()->where('question_type', '!=', 'theory')->sum('marks');
                 $attempt->fill([
                     'exam_id' => $exam->id,
                     'student_id' => $student->id,
@@ -210,7 +214,7 @@ class CbtOfflineLicenseController extends Controller
                     'synced_at' => now(),
                     'device_name' => $row['device_name'] ?? null,
                     'ip_address' => $row['ip_address'] ?? null,
-                    'total_marks' => (float) $exam->questions()->sum('marks'),
+                    'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions()->sum('marks'),
                     'metadata' => [
                         'source' => 'offline_sync',
                         'events_count' => (int) ($row['events_count'] ?? 0),
@@ -220,10 +224,17 @@ class CbtOfflineLicenseController extends Controller
 
                 $this->syncAttemptAnswers($attempt, $row['answers'] ?? []);
 
+                $objectiveScore = (float) $attempt->answers()
+                    ->whereHas('question', fn ($q) => $q->where('question_type', '!=', 'theory'))
+                    ->sum('score');
+
                 $attempt->update([
-                    'score' => (float) $attempt->answers()->sum('score'),
-                    'total_marks' => (float) $exam->questions()->sum('marks'),
+                    'score' => $objectiveScore,
+                    'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions()->sum('marks'),
                 ]);
+
+                // ✅ Auto-save OBJ score into student report card (subject_results_v2)
+                $this->saveToStudentReportCard($exam, $student, $objectiveScore);
 
                 $isNew ? $created++ : $updated++;
             }
@@ -281,6 +292,14 @@ class CbtOfflineLicenseController extends Controller
             ->limit($license->max_exams > 0 ? (int) $license->max_exams : 100)
             ->get();
 
+        $billingService = app(\App\Services\SchoolBillingService::class);
+        $exams = $exams->filter(function (CbtExam $exam) use ($billingService, $license) {
+            if ($exam->class_id && $billingService->isClassCbtDisabled((int) $license->school_id, (int) $exam->class_id)) {
+                return false;
+            }
+            return true;
+        })->values();
+
         if ($exams->isEmpty()) {
             if ($examIds !== []) {
                 $selected = CbtExam::query()
@@ -310,6 +329,7 @@ class CbtOfflineLicenseController extends Controller
             ->where('status', 1)
             ->limit($license->max_students > 0 ? (int) $license->max_students : 10000)
             ->get()
+            ->filter(fn (User $student) => ! ($student->level_id && $billingService->isClassCbtDisabled((int) $license->school_id, (int) $student->level_id)))
             ->map(fn (User $student) => [
                 'id' => $student->id,
                 'name' => trim(($student->surname ?? '') . ' ' . ($student->firstname ?? '')),
@@ -369,6 +389,8 @@ class CbtOfflineLicenseController extends Controller
             'show_result_after_submit' => (bool) $exam->show_result_after_submit,
             'calculator_enabled' => (bool) $exam->calculator_enabled,
             'general_instructions' => $exam->general_instructions,
+            'include_theory' => (bool) $exam->include_theory,
+            'theory_instructions' => $exam->theory_instructions,
             'subject' => $exam->subject,
             'class_id' => $exam->class_id,
             'class' => $exam->class,
@@ -406,6 +428,7 @@ class CbtOfflineLicenseController extends Controller
                 'question_text' => $question->question_text,
                 'instructions' => $question->instructions,
                 'marks' => (float) $question->marks,
+                'diagram_url' => $question->diagram_url,
                 'sort_order' => (int) $question->sort_order,
                 'options' => $question->options->map(fn ($option) => [
                     'id' => $option->id,
@@ -419,6 +442,11 @@ class CbtOfflineLicenseController extends Controller
 
     private function matchedStudentIdsForExam(CbtExam $exam): array
     {
+        $billingService = app(\App\Services\SchoolBillingService::class);
+        if ($exam->class_id && $billingService->isClassCbtDisabled((int) $exam->school_id, (int) $exam->class_id)) {
+            return [];
+        }
+
         return User::query()
             ->where('school_id', $exam->school_id)
             ->whereRaw('LOWER(role) = ?', ['student'])
@@ -426,6 +454,8 @@ class CbtOfflineLicenseController extends Controller
             ->when($exam->class_id, fn ($query) => $query->where('level_id', $exam->class_id))
             ->when($exam->section_id, fn ($query) => $query->where('section_id', $exam->section_id))
             ->when($exam->department_id, fn ($query) => $query->where('department_id', $exam->department_id))
+            ->get(['id', 'level_id'])
+            ->filter(fn (User $student) => ! ($student->level_id && $billingService->isClassCbtDisabled((int) $exam->school_id, (int) $student->level_id)))
             ->pluck('id')
             ->map(fn ($id) => (int) $id)
             ->values()
@@ -435,11 +465,13 @@ class CbtOfflineLicenseController extends Controller
     private function eligibleStudentIdsForExam(CbtExam $exam, ?array $matchedStudentIds = null): array
     {
         $matchedStudentIds ??= $this->matchedStudentIdsForExam($exam);
+        $billingService = app(\App\Services\SchoolBillingService::class);
 
         return User::query()
             ->where('school_id', $exam->school_id)
             ->whereIn('id', $matchedStudentIds)
-            ->get(['id', 'school_id'])
+            ->get(['id', 'school_id', 'level_id'])
+            ->filter(fn (User $student) => ! ($student->level_id && $billingService->isClassCbtDisabled((int) $exam->school_id, (int) $student->level_id)))
             ->filter(fn (User $student) => ! $this->feeAccessPolicy->assertCbtAccess(
                 (int) $exam->school_id,
                 (int) $student->id,
@@ -524,9 +556,314 @@ class CbtOfflineLicenseController extends Controller
         abort_unless($user, 401, 'Unauthenticated.');
         $role = strtolower((string) ($user->role ?? ''));
         abort_unless(
-            in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true),
+            in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher', 'teacher', 'staff', 'class_teacher', 'subject_teacher'], true),
             403,
             'Only school administrators can access or download offline CBT packages.'
         );
+    }
+
+    /**
+     * Direct Cloud Export Bundle (Called directly by offline runner without file download)
+     */
+    public function directExportBundle(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'license_key' => ['required', 'string'],
+            'admin_email' => ['nullable', 'email'],
+            'admin_password' => ['nullable', 'string'],
+        ]);
+
+        $license = CbtOfflineLicense::where('license_key', trim($data['license_key']))->first();
+        abort_unless($license, 404, 'Invalid offline CBT license key.');
+        $this->ensureLicenseIsUsable($license);
+
+        if (!empty($data['admin_email']) && !empty($data['admin_password'])) {
+            $adminUser = User::where('email', $data['admin_email'])
+                ->where('school_id', $license->school_id)
+                ->first();
+            abort_unless($adminUser && Hash::check($data['admin_password'], $adminUser->password), 401, 'Invalid admin credentials for this school.');
+        }
+
+        $bundle = $this->buildOfflineBundle($license, []);
+
+        return response()->json([
+            'message' => 'Exam bundle exported successfully.',
+            'bundle' => $bundle,
+        ]);
+    }
+
+    /**
+     * Direct Cloud Results Sync (Called directly by offline runner without file export)
+     */
+    public function directSyncResults(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'license_key' => ['required', 'string'],
+            'sync_reference' => ['nullable', 'string', 'max:100'],
+            'attempts' => ['required', 'array', 'min:1'],
+            'attempts.*.offline_attempt_uuid' => ['required', 'string', 'max:80'],
+            'attempts.*.exam_id' => ['required', 'integer', 'exists:cbt_exams,id'],
+            'attempts.*.student_id' => ['required', 'integer', 'exists:users,id'],
+            'attempts.*.started_at' => ['nullable', 'date'],
+            'attempts.*.submitted_at' => ['nullable', 'date'],
+            'attempts.*.device_name' => ['nullable', 'string', 'max:255'],
+            'attempts.*.ip_address' => ['nullable', 'string', 'max:80'],
+            'attempts.*.events_count' => ['nullable', 'integer', 'min:0'],
+            'attempts.*.answers' => ['nullable', 'array'],
+            'attempts.*.answers.*.question_id' => ['required_with:attempts.*.answers', 'integer', 'exists:cbt_questions,id'],
+            'attempts.*.answers.*.selected_option_ids' => ['nullable', 'array'],
+            'attempts.*.answers.*.selected_option_ids.*' => ['integer', 'exists:cbt_question_options,id'],
+            'attempts.*.answers.*.answer_text' => ['nullable', 'string'],
+            'admin_email' => ['nullable', 'email'],
+            'admin_password' => ['nullable', 'string'],
+        ]);
+
+        $license = CbtOfflineLicense::where('license_key', trim($data['license_key']))->first();
+        abort_unless($license, 404, 'Invalid offline CBT license key.');
+        $this->ensureLicenseIsUsable($license);
+
+        if (!empty($data['admin_email']) && !empty($data['admin_password'])) {
+            $adminUser = User::where('email', $data['admin_email'])
+                ->where('school_id', $license->school_id)
+                ->first();
+            abort_unless($adminUser && Hash::check($data['admin_password'], $adminUser->password), 401, 'Invalid admin credentials for this school.');
+        }
+
+        $syncReference = $data['sync_reference'] ?? 'offline-direct-sync-' . Str::uuid();
+        if (CbtSyncLog::where('sync_reference', $syncReference)->exists()) {
+            return response()->json([
+                'message' => 'This offline sync has already been processed.',
+                'summary' => ['created' => 0, 'updated' => 0, 'skipped' => count($data['attempts'])],
+            ]);
+        }
+
+        $summary = DB::transaction(function () use ($license, $data) {
+            $created = 0;
+            $updated = 0;
+            $skipped = 0;
+
+            foreach ($data['attempts'] as $row) {
+                $exam = CbtExam::where('school_id', $license->school_id)
+                    ->whereIn('delivery_mode', ['offline', 'hybrid'])
+                    ->find((int) $row['exam_id']);
+
+                if (!$exam) {
+                    $skipped++;
+                    continue;
+                }
+
+                $student = User::where('school_id', $license->school_id)
+                    ->whereRaw('LOWER(role) = ?', ['student'])
+                    ->find((int) $row['student_id']);
+
+                if (!$student || !$this->studentMatchesExam($student, $exam)) {
+                    $skipped++;
+                    continue;
+                }
+
+                $attempt = CbtAttempt::firstOrNew([
+                    'school_id' => $license->school_id,
+                    'offline_attempt_uuid' => $row['offline_attempt_uuid'],
+                ]);
+
+                $isNew = !$attempt->exists;
+                $attemptNumber = $attempt->attempt_number ?: (((int) CbtAttempt::where('exam_id', $exam->id)
+                    ->where('student_id', $student->id)
+                    ->max('attempt_number')) + 1);
+
+                $objectiveTotalMarks = (float) $exam->questions()->where('question_type', '!=', 'theory')->sum('marks');
+                $attempt->fill([
+                    'exam_id' => $exam->id,
+                    'student_id' => $student->id,
+                    'school_id' => $license->school_id,
+                    'offline_license_id' => $license->id,
+                    'delivery_mode' => 'offline',
+                    'attempt_number' => $attemptNumber,
+                    'status' => 'submitted',
+                    'started_at' => $row['started_at'] ?? now(),
+                    'submitted_at' => $row['submitted_at'] ?? now(),
+                    'synced_at' => now(),
+                    'device_name' => $row['device_name'] ?? null,
+                    'ip_address' => $row['ip_address'] ?? null,
+                    'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions()->sum('marks'),
+                    'metadata' => [
+                        'source' => 'offline_direct_sync',
+                        'events_count' => (int) ($row['events_count'] ?? 0),
+                    ],
+                ]);
+                $attempt->save();
+
+                $this->syncAttemptAnswers($attempt, $row['answers'] ?? []);
+
+                $objectiveScore = (float) $attempt->answers()
+                    ->whereHas('question', fn ($q) => $q->where('question_type', '!=', 'theory'))
+                    ->sum('score');
+
+                $attempt->update([
+                    'score' => $objectiveScore,
+                    'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions()->sum('marks'),
+                ]);
+
+                // ✅ Auto-save into student report card table (subject_results_v2)
+                $this->saveToStudentReportCard($exam, $student, $objectiveScore);
+
+                $isNew ? $created++ : $updated++;
+            }
+
+            return compact('created', 'updated', 'skipped');
+        });
+
+        CbtSyncLog::create([
+            'school_id' => $license->school_id,
+            'offline_license_id' => $license->id,
+            'sync_reference' => $syncReference,
+            'direction' => 'from_offline_server',
+            'status' => 'successful',
+            'records_count' => (int) ($summary['created'] + $summary['updated']),
+            'summary' => $summary,
+        ]);
+
+        $license->update(['last_synced_at' => now()]);
+
+        return response()->json([
+            'message' => 'Offline CBT results synced directly to Cloud and recorded in report cards successfully.',
+            'summary' => $summary,
+        ]);
+    }
+
+    /**
+     * Auto-save CBT OBJ score into student report card (subject_results_v2)
+     */
+    private function saveToStudentReportCard(CbtExam $exam, User $student, float $objectiveScore): void
+    {
+        $this->access->saveObjectiveScoreToReportCard($exam, $student, $objectiveScore);
+    }
+
+    private function legacySaveToStudentReportCard(CbtExam $exam, User $student, float $objectiveScore): void
+    {
+        try {
+            $exam->loadMissing(['term', 'academicSession']);
+            $classId = (int) ($exam->class_id ?: $student->level_id);
+            $subjectId = (int) $exam->subject_id;
+            if (!$subjectId || !$classId) {
+                return;
+            }
+
+            $termName = $exam->term?->name;
+            $sessionName = $exam->academicSession?->name;
+
+            if (!$termName) {
+                $termName = DB::table('terms')
+                    ->where('school_id', $exam->school_id)
+                    ->whereNull('archived_at')
+                    ->where(function($q) {
+                        $q->where('status', 'Active')->orWhere('status', 'active');
+                    })
+                    ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+                    ->orderBy('id')
+                    ->value('name') ?: (
+                        DB::table('terms')
+                            ->where('school_id', $exam->school_id)
+                            ->whereNull('archived_at')
+                            ->orderBy('id')
+                            ->value('name') ?: 'First Term'
+                    );
+            }
+
+            if (!$sessionName) {
+                $sessionName = DB::table('academic_sessions')
+                    ->where('school_id', $exam->school_id)
+                    ->whereNull('archived_at')
+                    ->where('is_current', 1)
+                    ->value('name') ?: (
+                        DB::table('academic_sessions')
+                            ->where('school_id', $exam->school_id)
+                            ->whereNull('archived_at')
+                            ->where(function($q) {
+                                $q->where('status', 'Active')->orWhere('status', 'active');
+                            })
+                            ->orderByDesc('id')
+                            ->value('name') ?: '2026/2027'
+                    );
+            }
+
+            // Find or create result batch
+            $batch = ResultBatch::where('school_id', $exam->school_id)
+                ->where('class_id', $classId)
+                ->where('term', $termName)
+                ->where('session', $sessionName)
+                ->first();
+
+            if (!$batch) {
+                $batch = ResultBatch::create([
+                    'school_id' => $exam->school_id,
+                    'class_id' => $classId,
+                    'term' => $termName,
+                    'session' => $sessionName,
+                    'status' => 'draft',
+                ]);
+            }
+
+            // Find or create student result header
+            $studentResult = DB::table('student_results_v2')
+                ->where('batch_id', $batch->id)
+                ->where('user_id', $student->id)
+                ->first();
+
+            if (!$studentResult) {
+                $studentResultId = DB::table('student_results_v2')->insertGetId([
+                    'batch_id' => $batch->id,
+                    'user_id' => $student->id,
+                    'rollno' => $student->reg_no,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            } else {
+                $studentResultId = $studentResult->id;
+            }
+
+            // Find or create subject result row
+            $existing = DB::table('subject_results_v2')
+                ->where('student_result_id', $studentResultId)
+                ->where('subject_id', $subjectId)
+                ->first();
+
+            $savedTheory = ($existing && property_exists($existing, 'theory') && $existing->theory !== null)
+                ? (float) $existing->theory
+                : null;
+
+            $examScore = round($objectiveScore + (float) ($savedTheory ?? 0), 2);
+            $caTotal = ($existing && property_exists($existing, 'ca_total') && $existing->ca_total !== null)
+                ? (float) $existing->ca_total
+                : 0.0;
+
+            $hasCa = ($existing && $existing->ca_total !== null);
+            $total = ($hasCa || $examScore !== null) ? round($caTotal + $examScore, 2) : null;
+
+            // Grading scale resolution
+            $sectionId = $student->section_id ?: ($student->level?->section_id ?? null);
+            $gradingScale = $this->access->resolveGradingScale((int) $exam->school_id, $sectionId ? (int) $sectionId : null);
+            $gradeRemark = $this->access->gradeForScore($total, $gradingScale);
+
+            $payload = [
+                'cbt_obj' => $objectiveScore,
+                'exam' => $examScore,
+                'total' => $total,
+                'grade' => $gradeRemark['grade'] ?? null,
+                'remark' => $gradeRemark['remark'] ?? null,
+                'updated_at' => now(),
+            ];
+
+            if (!$existing) {
+                $payload['student_result_id'] = $studentResultId;
+                $payload['subject_id'] = $subjectId;
+                $payload['created_at'] = now();
+                DB::table('subject_results_v2')->insert($payload);
+            } else {
+                DB::table('subject_results_v2')->where('id', $existing->id)->update($payload);
+            }
+        } catch (\Throwable $e) {
+            Log::warning("Failed to auto-save CBT OBJ to student report card: " . $e->getMessage());
+        }
     }
 }

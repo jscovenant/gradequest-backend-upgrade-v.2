@@ -169,21 +169,30 @@ Route::post('/public/wema/webhook', [\App\Http\Controllers\Backend\WemaWebhookCo
 Route::post('/alatpay/webhook', [\App\Http\Controllers\Backend\WemaWebhookController::class, 'handle'])->name('alatpay.webhook');
 Route::post('/public/alatpay/webhook', [\App\Http\Controllers\Backend\WemaWebhookController::class, 'handle']);
 Route::post('/paystack/webhook', [\App\Http\Controllers\Backend\PaystackWebhookController::class, 'handle'])->name('paystack.webhook');
+Route::get('/public/clearance/payment-confirmation/{reference}', [StudentClearanceController::class, 'publicPaymentConfirmation']);
 Route::get('/public/cbt/ping', fn () => response()->json(['status' => 'connected', 'timestamp' => now()->timestamp, 'server' => request()->getHost()]));
 Route::get('/public/cbt/access/lookup', [PublicCbtExamController::class, 'lookup']);
 Route::post('/public/cbt/access/start', [PublicCbtExamController::class, 'start']);
 Route::post('/public/cbt/attempts/{token}/answers', [PublicCbtExamController::class, 'saveAnswer']);
 Route::post('/public/cbt/attempts/{token}/events', [PublicCbtExamController::class, 'logEvent']);
+Route::post('/public/cbt/attempts/{token}/complete-objective', [PublicCbtExamController::class, 'completeObjective']);
 Route::post('/public/cbt/attempts/{token}/submit', [PublicCbtExamController::class, 'submit']);
 Route::get('/public/cbt/offline/installer/download', [\App\Http\Controllers\Api\CbtExamController::class, 'downloadOfflineInstaller']);
+Route::get('/public/cbt/offline/student-client/download', [\App\Http\Controllers\Api\CbtExamController::class, 'downloadStudentClient']);
+Route::get('/public/cbt/offline/student-script/download', [\App\Http\Controllers\Api\CbtExamController::class, 'downloadStudentScript']);
+Route::post('/cbt/offline/direct-sync/bundle', [\App\Http\Controllers\Api\CbtOfflineLicenseController::class, 'directExportBundle']);
+Route::post('/cbt/offline/direct-sync/results', [\App\Http\Controllers\Api\CbtOfflineLicenseController::class, 'directSyncResults']);
 Route::prefix('offline-cbt')->group(function () {
     Route::get('/ping', fn () => response()->json(['status' => 'connected', 'timestamp' => now()->timestamp, 'server' => request()->getHost()]));
     Route::get('/status', [OfflineCbtServerController::class, 'status']);
     Route::post('/bundle/import', [OfflineCbtServerController::class, 'importBundle']);
+    Route::post('/cloud/pull-bundle', [OfflineCbtServerController::class, 'cloudPullBundle']);
+    Route::post('/cloud/push-results', [OfflineCbtServerController::class, 'cloudPushResults']);
     Route::post('/students/lookup', [OfflineCbtServerController::class, 'lookupStudent']);
     Route::post('/exams/{examId}/start', [OfflineCbtServerController::class, 'startExam']);
     Route::post('/attempts/{uuid}/answers', [OfflineCbtServerController::class, 'saveAnswer']);
     Route::post('/attempts/{uuid}/events', [OfflineCbtServerController::class, 'logEvent']);
+    Route::post('/attempts/{uuid}/complete-objective', [OfflineCbtServerController::class, 'completeObjective']);
     Route::post('/attempts/{uuid}/submit', [OfflineCbtServerController::class, 'submitAttempt']);
     Route::get('/results/export', [OfflineCbtServerController::class, 'exportResults']);
 });
@@ -207,6 +216,7 @@ Route::get('/internal/domains/tls-allowed', [SchoolDomainController::class, 'tls
     ->middleware(['auth:sanctum', 'tenant']);
  
 Route::get('/public/check-result', [PublicResultController::class, 'checkWithPin']);
+Route::get('/parent/child-results/{studentId}/pdf', [ParentDashboardController::class, 'downloadChildReportCardPdf']);
  
 Route::middleware(['auth:sanctum', 'tenant'])->post('/auth/change-initial-password', [AuthController::class, 'changeInitialPassword']);
 
@@ -367,6 +377,12 @@ Route::post('/notifications/read/{id}', function (Request $request, $id) {
         [AdminResultDeadlineController::class, 'setDeadline']
     );
 
+    // Teacher Compliance, Deadlines & Result Monitoring
+    Route::get('/admin/teacher-compliance/overview', [AdminMonitoringController::class, 'overview']);
+    Route::post('/admin/teacher-compliance/set-deadline', [AdminMonitoringController::class, 'setDeadline']);
+    Route::post('/admin/teacher-compliance/set-cbt-target', [AdminMonitoringController::class, 'setCbtTarget']);
+    Route::get('/admin/teacher-compliance/batch/{id}/preview', [AdminMonitoringController::class, 'batchPreview']);
+
 
 
 Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index'])->middleware('superadmin.access:sales,support,owner');
@@ -504,24 +520,16 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
         ->middleware('subscription.feature:whatsapp_notifications');
     Route::get('/settings/whatsapp/queue-stats', [WhatsAppSettingsController::class, 'queueStats'])
         ->middleware('subscription.feature:whatsapp_notifications');
-    Route::get('/admin/ai/credits', [AdminAiCreditController::class, 'summary'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::get('/admin/ai/credits/staff-allocations', [AdminAiCreditController::class, 'staffAllocations'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::post('/admin/ai/credits/staff-allocations', [AdminAiCreditController::class, 'allocateStaff'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::post('/admin/ai/credits/staff-allocations/bulk', [AdminAiCreditController::class, 'bulkAllocateStaff'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::delete('/admin/ai/credits/staff-allocations/{userId}', [AdminAiCreditController::class, 'revokeStaff'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::get('/admin/ai/credits/quote', [AiCreditPurchaseController::class, 'quote'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::post('/admin/ai/credits/buy-wallet', [AiCreditPurchaseController::class, 'buyWithWallet'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::post('/admin/ai/credits/initialize-online', [AiCreditPurchaseController::class, 'initializeOnline'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
-    Route::get('/admin/ai/credits/verify/{reference}', [AiCreditPurchaseController::class, 'verifyOnline'])
-        ->middleware('subscription.feature:ai_result_comment_generator');
+    Route::get('/admin/ai/credits', [AdminAiCreditController::class, 'summary']);
+    Route::get('/admin/ai/credits/transactions', [AdminAiCreditController::class, 'transactions']);
+    Route::get('/admin/ai/credits/staff-allocations', [AdminAiCreditController::class, 'staffAllocations']);
+    Route::post('/admin/ai/credits/staff-allocations', [AdminAiCreditController::class, 'allocateStaff']);
+    Route::post('/admin/ai/credits/staff-allocations/bulk', [AdminAiCreditController::class, 'bulkAllocateStaff']);
+    Route::delete('/admin/ai/credits/staff-allocations/{userId}', [AdminAiCreditController::class, 'revokeStaff']);
+    Route::get('/admin/ai/credits/quote', [AiCreditPurchaseController::class, 'quote']);
+    Route::post('/admin/ai/credits/buy-wallet', [AiCreditPurchaseController::class, 'buyWithWallet']);
+    Route::post('/admin/ai/credits/initialize-online', [AiCreditPurchaseController::class, 'initializeOnline']);
+    Route::get('/admin/ai/credits/verify/{reference}', [AiCreditPurchaseController::class, 'verifyOnline']);
     Route::get('/admin/ai/lessons/workspace', [AiLessonPlanController::class, 'workspace'])
         ->middleware(['teacher.active', 'subscription.feature:ai_lesson_plan_generator']);
     Route::post('/admin/ai/lesson-schemes', [AiLessonPlanController::class, 'storeScheme'])
@@ -631,6 +639,8 @@ Route::get('/admin/demo-bookings', [PublicDemoBookingController::class, 'index']
 
 Route::get('/parent/students/{studentId}/fees', [ParentStudentFeesController::class, 'show']);
 Route::get('/parent/students/{studentId}/bank-accounts', [ParentStudentFeesController::class, 'bankAccounts']);
+Route::post('/parent/offline-payment-proof', [ParentStudentFeesController::class, 'submitOfflinePaymentProof']);
+Route::get('/parent/students/{studentId}/offline-payment-proofs', [ParentStudentFeesController::class, 'getOfflinePaymentProofs']);
 
 
 Route::get('/parent/payments/summary', [ParentStudentFeesController::class, 'summary']); // ?reg_no=...
@@ -669,18 +679,21 @@ Route::post('/parents/register', [ParentController::class, 'register']);
     Route::post('/parents/import/preview', [ParentController::class, 'previewImport']);
     Route::post('/parents/import', [ParentController::class, 'importParents']);
     Route::get('/parents', [ParentController::class, 'allParents']);
+    Route::get('/parents/assign-child-workspace', [ParentController::class, 'allParents']);
     Route::post('/parents/assign-child', [ParentController::class, 'assignChild']);
+    Route::get('/parents/whatsapp/status', [ParentContactValidationController::class, 'status']);
     Route::post('/parents/{parentId}/validate-phone', [ParentContactValidationController::class, 'validatePhone']);
     Route::post('/parents/{parentId}/whatsapp/send-code', [ParentContactValidationController::class, 'sendWhatsappCode']);
     Route::post('/parents/{parentId}/whatsapp/verify-code', [ParentContactValidationController::class, 'verifyWhatsappCode']);
-    Route::get('/parents/{parentId}', [ParentController::class, 'viewParent']);
+    Route::post('/parents/{parentId}/whatsapp/test', [ParentContactValidationController::class, 'testMessage']);
+    Route::get('/parents/{parentId}', [ParentController::class, 'viewParent'])->where('parentId', '[0-9]+');
     Route::delete('/parents/remove-child', [ParentController::class, 'removeChild']);
     Route::get('/student-classes', [ParentController::class, 'getStudentClasses']);
     Route::delete('/delete-parent/{id}', [ParentController::class, 'destroy']);
 Route::post('/students/by-classes', [ParentController::class, 'getByClasses']);
 // Parent Edit & Update Routes
-Route::get('/parents/{id}/edit', [ParentController::class, 'edit']);
-Route::put('/parents/{id}', [ParentController::class, 'update']);
+Route::get('/parents/{id}/edit', [ParentController::class, 'edit'])->where('id', '[0-9]+');
+Route::put('/parents/{id}', [ParentController::class, 'update'])->where('id', '[0-9]+');
 Route::get('/parent/children/{id}', [ParentController::class, 'getChild']);
   Route::get('/parent/children', [ParentController::class, 'myChildren']);
 
@@ -768,6 +781,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/reopen', [CbtExamController::class, 'reopen'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
+        Route::post('/exams/{exam}/reuse', [CbtExamController::class, 'reuse'])
+            ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::get('/exams/{exam}/scores/export', [CbtExamController::class, 'exportScores'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::get('/exams/{exam}/questions/template/{format}', [CbtExamController::class, 'downloadQuestionTemplate'])
@@ -805,6 +820,8 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware('subscription.feature:cbt_online');
         Route::post('/student/attempts/{attempt}/events', [CbtStudentExamController::class, 'logEvent'])
             ->middleware('subscription.feature:cbt_online');
+        Route::post('/student/attempts/{attempt}/complete-objective', [CbtStudentExamController::class, 'completeObjective'])
+            ->middleware('subscription.feature:cbt_online');
         Route::post('/student/attempts/{attempt}/submit', [CbtStudentExamController::class, 'submit'])
             ->middleware('subscription.feature:cbt_online');
 
@@ -827,6 +844,15 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
         Route::get('/access-stats', [TeacherDashboardController::class, 'accessStats']);
         Route::get('/action-center', [TeacherDashboardController::class, 'actionCenter']);
         Route::get('/student-performance', [TeacherDashboardController::class, 'studentPerformance']);
+        Route::get('/assigned-subjects', [TeacherDashboardController::class, 'assignedSubjectsList']);
+
+        // AI Lesson Notes for Teachers
+        Route::post('/ai/lesson-note', [AiLessonPlanController::class, 'generateNoteForTeacher'])
+            ->middleware('subscription.feature:ai_lesson_note_generator');
+        Route::get('/ai/lesson-notes', [AiLessonPlanController::class, 'listTeacherNotes']);
+        Route::get('/ai/lesson-notes/{note}', [AiLessonPlanController::class, 'showTeacherNote']);
+        Route::put('/ai/lesson-notes/{note}', [AiLessonPlanController::class, 'updateTeacherNote']);
+        Route::delete('/ai/lesson-notes/{note}', [AiLessonPlanController::class, 'deleteTeacherNote']);
     });
 
 
@@ -864,11 +890,15 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
     Route::get('/students/{id}/performance', [StudentController::class, 'getStudentPerformance']);
     Route::get('/students/department-attention', [StudentController::class, 'getDepartmentAttention']);
     Route::post('/students/{id}/assign-department', [StudentController::class, 'assignDepartment']);
+    Route::post('/students/bulk-assign-department', [StudentController::class, 'bulkAssignDepartment']);
 
    
      Route::get('/student-fees', [StudentFeeController::class, 'index']);
     Route::post('/fees/pay', [FeePaymentController::class, 'payFee']);
     Route::post('/fees/pay-bulk', [FeePaymentController::class, 'payBulkFees']);
+    Route::get('/fees/offline-proofs', [FeePaymentController::class, 'listOfflinePaymentProofs']);
+    Route::post('/fees/offline-proofs/{id}/approve', [FeePaymentController::class, 'approveOfflinePaymentProof']);
+    Route::post('/fees/offline-proofs/{id}/reject', [FeePaymentController::class, 'rejectOfflinePaymentProof']);
     // Route::get('/student-fees/search/{reg_no}', [StudentFeeController::class, 'searchByRegNo']);
 //   Route::get('/student/my-fees', [StudentFeeController::class, 'MyFee']);
 
@@ -913,6 +943,7 @@ Route::prefix('grading-scales')->group(function () {
     Route::get('/student-department', [StudentController::class, 'Department']);
 
     //route for affective and psychomotor domain
+    Route::get('/student-domains', [StudentController::class, 'getDomains']);
     Route::post('/save-ratings', [StudentController::class, 'saveRatings']);
     Route::post('/decrypt-password', [StudentController::class, 'decryptPassword']);
 
@@ -977,6 +1008,15 @@ Route::get('/students/{student}/carry-over-preview', [StudentResultController::c
     Route::get('/result-batches/{batch}/broadsheet/export', [BroadsheetV2Controller::class, 'export']);
     Route::get('/result-batches/{batch}/broadsheet/students/{student}', [BroadsheetV2Controller::class, 'student']);
 
+
+    Route::get('/levels/cbt-settings', [StudentClassController::class, 'cbtSettings']);
+    Route::put('/levels/cbt-settings', [StudentClassController::class, 'updateCbtSettings']);
+    Route::patch('/levels/{id}/cbt-toggle', [StudentClassController::class, 'toggleCbt']);
+    Route::post('/levels/{id}/cbt-toggle', [StudentClassController::class, 'toggleCbt']);
+    Route::get('/classes/cbt-settings', [StudentClassController::class, 'cbtSettings']);
+    Route::put('/classes/cbt-settings', [StudentClassController::class, 'updateCbtSettings']);
+    Route::patch('/classes/{id}/cbt-toggle', [StudentClassController::class, 'toggleCbt']);
+    Route::post('/classes/{id}/cbt-toggle', [StudentClassController::class, 'toggleCbt']);
 
     Route::get('/levels', [StudentClassController::class, 'index']);
     Route::post('/levels', [StudentClassController::class, 'store']);

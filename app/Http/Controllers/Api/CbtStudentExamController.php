@@ -32,6 +32,14 @@ class CbtStudentExamController extends Controller
 
         $student = $request->user();
 
+        // If CBT is disabled for this student's class, return empty list
+        if ($student->level_id && $this->billingService->isClassCbtDisabled((int) $student->school_id, (int) $student->level_id)) {
+            return response()->json([
+                'exams' => [],
+                'disabled_notice' => 'CBT examinations are disabled for your class under the school package configuration.',
+            ]);
+        }
+
         $exams = CbtExam::query()
             ->with(['subject:id,name', 'class:id,name', 'term:id,name', 'academicSession:id,name'])
             ->withCount('questions')
@@ -104,6 +112,7 @@ class CbtStudentExamController extends Controller
             ->where('student_id', $student->id)
             ->max('attempt_number')) + 1;
 
+        $objectiveTotalMarks = (float) $exam->questions()->where('question_type', '!=', 'theory')->sum('marks');
         $attempt = CbtAttempt::create([
             'exam_id' => $exam->id,
             'student_id' => $student->id,
@@ -113,7 +122,7 @@ class CbtStudentExamController extends Controller
             'status' => 'in_progress',
             'started_at' => now(),
             'expires_at' => now()->addMinutes((int) $exam->duration_minutes),
-            'total_marks' => (float) $exam->questions()->sum('marks'),
+            'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions()->sum('marks'),
             'device_name' => $request->userAgent(),
             'ip_address' => $request->ip(),
         ]);
@@ -140,6 +149,11 @@ class CbtStudentExamController extends Controller
         ]);
 
         $question = CbtQuestion::with('options')->where('exam_id', $attempt->exam_id)->findOrFail($data['question_id']);
+        abort_if(
+            $question->question_type === 'theory',
+            422,
+            'Theory questions are for reading only and must be answered on your paper answer sheet using a pen.'
+        );
         $selectedOptionIds = $data['selected_option_ids'] ?? [];
         $answerText = $data['answer_text'] ?? null;
         $hasAnswerContent = count($selectedOptionIds) > 0 || trim((string) $answerText) !== '';
@@ -180,6 +194,67 @@ class CbtStudentExamController extends Controller
         ]);
     }
 
+    public function completeObjective(Request $request, CbtAttempt $attempt): JsonResponse
+    {
+        $this->ensureOwnAttempt($request, $attempt);
+        abort_unless($attempt->status === 'in_progress', 422, 'This CBT attempt is no longer active.');
+
+        $answersBundle = $request->input('answers_bundle');
+
+        $attempt = DB::transaction(function () use ($request, $attempt, $answersBundle) {
+            $this->persistObjectiveAnswersBundle($attempt, is_array($answersBundle) ? $answersBundle : []);
+
+            $objectiveScore = (float) $attempt->answers()
+                ->whereHas('question', fn ($q) => $q->where('question_type', '!=', 'theory'))
+                ->sum('score');
+            $objectiveTotalMarks = (float) $attempt->exam->questions()
+                ->where('question_type', '!=', 'theory')
+                ->sum('marks');
+
+            $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            $metadata['section_a_completed'] = true;
+            $metadata['section_a_completed_at'] = now()->toDateTimeString();
+            $metadata['objective_score'] = round($objectiveScore, 2);
+            $metadata['objective_total_marks'] = round($objectiveTotalMarks, 2);
+
+            $attempt->update([
+                'score' => round($objectiveScore, 2),
+                'total_marks' => $objectiveTotalMarks > 0 ? round($objectiveTotalMarks, 2) : (float) $attempt->exam->questions()->sum('marks'),
+                'metadata' => $metadata,
+            ]);
+
+            CbtAttemptEvent::create([
+                'attempt_id' => $attempt->id,
+                'exam_id' => $attempt->exam_id,
+                'student_id' => $attempt->student_id,
+                'school_id' => $attempt->school_id,
+                'event_type' => 'section_a_completed',
+                'severity' => 'low',
+                'page_url' => null,
+                'ip_address' => $request->ip(),
+                'user_agent' => $request->userAgent(),
+                'metadata' => [
+                    'objective_score' => round($objectiveScore, 2),
+                    'objective_total_marks' => round($objectiveTotalMarks, 2),
+                ],
+                'occurred_at' => now(),
+            ]);
+
+            return $attempt->fresh(['exam', 'answers.question', 'student']);
+        });
+
+        if ($attempt->student && $attempt->exam) {
+            $this->access->saveObjectiveScoreToReportCard($attempt->exam, $attempt->student, (float) $attempt->score);
+        }
+
+        return response()->json([
+            'message' => 'Section A (Objective Questions) completed and scored.',
+            'attempt' => $attempt,
+            'objective_score' => (float) $attempt->score,
+            'objective_total_marks' => (float) $attempt->total_marks,
+        ]);
+    }
+
     public function submit(Request $request, CbtAttempt $attempt): JsonResponse
     {
         $this->ensureOwnAttempt($request, $attempt);
@@ -188,60 +263,87 @@ class CbtStudentExamController extends Controller
         $answersBundle = $request->input('answers_bundle');
 
         $attempt = DB::transaction(function () use ($attempt, $answersBundle) {
-            if (is_array($answersBundle) && ! empty($answersBundle)) {
-                $examQuestions = CbtQuestion::with('options')
-                    ->where('exam_id', $attempt->exam_id)
-                    ->get()
-                    ->keyBy('id');
+            $this->persistObjectiveAnswersBundle($attempt, is_array($answersBundle) ? $answersBundle : []);
 
-                foreach ($answersBundle as $item) {
-                    $questionId = (int) ($item['question_id'] ?? 0);
-                    $question = $examQuestions->get($questionId);
-                    if (! $question) {
-                        continue;
-                    }
-
-                    $selectedOptionIds = is_array($item['selected_option_ids'] ?? null) ? $item['selected_option_ids'] : [];
-                    $answerText = $item['answer_text'] ?? null;
-                    $hasAnswerContent = count($selectedOptionIds) > 0 || trim((string) $answerText) !== '';
-
-                    if (! $hasAnswerContent) {
-                        continue;
-                    }
-
-                    $score = $this->scoreQuestion($question, $selectedOptionIds, $answerText);
-
-                    CbtAnswer::updateOrCreate(
-                        [
-                            'attempt_id' => $attempt->id,
-                            'question_id' => $question->id,
-                        ],
-                        [
-                            'selected_option_ids' => $selectedOptionIds,
-                            'answer_text' => $answerText,
-                            'is_correct' => $score['is_correct'],
-                            'score' => $score['score'],
-                            'answered_at' => now(),
-                        ]
-                    );
-                }
+            $objectiveScore = (float) $attempt->answers()
+                ->whereHas('question', fn ($q) => $q->where('question_type', '!=', 'theory'))
+                ->sum('score');
+            $metadata = is_array($attempt->metadata) ? $attempt->metadata : [];
+            if ($objectiveScore <= 0 && isset($metadata['objective_score']) && (float) $metadata['objective_score'] > 0) {
+                $objectiveScore = (float) $metadata['objective_score'];
             }
+
+            $objectiveTotalMarks = (float) $attempt->exam->questions()
+                ->where('question_type', '!=', 'theory')
+                ->sum('marks');
+
+            $metadata['objective_score'] = round($objectiveScore, 2);
+            $metadata['objective_total_marks'] = round($objectiveTotalMarks, 2);
 
             $attempt->update([
                 'status' => $attempt->expires_at && $attempt->expires_at->isPast() ? 'auto_submitted' : 'submitted',
                 'submitted_at' => now(),
-                'score' => (float) $attempt->answers()->sum('score'),
-                'total_marks' => (float) $attempt->exam->questions()->sum('marks'),
+                'score' => round($objectiveScore, 2),
+                'total_marks' => $objectiveTotalMarks > 0 ? round($objectiveTotalMarks, 2) : (float) $attempt->exam->questions()->sum('marks'),
+                'metadata' => $metadata,
             ]);
 
-            return $attempt->fresh(['exam', 'answers.question']);
+            return $attempt->fresh(['exam', 'answers.question', 'student']);
         });
+
+        if ($attempt->student && $attempt->exam) {
+            $this->access->saveObjectiveScoreToReportCard($attempt->exam, $attempt->student, (float) $attempt->score);
+        }
 
         return response()->json([
             'message' => 'CBT exam submitted.',
             'attempt' => $attempt,
             'show_result' => (bool) $attempt->exam->show_result_after_submit,
         ]);
+    }
+
+    private function persistObjectiveAnswersBundle(CbtAttempt $attempt, array $answersBundle): void
+    {
+        if (empty($answersBundle)) {
+            return;
+        }
+
+        $examQuestions = CbtQuestion::with('options')
+            ->where('exam_id', $attempt->exam_id)
+            ->get()
+            ->keyBy('id');
+
+        foreach ($answersBundle as $item) {
+            $questionId = (int) ($item['question_id'] ?? 0);
+            $question = $examQuestions->get($questionId);
+            if (! $question || $question->question_type === 'theory') {
+                continue;
+            }
+
+            $selectedOptionIds = is_array($item['selected_option_ids'] ?? null) ? $item['selected_option_ids'] : [];
+            $answerText = $item['answer_text'] ?? null;
+            $hasAnswerContent = count($selectedOptionIds) > 0 || trim((string) $answerText) !== '';
+
+            if (! $hasAnswerContent) {
+                continue;
+            }
+
+            $score = $this->scoreQuestion($question, $selectedOptionIds, $answerText);
+
+            CbtAnswer::updateOrCreate(
+                [
+                    'attempt_id' => $attempt->id,
+                    'question_id' => $question->id,
+                ],
+                [
+                    'selected_option_ids' => $selectedOptionIds,
+                    'answer_text' => $answerText,
+                    'is_correct' => $score['is_correct'],
+                    'score' => $score['score'],
+                    'answered_at' => now(),
+                ]
+            );
+        }
     }
 
     public function logEvent(Request $request, CbtAttempt $attempt): JsonResponse
@@ -281,6 +383,17 @@ class CbtStudentExamController extends Controller
         abort_unless((int) $exam->school_id === (int) $student->school_id, 403);
         abort_unless($student->isStudent() || strcasecmp((string) $student->role, 'student') === 0, 403, 'Only students can take CBT exams.');
         abort_unless($exam->status === 'published', 422, 'This CBT exam is not available.');
+
+        // Enforce class-level CBT restriction
+        if ($student->level_id && $this->billingService->isClassCbtDisabled((int) $exam->school_id, (int) $student->level_id)) {
+            $className = $student->level?->name ?? 'your class';
+            abort(403, "CBT examinations are disabled for {$className} under the school package configuration.");
+        }
+
+        if ($exam->class_id && $this->billingService->isClassCbtDisabled((int) $exam->school_id, (int) $exam->class_id)) {
+            abort(403, 'CBT examinations are disabled for this exam class.');
+        }
+
         abort_if($exam->starts_at && $exam->starts_at->isFuture(), 422, 'This CBT exam has not started.');
         abort_if($exam->ends_at && $exam->ends_at->isPast(), 422, 'This CBT exam has ended.');
 
@@ -320,7 +433,7 @@ class CbtStudentExamController extends Controller
 
     private function studentExamPayload(CbtExam $exam): array
     {
-        $cachedStructure = Cache::remember("cbt_exam_blocks_{$exam->id}", now()->addHours(6), function () use ($exam) {
+        $cachedStructure = Cache::remember("cbt_exam_blocks_v2_{$exam->id}", now()->addHours(6), function () use ($exam) {
             $exam->load([
                 'subject:id,name',
                 'class:id,name',
@@ -330,18 +443,28 @@ class CbtStudentExamController extends Controller
                 'questions.options',
             ]);
 
+            $theorySection = $this->rawTheorySection($exam);
+            $objectiveTotalMarks = (float) $exam->questions
+                ->where('question_type', '!=', 'theory')
+                ->sum('marks');
+
             return [
                 'id' => $exam->id,
                 'title' => $exam->title,
                 'exam_code' => $exam->exam_code,
                 'duration_minutes' => (int) $exam->duration_minutes,
                 'general_instructions' => $exam->general_instructions,
+                'include_theory' => (bool) ($theorySection['enabled'] ?? false),
+                'theory_instructions' => $theorySection['instructions'] ?? null,
+                'theory_section' => $theorySection,
                 'subject' => $exam->subject,
                 'class' => $exam->class,
                 'term' => $exam->term,
                 'academic_session' => $exam->academicSession,
                 'raw_blocks' => $this->rawQuestionBlocks($exam),
-                'total_marks' => (float) $exam->questions()->sum('marks'),
+                'objective_total_marks' => $objectiveTotalMarks,
+                'theory_total_marks' => (float) ($theorySection['total_marks'] ?? 0),
+                'total_marks' => $objectiveTotalMarks > 0 ? $objectiveTotalMarks : (float) $exam->questions->sum('marks'),
             ];
         });
 
@@ -351,19 +474,58 @@ class CbtStudentExamController extends Controller
             (bool) $exam->shuffle_options
         );
 
+        $theorySection = $cachedStructure['theory_section'] ?? [
+            'enabled' => false,
+            'instructions' => null,
+            'total_marks' => 0,
+            'questions' => [],
+        ];
+
         return [
             'id' => $cachedStructure['id'],
             'title' => $cachedStructure['title'],
             'exam_code' => $cachedStructure['exam_code'],
             'duration_minutes' => $cachedStructure['duration_minutes'],
             'general_instructions' => $cachedStructure['general_instructions'],
+            'include_theory' => (bool) ($theorySection['enabled'] ?? false),
+            'theory_instructions' => $theorySection['instructions'] ?? null,
+            'theory_section' => $theorySection,
             'subject' => $cachedStructure['subject'],
             'class' => $cachedStructure['class'],
             'term' => $cachedStructure['term'],
             'academic_session' => $cachedStructure['academic_session'],
             'question_blocks' => $blocks,
             'total_questions' => collect($blocks)->sum(fn ($block) => count($block['questions'] ?? [])),
+            'objective_total_marks' => (float) ($cachedStructure['objective_total_marks'] ?? $cachedStructure['total_marks']),
+            'theory_total_marks' => (float) ($cachedStructure['theory_total_marks'] ?? 0),
             'total_marks' => $cachedStructure['total_marks'],
+        ];
+    }
+
+    private function rawTheorySection(CbtExam $exam): array
+    {
+        $theoryQuestions = $exam->questions
+            ->where('question_type', 'theory')
+            ->sortBy('sort_order')
+            ->values()
+            ->map(fn (CbtQuestion $question, int $idx) => [
+                'id' => $question->id,
+                'number' => $idx + 1,
+                'question_type' => 'theory',
+                'question_text' => $question->question_text,
+                'instructions' => $question->instructions,
+                'marks' => (float) $question->marks,
+                'diagram_url' => $question->diagram_url,
+            ])
+            ->all();
+
+        $enabled = (bool) ($exam->include_theory && count($theoryQuestions) > 0);
+
+        return [
+            'enabled' => $enabled,
+            'instructions' => $exam->theory_instructions,
+            'total_marks' => (float) collect($theoryQuestions)->sum('marks'),
+            'questions' => $enabled ? $theoryQuestions : [],
         ];
     }
 
@@ -392,6 +554,7 @@ class CbtStudentExamController extends Controller
 
         $exam->questions
             ->whereNotIn('id', $groupedQuestionIds)
+            ->where('question_type', '!=', 'theory')
             ->each(function (CbtQuestion $question) use ($blocks) {
                 $blocks->push([
                     'type' => 'question',
@@ -403,6 +566,7 @@ class CbtStudentExamController extends Controller
                             'question_text' => $question->question_text,
                             'instructions' => $question->instructions,
                             'marks' => (float) $question->marks,
+                            'diagram_url' => $question->diagram_url,
                             'raw_options' => $question->options->map(fn ($opt) => [
                                 'id' => $opt->id,
                                 'label' => $opt->label,
@@ -415,6 +579,7 @@ class CbtStudentExamController extends Controller
 
         $exam->questionGroups->each(function ($group) use ($blocks) {
             $questions = $group->questions
+                ->where('question_type', '!=', 'theory')
                 ->sortBy('sort_order')
                 ->map(fn (CbtQuestion $question) => [
                     'id' => $question->id,
@@ -422,6 +587,7 @@ class CbtStudentExamController extends Controller
                     'question_text' => $question->question_text,
                     'instructions' => $question->instructions,
                     'marks' => (float) $question->marks,
+                    'diagram_url' => $question->diagram_url,
                     'raw_options' => $question->options->map(fn ($opt) => [
                         'id' => $opt->id,
                         'label' => $opt->label,
@@ -471,6 +637,7 @@ class CbtStudentExamController extends Controller
                     'question_text' => $q['question_text'],
                     'instructions' => $q['instructions'],
                     'marks' => (float) $q['marks'],
+                    'diagram_url' => $q['diagram_url'] ?? null,
                     'options' => $mappedOptions,
                 ];
             })->all();
@@ -489,8 +656,26 @@ class CbtStudentExamController extends Controller
 
     private function scoreQuestion(CbtQuestion $question, array $selectedOptionIds, ?string $answerText): array
     {
-        if (in_array($question->question_type, ['theory', 'fill_blank'], true)) {
+        if ($question->question_type === 'theory') {
             return ['is_correct' => null, 'score' => 0];
+        }
+
+        if ($question->question_type === 'fill_blank') {
+            $accepted = collect($question->correct_answer ?? [])
+                ->map(fn ($ans) => mb_strtolower(trim((string) $ans)))
+                ->filter()
+                ->values()
+                ->all();
+            if ($accepted === []) {
+                return ['is_correct' => null, 'score' => 0];
+            }
+            $given = mb_strtolower(trim((string) $answerText));
+            $isCorrect = $given !== '' && in_array($given, $accepted, true);
+
+            return [
+                'is_correct' => $isCorrect,
+                'score' => $isCorrect ? (float) $question->marks : 0,
+            ];
         }
 
         $correctIds = $question->options->where('is_correct', true)->pluck('id')->map(fn ($id) => (int) $id)->sort()->values()->all();

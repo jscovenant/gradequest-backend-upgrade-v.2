@@ -23,6 +23,7 @@ use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use App\Exports\ResultTemplateExport;
+use Carbon\Carbon;
 use Maatwebsite\Excel\Facades\Excel;
 use Maatwebsite\Excel\Excel as ExcelFormat;
 
@@ -41,13 +42,30 @@ class CbtExamController extends Controller
             ->withCount(['sections', 'questionGroups', 'questions', 'attempts'])
             ->latest();
 
-        if (strtolower((string) ($request->user()?->role ?? '')) === 'teacher') {
+        $userRole = strtolower((string) ($request->user()?->role ?? ''));
+        if (in_array($userRole, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
             $assignedSubjectIds = TeacherSubject::query()
                 ->where('teacher_id', (int) $request->user()->id)
                 ->pluck('subject_id')
                 ->filter()
                 ->all();
-            $query->whereIn('subject_id', ! empty($assignedSubjectIds) ? $assignedSubjectIds : [0]);
+
+            $enrolledLevelIds = DB::table('teacher_enrollments')
+                ->where('user_id', (int) $request->user()->id)
+                ->where('enroll', 1)
+                ->pluck('level_id')
+                ->filter()
+                ->all();
+
+            $query->where(function ($q) use ($request, $assignedSubjectIds, $enrolledLevelIds) {
+                $q->where('created_by', (int) $request->user()->id);
+                if (! empty($assignedSubjectIds)) {
+                    $q->orWhereIn('subject_id', $assignedSubjectIds);
+                }
+                if (! empty($enrolledLevelIds)) {
+                    $q->orWhereIn('class_id', $enrolledLevelIds);
+                }
+            });
         }
 
         if ($request->filled('status')) {
@@ -58,8 +76,73 @@ class CbtExamController extends Controller
             $query->where('delivery_mode', $request->query('delivery_mode'));
         }
 
+        $schoolId = (int) $request->user()->school_id;
+        $activeSessionId = DB::table('academic_sessions')
+            ->where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->where('is_current', 1)
+            ->value('id') ?: DB::table('academic_sessions')
+            ->where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->orderByDesc('id')
+            ->value('id');
+
+        $activeTermId = DB::table('terms')
+            ->where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->where(function ($q) {
+                $q->where('status', 'Active')->orWhere('status', 'active');
+            })
+            ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+            ->orderBy('id')
+            ->value('id') ?: DB::table('terms')
+            ->where('school_id', $schoolId)
+            ->whereNull('archived_at')
+            ->orderBy('id')
+            ->value('id');
+
+        $hasSessionFilter = $request->has('academic_session_id');
+        $hasTermFilter = $request->has('term_id');
+        $showAllPeriods = $request->query('all_periods') === '1' || $request->query('all_periods') === 'true';
+
+        if ($hasSessionFilter) {
+            $sessVal = $request->query('academic_session_id');
+            if ($sessVal !== 'all' && !empty($sessVal)) {
+                $query->where('academic_session_id', (int) $sessVal);
+            }
+        } elseif (!$showAllPeriods && $activeSessionId) {
+            $query->where('academic_session_id', (int) $activeSessionId);
+        }
+
+        if ($hasTermFilter) {
+            $termVal = $request->query('term_id');
+            if ($termVal !== 'all' && !empty($termVal)) {
+                $query->where('term_id', (int) $termVal);
+            }
+        } elseif (!$showAllPeriods && $activeTermId) {
+            $query->where('term_id', (int) $activeTermId);
+        }
+
+        if ($request->filled('subject_id')) {
+            $query->where('subject_id', (int) $request->query('subject_id'));
+        }
+
+        if ($request->filled('class_id')) {
+            $query->where('class_id', (int) $request->query('class_id'));
+        }
+
+        if ($request->filled('search')) {
+            $search = trim((string) $request->query('search'));
+            $query->where(function ($q) use ($search) {
+                $q->where('title', 'like', "%{$search}%")
+                  ->orWhere('exam_code', 'like', "%{$search}%");
+            });
+        }
+
         return response()->json([
-            'exams' => $query->paginate((int) $request->query('per_page', 20)),
+            'exams' => $query->paginate((int) $request->query('per_page', 50)),
+            'active_session_id' => $activeSessionId ? (int) $activeSessionId : null,
+            'active_term_id' => $activeTermId ? (int) $activeTermId : null,
         ]);
     }
 
@@ -129,6 +212,9 @@ class CbtExamController extends Controller
         $this->ensureTeacherCanAccessSubject($request->user(), $data['subject_id'] ?? null);
         $schedule = $data['_schedule'] ?? null;
         unset($data['_schedule']);
+        if (array_key_exists('settings', $data) && is_array($data['settings'])) {
+            $data['settings'] = array_merge(is_array($exam->settings) ? $exam->settings : [], $data['settings']);
+        }
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($data['delivery_mode']) ? 'offline' : 'online');
 
         DB::transaction(function () use ($exam, $data, $schedule) {
@@ -137,6 +223,7 @@ class CbtExamController extends Controller
         });
 
         Cache::forget("cbt_exam_blocks_{$exam->id}");
+        Cache::forget("cbt_exam_blocks_v2_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT exam updated.',
@@ -154,6 +241,181 @@ class CbtExamController extends Controller
         $exam->delete();
 
         return response()->json(['message' => 'CBT exam deleted.']);
+    }
+
+    /**
+     * POST /api/cbt/exams/{exam}/reuse
+     * Copies an examination and all its sections/questions to a new academic session and term
+     * while preserving the original exam and its historical student results untouched.
+     */
+    public function reuse(Request $request, CbtExam $exam): JsonResponse
+    {
+        $this->ensureSameSchool($request, $exam);
+        $this->ensureTeacherCanAccessExam($request->user(), $exam);
+        $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
+
+        $validated = $request->validate([
+            'academic_session_id' => ['required', 'exists:academic_sessions,id'],
+            'term_id' => ['required', 'exists:terms,id'],
+            'title' => ['nullable', 'string', 'max:255'],
+            'class_id' => ['nullable', 'exists:student_classes,id'],
+            'section_id' => ['nullable', 'exists:sections,id'],
+            'department_id' => ['nullable', 'exists:departments,id'],
+            'subject_id' => ['nullable', 'exists:subjects,id'],
+            'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:600'],
+            'pass_mark' => ['nullable', 'numeric', 'min:0'],
+            'delivery_mode' => ['nullable', Rule::in(['online', 'offline', 'hybrid'])],
+            'general_instructions' => ['nullable', 'string'],
+            'schedule' => ['nullable', 'array'],
+            'schedule.exam_date' => ['nullable', 'date'],
+            'schedule.starts_at' => ['nullable', 'string', 'max:10'],
+            'schedule.ends_at' => ['nullable', 'string', 'max:10'],
+            'schedule.venue' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $schoolId = (int) $request->user()->school_id;
+
+        abort_unless(
+            \App\Models\AcademicSession::where('school_id', $schoolId)->whereKey($validated['academic_session_id'])->exists(),
+            422,
+            'The selected target academic session is not valid for this school.'
+        );
+        abort_unless(
+            \App\Models\Term::where('school_id', $schoolId)->whereKey($validated['term_id'])->exists(),
+            422,
+            'The selected target term is not valid for this school.'
+        );
+
+        $targetSubjectId = ! empty($validated['subject_id']) ? (int) $validated['subject_id'] : (int) $exam->subject_id;
+        $this->ensureTeacherCanAccessSubject($request->user(), $targetSubjectId);
+
+        $targetClassId = array_key_exists('class_id', $validated) ? (! empty($validated['class_id']) ? (int) $validated['class_id'] : null) : $exam->class_id;
+        $targetSectionId = array_key_exists('section_id', $validated) ? (! empty($validated['section_id']) ? (int) $validated['section_id'] : null) : $exam->section_id;
+        $targetDepartmentId = array_key_exists('department_id', $validated) ? (! empty($validated['department_id']) ? (int) $validated['department_id'] : null) : $exam->department_id;
+
+        $targetSetup = [
+            'subject_id' => $targetSubjectId,
+            'class_id' => $targetClassId,
+            'section_id' => $targetSectionId,
+            'department_id' => $targetDepartmentId,
+            'term_id' => $validated['term_id'],
+            'academic_session_id' => $validated['academic_session_id'],
+        ];
+        $this->ensureExamSetupBelongsToSchool($request, $targetSetup);
+
+        $newExam = DB::transaction(function () use ($request, $exam, $validated, $schoolId, $targetSubjectId, $targetClassId, $targetSectionId, $targetDepartmentId) {
+            $exam->loadMissing([
+                'sections.questionGroups.questions.options',
+                'sections.questions.options',
+                'questionGroups.questions.options',
+                'questions.options',
+            ]);
+
+            $title = ! empty($validated['title']) ? trim($validated['title']) : ($exam->title . ' (Session Copy)');
+
+            $newExam = CbtExam::create([
+                'school_id' => $schoolId,
+                'created_by' => $request->user()->id,
+                'subject_id' => $targetSubjectId,
+                'class_id' => $targetClassId,
+                'section_id' => $targetSectionId,
+                'department_id' => $targetDepartmentId,
+                'term_id' => $validated['term_id'],
+                'academic_session_id' => $validated['academic_session_id'],
+                'title' => $title,
+                'exam_code' => 'CBT-' . now()->format('ymd') . '-' . strtoupper(substr(md5(uniqid('', true)), 0, 6)),
+                'delivery_mode' => $validated['delivery_mode'] ?? $exam->delivery_mode,
+                'status' => 'draft',
+                'duration_minutes' => $validated['duration_minutes'] ?? $exam->duration_minutes,
+                'total_marks' => (float) ($exam->total_marks ?? 0),
+                'pass_mark' => array_key_exists('pass_mark', $validated) && $validated['pass_mark'] !== null ? $validated['pass_mark'] : ($exam->pass_mark ?? 50),
+                'max_attempts' => $exam->max_attempts ?? 1,
+                'shuffle_questions' => (bool) $exam->shuffle_questions,
+                'shuffle_options' => (bool) $exam->shuffle_options,
+                'show_result_after_submit' => (bool) $exam->show_result_after_submit,
+                'calculator_enabled' => (bool) $exam->calculator_enabled,
+                'access_code_required' => (bool) $exam->access_code_required,
+                'access_code' => $exam->access_code,
+                'general_instructions' => array_key_exists('general_instructions', $validated) ? $validated['general_instructions'] : $exam->general_instructions,
+                'settings' => $exam->settings,
+                'starts_at' => null,
+                'ends_at' => null,
+                'published_at' => null,
+            ]);
+
+            $sectionMap = [];
+            foreach ($exam->sections as $oldSec) {
+                $newSec = $newExam->sections()->create([
+                    'title' => $oldSec->title,
+                    'instructions' => $oldSec->instructions,
+                    'sort_order' => $oldSec->sort_order,
+                    'default_marks' => $oldSec->default_marks,
+                    'shuffle_questions' => $oldSec->shuffle_questions,
+                ]);
+                $sectionMap[$oldSec->id] = $newSec->id;
+            }
+
+            $groupMap = [];
+            foreach ($exam->questionGroups as $oldGrp) {
+                $newGrp = $newExam->questionGroups()->create([
+                    'section_id' => $oldGrp->section_id ? ($sectionMap[$oldGrp->section_id] ?? null) : null,
+                    'group_type' => $oldGrp->group_type,
+                    'title' => $oldGrp->title,
+                    'instructions' => $oldGrp->instructions,
+                    'passage' => $oldGrp->passage,
+                    'sort_order' => $oldGrp->sort_order,
+                ]);
+                $groupMap[$oldGrp->id] = $newGrp->id;
+            }
+
+            foreach ($exam->questions as $oldQ) {
+                $newSectionId = $oldQ->section_id ? ($sectionMap[$oldQ->section_id] ?? null) : null;
+                $newGroupId = $oldQ->question_group_id ? ($groupMap[$oldQ->question_group_id] ?? null) : null;
+
+                $newQ = $newExam->questions()->create([
+                    'section_id' => $newSectionId,
+                    'question_group_id' => $newGroupId,
+                    'question_type' => $oldQ->question_type,
+                    'question_text' => $oldQ->question_text,
+                    'instructions' => $oldQ->instructions,
+                    'explanation' => $oldQ->explanation,
+                    'diagram_url' => $oldQ->diagram_url,
+                    'marks' => $oldQ->marks,
+                    'sort_order' => $oldQ->sort_order,
+                    'difficulty' => $oldQ->difficulty,
+                    'correct_answer' => $oldQ->correct_answer,
+                    'metadata' => array_merge($oldQ->metadata ?? [], [
+                        'reused_from_exam_id' => $exam->id,
+                        'reused_at' => now()->toIso8601String(),
+                    ]),
+                ]);
+
+                foreach ($oldQ->options as $oldOpt) {
+                    $newQ->options()->create([
+                        'label' => $oldOpt->label,
+                        'option_text' => $oldOpt->option_text,
+                        'is_correct' => $oldOpt->is_correct,
+                        'sort_order' => $oldOpt->sort_order,
+                    ]);
+                }
+            }
+
+            $schedule = $validated['schedule'] ?? null;
+            if (! empty($schedule['exam_date'])) {
+                $this->syncSchedule($newExam, $schedule);
+            }
+
+            $newExam->update(['total_marks' => (float) $newExam->questions()->sum('marks')]);
+
+            return $newExam;
+        });
+
+        return response()->json([
+            'message' => 'Exam successfully copied and prepared for the new academic session.',
+            'exam' => $newExam->fresh([
+                'subject', 'class', 'section', 'department', 'term', 'academicSession', 'schedules',
+            ]),
+        ], 201);
     }
 
     public function publish(Request $request, CbtExam $exam): JsonResponse
@@ -288,12 +550,19 @@ class CbtExamController extends Controller
         $question = DB::transaction(function () use ($exam, $data, $options) {
             $question = $exam->questions()->create($data);
             $this->syncOptions($question, $options);
-            $exam->update(['total_marks' => (float) $exam->questions()->sum('marks')]);
+            $updates = ['total_marks' => (float) $exam->questions()->sum('marks')];
+            if (($data['question_type'] ?? '') === 'theory') {
+                $settings = is_array($exam->settings) ? $exam->settings : [];
+                $settings['include_theory'] = true;
+                $updates['settings'] = $settings;
+            }
+            $exam->update($updates);
 
             return $question->fresh('options');
         });
 
         Cache::forget("cbt_exam_blocks_{$exam->id}");
+        Cache::forget("cbt_exam_blocks_v2_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT question added.',
@@ -387,35 +656,43 @@ class CbtExamController extends Controller
             $data['lesson_note_ids'] = $lessonNoteIds->all();
         }
 
+        $ref = 'ai-cbt-question:' . $exam->id . ':' . now()->format('YmdHis') . ':' . bin2hex(random_bytes(4));
+
         try {
-            $result = $service->generate($exam->load(['subject', 'class', 'section', 'department']), $data);
+            $result = $aiCredits->executeWithCreditRollback(
+                (int) $request->user()->school_id,
+                'ai_cbt_question_generator',
+                $creditCost,
+                $ref,
+                $request->user(),
+                function ($tx) use ($service, $exam, $data) {
+                    return $service->generate($exam->load(['subject', 'class', 'section', 'department']), $data);
+                }
+            );
         } catch (\Throwable $exception) {
             $this->logAiUsage($request, 'ai_cbt_question_generator', 'failed', [], ['error' => $exception->getMessage(), 'exam_id' => $exam->id]);
 
             return response()->json([
-                'message' => 'Something went wrong while processing this AI request. Please try again later.',
+                'message' => $exception->getMessage() ?: 'Something went wrong while processing this AI request. Please try again later. Any reserved credits have been refunded automatically.',
             ], 422);
         }
 
         $questionCount = (int) data_get($result, 'draft.summary.questions_detected', 0);
-        $creditUsage = $aiCredits->consumeCredits((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, 'ai-cbt-question:' . $exam->id . ':' . now()->format('YmdHis'), [
-            'exam_id' => $exam->id,
-            'question_count' => $questionCount,
-        ], $request->user());
+        $summary = $aiCredits->getCreditSummary((int) $request->user()->school_id, $request->user());
 
         $this->logAiUsage($request, 'ai_cbt_question_generator', 'success', $result['usage'] ?? [], [
             'exam_id' => $exam->id,
             'question_count' => $questionCount,
             'topics' => $data['topics'] ?? null,
             'formats' => $data['formats'] ?? [],
-        ], (int) $creditUsage->id, $creditCost);
+        ], null, $creditCost);
 
         return response()->json([
             'message' => 'AI questions generated. Review before importing.',
             'draft' => $result['draft'],
             'ai_credits' => [
                 'charged' => $creditCost,
-                'remaining' => $creditUsage->remainingCredits(),
+                'remaining' => $summary['remaining_credits'],
             ],
         ]);
     }
@@ -646,7 +923,7 @@ Fruits | 4 | 200',
             $this->access->ensureCanUse($user, 'offline');
             $role = strtolower((string) ($user->role ?? ''));
             abort_unless(
-                in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher'], true),
+                in_array($role, ['admin', 'owner', 'proprietor', 'super-admin', 'principal', 'headteacher', 'head_teacher', 'teacher', 'staff', 'class_teacher', 'subject_teacher'], true),
                 403,
                 'Only school administrators can download the offline CBT package or app.'
             );
@@ -706,6 +983,60 @@ Fruits | 4 | 200',
         return response()->download($path, $downloadFilename, $headers);
     }
 
+    public function downloadStudentClient(Request $request)
+    {
+        @ini_set('memory_limit', '512M');
+        @set_time_limit(0);
+
+        $candidates = [
+            base_path('offline-installer/dist/GradeQuestStudentClientSetup.exe'),
+            public_path('downloads/GradeQuestStudentClientSetup.exe'),
+            public_path('downloads/SchoolProfitStudentClientSetup.exe'),
+            base_path('offline-installer/dist/SchoolProfitStudentClientSetup.exe'),
+        ];
+
+        $path = collect($candidates)->first(fn ($candidate) => is_file($candidate));
+
+        abort_unless($path && is_file($path), 404, 'Student CBT installer is not available on the server. Please contact support.');
+
+        $fileSize = (int) @filesize($path);
+        $host = strtolower((string) $request->getHost());
+        $downloadFilename = str_contains($host, 'gradequest')
+            ? 'GradeQuestStudentClientSetup.exe'
+            : 'SchoolProfitStudentClientSetup.exe';
+
+        $headers = [
+            'Content-Type' => 'application/vnd.microsoft.portable-executable',
+            'Content-Disposition' => 'attachment; filename="' . $downloadFilename . '"',
+            'Cache-Control' => 'no-cache, must-revalidate',
+            'Pragma' => 'public',
+            'Accept-Ranges' => 'bytes',
+        ];
+
+        if ($fileSize > 0) {
+            $headers['Content-Length'] = (string) $fileSize;
+        }
+
+        return response()->download($path, $downloadFilename, $headers);
+    }
+
+    public function downloadStudentScript(Request $request)
+    {
+        $candidates = [
+            base_path('offline-installer/scripts/GradeQuest-Student-CBT.bat'),
+            public_path('downloads/GradeQuest-Student-CBT.bat'),
+        ];
+
+        $path = collect($candidates)->first(fn ($candidate) => is_file($candidate));
+        abort_unless($path && is_file($path), 404, 'Student launcher script not found.');
+
+        return response()->download($path, 'GradeQuest-Student-CBT.bat', [
+            'Content-Type' => 'application/x-bat',
+            'Content-Disposition' => 'attachment; filename="GradeQuest-Student-CBT.bat"',
+            'Cache-Control' => 'no-cache, must-revalidate',
+        ]);
+    }
+
     public function uploadQuestionImage(Request $request, CbtExam $exam): JsonResponse
     {
         $this->ensureSameSchool($request, $exam);
@@ -713,14 +1044,31 @@ Fruits | 4 | 200',
         $this->access->ensureCanUse($request->user(), $this->requiresOffline($exam->delivery_mode) ? 'offline' : 'online');
         abort_if($exam->status === 'published', 422, 'Published CBT exams must be reopened before editing.');
 
-        $data = $request->validate([
-            'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:4096'],
-        ]);
-
         $directory = public_path('uploads/cbt/questions');
         if (! File::isDirectory($directory)) {
             File::makeDirectory($directory, 0755, true);
         }
+
+        if ($request->filled('image_base64') && ! $request->hasFile('image')) {
+            $rawBase64 = (string) $request->input('image_base64');
+            if (! preg_match('/^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i', $rawBase64, $matches)) {
+                abort(422, 'Invalid image format. Please upload a PNG, JPG, WEBP, or GIF image.');
+            }
+            $ext = strtolower($matches[1]) === 'jpeg' ? 'jpg' : strtolower($matches[1]);
+            $binary = base64_decode($matches[2], true);
+            abort_if($binary === false || strlen($binary) > 4 * 1024 * 1024, 422, 'Image exceeds the 4MB maximum size or is invalid.');
+            $name = now()->format('YmdHis') . '_' . Str::random(12) . '.' . $ext;
+            File::put($directory . DIRECTORY_SEPARATOR . $name, $binary);
+
+            return response()->json([
+                'message' => 'Image uploaded.',
+                'url' => url('uploads/cbt/questions/' . $name),
+            ], 201);
+        }
+
+        $data = $request->validate([
+            'image' => ['required', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:4096'],
+        ]);
 
         $file = $data['image'];
         $name = now()->format('YmdHis') . '_' . Str::random(12) . '.' . $file->getClientOriginalExtension();
@@ -750,6 +1098,7 @@ Fruits | 4 | 200',
         });
 
         Cache::forget("cbt_exam_blocks_{$exam->id}");
+        Cache::forget("cbt_exam_blocks_v2_{$exam->id}");
 
         return response()->json([
             'message' => 'CBT question updated.',
@@ -770,6 +1119,7 @@ Fruits | 4 | 200',
         $exam->update(['total_marks' => (float) $exam->questions()->sum('marks')]);
 
         Cache::forget("cbt_exam_blocks_{$exam->id}");
+        Cache::forget("cbt_exam_blocks_v2_{$exam->id}");
 
         return response()->json(['message' => 'CBT question deleted.']);
     }
@@ -892,7 +1242,7 @@ Fruits | 4 | 200',
 
     private function validateExam(Request $request): array
     {
-        return $request->validate([
+        $validated = $request->validate([
             'subject_id' => ['nullable', 'exists:subjects,id'],
             'class_id' => ['nullable', 'exists:student_classes,id'],
             'section_id' => ['nullable', 'exists:sections,id'],
@@ -913,14 +1263,55 @@ Fruits | 4 | 200',
             'calculator_enabled' => ['nullable', 'boolean'],
             'schedule' => ['nullable', 'array'],
             'schedule.exam_date' => ['nullable', 'date'],
-            'schedule.starts_at' => ['nullable', 'date_format:H:i'],
-            'schedule.ends_at' => ['nullable', 'date_format:H:i', 'after:schedule.starts_at'],
+            'schedule.starts_at' => ['nullable', 'string', 'max:10'],
+            'schedule.ends_at' => ['nullable', 'string', 'max:10'],
             'schedule.venue' => ['nullable', 'string', 'max:120'],
             'starts_at' => ['nullable', 'date'],
-            'ends_at' => ['nullable', 'date', 'after_or_equal:starts_at'],
+            'ends_at' => ['nullable', 'date'],
             'general_instructions' => ['nullable', 'string'],
+            'include_theory' => ['nullable', 'boolean'],
+            'theory_instructions' => ['nullable', 'string'],
             'settings' => ['nullable', 'array'],
         ]);
+
+        $schoolId = (int) $request->user()->school_id;
+        if (empty($validated['academic_session_id'])) {
+            $validated['academic_session_id'] = DB::table('academic_sessions')
+                ->where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where('is_current', 1)
+                ->value('id') ?: DB::table('academic_sessions')
+                ->where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->orderByDesc('id')
+                ->value('id');
+        }
+
+        if (empty($validated['term_id'])) {
+            $validated['term_id'] = DB::table('terms')
+                ->where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->where(function ($q) {
+                    $q->where('status', 'Active')->orWhere('status', 'active');
+                })
+                ->orderByRaw('COALESCE(sort_order, 999999) ASC')
+                ->orderBy('id')
+                ->value('id') ?: DB::table('terms')
+                ->where('school_id', $schoolId)
+                ->whereNull('archived_at')
+                ->orderBy('id')
+                ->value('id');
+        }
+
+        if (! empty($validated['class_id'])) {
+            $billingService = app(\App\Services\SchoolBillingService::class);
+            if ($billingService->isClassCbtDisabled($schoolId, (int) $validated['class_id'])) {
+                $className = DB::table('student_classes')->where('id', $validated['class_id'])->value('name') ?? 'this class';
+                abort(422, "CBT examinations are disabled for {$className} under the school's package configuration. Enable CBT for this class in Class Settings before scheduling an exam.");
+            }
+        }
+
+        return $validated;
     }
 
     private function importAiDraft(CbtExam $exam, array $draft): int
@@ -1055,6 +1446,9 @@ Fruits | 4 | 200',
             'sort_order' => ['nullable', 'integer', 'min:1'],
             'difficulty' => ['nullable', 'string', 'max:50'],
             'correct_answer' => ['nullable', 'array'],
+            'diagram_url' => ['nullable', 'string', 'max:2000'],
+            'diagram' => ['nullable', 'file', 'image', 'mimes:jpg,jpeg,png,webp,gif', 'max:5120'],
+            'diagram_base64' => ['nullable', 'string'],
             'metadata' => ['nullable', 'array'],
             'options' => ['nullable', 'array'],
             'options.*.label' => ['nullable', 'string', 'max:10'],
@@ -1068,6 +1462,45 @@ Fruits | 4 | 200',
                 $data[$field] = $this->sanitizeCbtHtml($data[$field]);
             }
         }
+
+                $diagramUrl = null;
+        if ($request->hasFile('diagram')) {
+            $diagFile = $request->file('diagram');
+            $diagDir = public_path('uploads/cbt/questions');
+            if (! File::isDirectory($diagDir)) {
+                File::makeDirectory($diagDir, 0755, true);
+            }
+            $diagName = now()->format('YmdHis') . '_' . Str::random(12) . '.' . $diagFile->getClientOriginalExtension();
+            $diagFile->move($diagDir, $diagName);
+            $diagramUrl = url('uploads/cbt/questions/' . $diagName);
+        } elseif ($request->filled('diagram_base64')) {
+            $rawBase64 = (string) $request->input('diagram_base64');
+            if (preg_match('/^data:image\/(png|jpe?g|webp|gif);base64,(.+)$/i', $rawBase64, $matches)) {
+                $ext = strtolower($matches[1]) === 'jpeg' ? 'jpg' : strtolower($matches[1]);
+                $binary = base64_decode($matches[2], true);
+                if ($binary !== false && strlen($binary) <= 5 * 1024 * 1024) {
+                    $diagDir = public_path('uploads/cbt/questions');
+                    if (! File::isDirectory($diagDir)) {
+                        File::makeDirectory($diagDir, 0755, true);
+                    }
+                    $diagName = now()->format('YmdHis') . '_' . Str::random(12) . '.' . $ext;
+                    File::put($diagDir . DIRECTORY_SEPARATOR . $diagName, $binary);
+                    $diagramUrl = url('uploads/cbt/questions/' . $diagName);
+                }
+            }
+        } elseif (array_key_exists('diagram_url', $data) && is_string($data['diagram_url']) && trim($data['diagram_url']) !== '') {
+            $diagramUrl = trim($data['diagram_url']);
+        }
+
+        $metadata = is_array($data['metadata'] ?? null) ? $data['metadata'] : [];
+        if ($diagramUrl) {
+            $metadata['diagram_url'] = $diagramUrl;
+            $data['diagram_url'] = $diagramUrl;
+        } else {
+            $data['diagram_url'] = null;
+        }
+        $data['metadata'] = $metadata;
+        unset($data['diagram'], $data['diagram_base64']);
 
         if (! empty($data['options']) && is_array($data['options'])) {
             $data['options'] = array_map(function (array $option) {
@@ -1095,6 +1528,20 @@ Fruits | 4 | 200',
                 unset($data[$key]);
             }
         }
+
+        if (array_key_exists('include_theory', $data) || array_key_exists('theory_instructions', $data)) {
+            $settings = is_array($data['settings'] ?? null) ? $data['settings'] : [];
+            if (array_key_exists('include_theory', $data) && $data['include_theory'] !== null) {
+                $settings['include_theory'] = (bool) $data['include_theory'];
+            }
+            if (array_key_exists('theory_instructions', $data)) {
+                $settings['theory_instructions'] = $data['theory_instructions'] !== null
+                    ? $this->sanitizeCbtHtml((string) $data['theory_instructions'])
+                    : null;
+            }
+            $data['settings'] = $settings;
+        }
+        unset($data['include_theory'], $data['theory_instructions']);
 
         $schedule = $data['schedule'] ?? null;
         unset($data['schedule']);
@@ -1139,18 +1586,38 @@ Fruits | 4 | 200',
 
     private function syncSchedule(CbtExam $exam, ?array $schedule): void
     {
-        if (! $schedule || empty($schedule['exam_date']) || empty($schedule['starts_at']) || empty($schedule['ends_at'])) {
+        if (! $schedule || empty($schedule['exam_date'])) {
+            if (is_array($schedule) && empty($schedule['exam_date'])) {
+                $exam->schedules()->delete();
+                $exam->update(['starts_at' => null, 'ends_at' => null]);
+            }
             return;
+        }
+
+        $examDate = $schedule['exam_date'];
+        $startTime = ! empty($schedule['starts_at']) ? substr($schedule['starts_at'], 0, 5) : '08:00';
+        $endTime = ! empty($schedule['ends_at']) ? substr($schedule['ends_at'], 0, 5) : null;
+        if (! $endTime && ! empty($startTime)) {
+            $duration = (int) ($exam->duration_minutes ?: 60);
+            $endTime = Carbon::parse($startTime)->addMinutes($duration)->format('H:i');
         }
 
         $exam->schedules()->delete();
         $exam->schedules()->create([
             'school_id' => $exam->school_id,
-            'exam_date' => $schedule['exam_date'],
-            'starts_at' => $schedule['starts_at'],
-            'ends_at' => $schedule['ends_at'],
+            'exam_date' => $examDate,
+            'starts_at' => $startTime,
+            'ends_at' => $endTime ?: $startTime,
             'venue' => $schedule['venue'] ?? null,
         ]);
+
+        try {
+            $startsAt = Carbon::parse("{$examDate} {$startTime}");
+            $endsAt = $endTime ? Carbon::parse("{$examDate} {$endTime}") : $startsAt->copy()->addMinutes((int) ($exam->duration_minutes ?: 60));
+            $exam->update(['starts_at' => $startsAt, 'ends_at' => $endsAt]);
+        } catch (\Throwable $e) {
+            // ignore parse edge cases
+        }
     }
 
     private function buildQuestionWordTemplate(): string
@@ -1254,15 +1721,46 @@ Fruits | 4 | 200',
 
     private function ensureTeacherCanAccessSubject($user, ?int $subjectId): void
     {
-        if (! $user || strtolower((string) ($user->role ?? '')) !== 'teacher') {
+        if (! $user || ! $subjectId) {
             return;
         }
 
+        $userRole = strtolower((string) ($user->role ?? ''));
+        if (! in_array($userRole, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
+            return;
+        }
+
+        $isAssigned = TeacherSubject::query()
+            ->where('teacher_id', (int) $user->id)
+            ->where('subject_id', (int) $subjectId)
+            ->exists();
+
+        if (! $isAssigned) {
+            $classIds = DB::table('teacher_enrollments')
+                ->where('user_id', (int) $user->id)
+                ->where('enroll', 1)
+                ->pluck('level_id')
+                ->filter()
+                ->all();
+
+            if (! empty($classIds)) {
+                $isAssigned = DB::table('subjects')
+                    ->where('id', (int) $subjectId)
+                    ->where(function ($q) use ($classIds) {
+                        $q->whereIn('class_id', $classIds);
+                        $sectionIds = DB::table('student_classes')->whereIn('id', $classIds)->pluck('section_id')->filter()->all();
+                        if (! empty($sectionIds)) {
+                            $q->orWhere(function ($sq) use ($sectionIds) {
+                                $sq->whereNull('class_id')->whereIn('section_id', $sectionIds);
+                            });
+                        }
+                    })
+                    ->exists();
+            }
+        }
+
         abort_unless(
-            $subjectId && TeacherSubject::query()
-                ->where('teacher_id', (int) $user->id)
-                ->where('subject_id', (int) $subjectId)
-                ->exists(),
+            $isAssigned,
             403,
             'You are not assigned to this subject. Teachers can only manage CBT questions and exams for subjects assigned to them.'
         );
@@ -1270,17 +1768,30 @@ Fruits | 4 | 200',
 
     private function ensureTeacherCanAccessExam($user, CbtExam $exam): void
     {
-        if (! $user || strtolower((string) ($user->role ?? '')) !== 'teacher') {
+        if (! $user) {
             return;
         }
 
+        $userRole = strtolower((string) ($user->role ?? ''));
+        if (! in_array($userRole, ['teacher', 'class_teacher', 'subject_teacher'], true)) {
+            return;
+        }
+
+        $canAccess = ($exam->created_by && (int) $exam->created_by === (int) $user->id)
+            || ($exam->subject_id && TeacherSubject::query()->where('teacher_id', (int) $user->id)->where('subject_id', (int) $exam->subject_id)->exists());
+
+        if (! $canAccess && $exam->class_id) {
+            $canAccess = DB::table('teacher_enrollments')
+                ->where('user_id', (int) $user->id)
+                ->where('enroll', 1)
+                ->where('level_id', (int) $exam->class_id)
+                ->exists();
+        }
+
         abort_unless(
-            $exam->subject_id && TeacherSubject::query()
-                ->where('teacher_id', (int) $user->id)
-                ->where('subject_id', (int) $exam->subject_id)
-                ->exists(),
+            $canAccess,
             403,
-            'You are not assigned to this subject. Teachers can only manage CBT questions and exams for subjects assigned to them.'
+            'You are not assigned to this subject or class. Teachers can only manage CBT questions and exams for subjects assigned to them.'
         );
     }
 
