@@ -619,6 +619,19 @@ class CbtExamController extends Controller
         $creditCost = $aiCredits->costForFeature('ai_cbt_question_generator');
         $aiCredits->assertCreditsAvailable((int) $request->user()->school_id, 'ai_cbt_question_generator', $creditCost, $request->user());
 
+        if (!$request->has('question_count') && $request->has('count')) {
+            $request->merge(['question_count' => $request->input('count')]);
+        }
+        if (!$request->has('question_count') || empty($request->input('question_count'))) {
+            $request->merge(['question_count' => 20]);
+        }
+        if (!$request->has('formats') || empty($request->input('formats'))) {
+            $request->merge(['formats' => ['single_choice']]);
+        }
+        if (!$request->has('marks_per_question') || empty($request->input('marks_per_question'))) {
+            $request->merge(['marks_per_question' => 1]);
+        }
+
         $data = $request->validate([
             'source_file' => ['nullable', 'file', 'mimes:docx,txt', 'max:5120'],
             'source_text' => ['nullable', 'string'],
@@ -690,6 +703,7 @@ class CbtExamController extends Controller
         return response()->json([
             'message' => 'AI questions generated. Review before importing.',
             'draft' => $result['draft'],
+            'data' => $result['draft'],
             'ai_credits' => [
                 'charged' => $creditCost,
                 'remaining' => $summary['remaining_credits'],

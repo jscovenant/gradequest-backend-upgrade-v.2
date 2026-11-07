@@ -801,7 +801,11 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware(['teacher.active', 'subscription.feature:cbt_online']);
         Route::post('/exams/{exam}/questions/ai-generate', [CbtExamController::class, 'generateAiQuestions'])
             ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/ai/generate-questions', [CbtExamController::class, 'generateAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
         Route::post('/exams/{exam}/questions/ai-import', [CbtExamController::class, 'importAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/ai/import-questions', [CbtExamController::class, 'importAiQuestions'])
             ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
         Route::get('/offline/installer/download', [CbtExamController::class, 'downloadOfflineInstaller'])
             ->middleware(['teacher.active', 'subscription.feature:cbt_offline']);
@@ -835,6 +839,17 @@ Route::get('/parent-stats', [AdminDashboardController::class, 'parentDetails']);
             ->middleware('subscription.feature:cbt_offline');
         Route::post('/offline/licenses/{license}/sync-results', [CbtOfflineLicenseController::class, 'syncResults'])
             ->middleware('subscription.feature:cbt_offline');
+    });
+
+    Route::prefix('admin/cbt')->group(function () {
+        Route::post('/exams/{exam}/ai/generate-questions', [CbtExamController::class, 'generateAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/questions/ai-generate', [CbtExamController::class, 'generateAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/ai/import-questions', [CbtExamController::class, 'importAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
+        Route::post('/exams/{exam}/questions/ai-import', [CbtExamController::class, 'importAiQuestions'])
+            ->middleware(['teacher.active', 'subscription.feature:ai_cbt_question_generator']);
     });
 
 
