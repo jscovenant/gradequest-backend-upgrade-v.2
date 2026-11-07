@@ -279,10 +279,7 @@ class StudentClassController extends Controller
             ->get();
 
         $classItems = $classes->map(function ($class) use ($isFullCbt, $disabledClassIds, $cbtRate, $basicRate) {
-            $cbtEnabled = $isFullCbt && ! in_array((int) $class->id, $disabledClassIds, true);
-            if ($isFullCbt && array_key_exists('cbt_enabled', $class->attributes)) {
-                $cbtEnabled = (bool) $class->cbt_enabled && ! in_array((int) $class->id, $disabledClassIds, true);
-            }
+            $cbtEnabled = $isFullCbt && $class->isCbtEnabled($disabledClassIds);
 
             $rate = $cbtEnabled ? $cbtRate : $basicRate;
             $studentCount = (int) $class->students_count;

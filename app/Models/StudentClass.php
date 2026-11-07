@@ -29,8 +29,9 @@ class StudentClass extends Model
             return false;
         }
 
-        if (array_key_exists('cbt_enabled', $this->attributes)) {
-            return (bool) $this->attributes['cbt_enabled'];
+        $attrs = $this->getAttributes();
+        if (is_array($attrs) && array_key_exists('cbt_enabled', $attrs) && $attrs['cbt_enabled'] !== null) {
+            return (bool) $attrs['cbt_enabled'];
         }
 
         return true;

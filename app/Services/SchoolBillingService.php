@@ -1685,7 +1685,7 @@ $unpaid = StudentBillingEntitlement::query()
         }
 
         $class = StudentClass::where('school_id', $schoolId)->find($classId);
-        if ($class && array_key_exists('cbt_enabled', $class->attributes) && ! (bool) $class->cbt_enabled) {
+        if ($class && ! $class->isCbtEnabled($disabledIds)) {
             return true;
         }
 
