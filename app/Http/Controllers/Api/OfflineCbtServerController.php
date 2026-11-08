@@ -21,14 +21,32 @@ class OfflineCbtServerController extends Controller
         $this->ensureEnabled();
 
         $bundle = $this->activeBundle();
+        $schoolId = $bundle?->school_id;
+        $bundleId = $bundle?->id;
+
+        $inProgressCount = OfflineCbtAttempt::query()
+            ->when($schoolId, fn ($q) => $q->where(function ($sq) use ($schoolId, $bundleId) {
+                $sq->where('school_id', $schoolId);
+                if ($bundleId) $sq->orWhere('offline_cbt_bundle_id', $bundleId);
+            }))
+            ->where('status', 'in_progress')
+            ->count();
+
+        $submittedCount = OfflineCbtAttempt::query()
+            ->when($schoolId, fn ($q) => $q->where(function ($sq) use ($schoolId, $bundleId) {
+                $sq->where('school_id', $schoolId);
+                if ($bundleId) $sq->orWhere('offline_cbt_bundle_id', $bundleId);
+            }))
+            ->where('status', 'submitted')
+            ->count();
 
         return response()->json([
             'enabled' => true,
             'server' => $this->serverInfo($requestHost = request()->getHost()),
             'bundle' => $bundle ? $this->bundleSummary($bundle) : null,
             'attempts' => [
-                'in_progress' => $bundle ? $bundle->attempts()->where('status', 'in_progress')->count() : 0,
-                'submitted' => $bundle ? $bundle->attempts()->where('status', 'submitted')->count() : 0,
+                'in_progress' => $inProgressCount,
+                'submitted' => $submittedCount,
             ],
         ]);
     }
@@ -49,7 +67,7 @@ class OfflineCbtServerController extends Controller
         $record = DB::transaction(function () use ($bundle) {
             OfflineCbtBundle::query()->update(['is_active' => false]);
 
-            return OfflineCbtBundle::create([
+            $newBundle = OfflineCbtBundle::create([
                 'school_id' => $bundle['school']['id'] ?? null,
                 'license_id' => $bundle['license']['id'] ?? null,
                 'license_key' => $bundle['license']['license_key'] ?? null,
@@ -60,6 +78,20 @@ class OfflineCbtServerController extends Controller
                 'is_active' => true,
                 'payload' => $bundle,
             ]);
+
+            // Re-link previous local attempts so they attach to the new active bundle and are never lost or orphaned
+            $examIds = collect($bundle['exams'] ?? [])->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
+            if (!empty($examIds)) {
+                OfflineCbtAttempt::query()
+                    ->whereIn('exam_id', $examIds)
+                    ->update([
+                        'offline_cbt_bundle_id' => $newBundle->id,
+                        'school_id' => $newBundle->school_id,
+                        'license_id' => $newBundle->license_id,
+                    ]);
+            }
+
+            return $newBundle;
         });
 
         return response()->json([
@@ -186,22 +218,52 @@ class OfflineCbtServerController extends Controller
             ], 422);
         }
 
+        // 1. Strict check: Student already completed/submitted in cloud snapshot
+        $cloudSubmittedStudentIds = array_map('intval', $exam['submitted_student_ids'] ?? []);
+        if (in_array((int) $student['id'], $cloudSubmittedStudentIds, true)) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'already_submitted',
+                    'title' => 'Examination Already Completed',
+                    'message' => 'You have already completed and submitted this examination. Re-entry is not permitted.',
+                ],
+                'message' => 'This student has already completed and submitted this examination.',
+            ], 422);
+        }
+
+        // 2. Strict check: Student already submitted locally on this server (under ANY bundle)
         $existingSubmitted = OfflineCbtAttempt::query()
-            ->where('offline_cbt_bundle_id', $bundle->id)
             ->where('exam_id', $examId)
             ->where('student_id', (int) $student['id'])
             ->where('status', 'submitted')
             ->exists();
-        abort_if($existingSubmitted, 422, 'This student has already submitted this offline exam.');
 
+        if ($existingSubmitted) {
+            return response()->json([
+                'status' => 'error',
+                'rejection' => [
+                    'reason' => 'already_submitted',
+                    'title' => 'Examination Already Completed',
+                    'message' => 'You have already completed and submitted this examination on this local server. Re-entry is not permitted.',
+                ],
+                'message' => 'This student has already submitted this offline exam.',
+            ], 422);
+        }
+
+        // 3. Resume in-progress attempt if exists (from current or previous bundle)
         $attempt = OfflineCbtAttempt::query()
-            ->where('offline_cbt_bundle_id', $bundle->id)
             ->where('exam_id', $examId)
             ->where('student_id', (int) $student['id'])
             ->where('status', 'in_progress')
+            ->latest('id')
             ->first();
 
-        if (! $attempt) {
+        if ($attempt) {
+            if ($attempt->offline_cbt_bundle_id !== $bundle->id) {
+                $attempt->update(['offline_cbt_bundle_id' => $bundle->id]);
+            }
+        } else {
             $attempt = OfflineCbtAttempt::create([
                 'offline_cbt_bundle_id' => $bundle->id,
                 'offline_attempt_uuid' => (string) Str::uuid(),
@@ -350,10 +412,19 @@ class OfflineCbtServerController extends Controller
         $this->ensureEnabled();
 
         $bundle = $this->requireActiveBundle();
-        $attempts = $bundle->attempts()
+        $examIds = collect($bundle->payload['exams'] ?? [])->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
+
+        $attempts = OfflineCbtAttempt::query()
+            ->where(function ($q) use ($bundle, $examIds) {
+                $q->where('offline_cbt_bundle_id', $bundle->id);
+                if (!empty($examIds)) {
+                    $q->orWhereIn('exam_id', $examIds);
+                }
+            })
             ->where('status', 'submitted')
             ->orderBy('submitted_at')
             ->get()
+            ->unique('offline_attempt_uuid')
             ->map(fn (OfflineCbtAttempt $attempt) => [
                 'offline_attempt_uuid' => $attempt->offline_attempt_uuid,
                 'exam_id' => (int) $attempt->exam_id,
@@ -423,7 +494,7 @@ class OfflineCbtServerController extends Controller
             $record = DB::transaction(function () use ($bundle) {
                 OfflineCbtBundle::query()->update(['is_active' => false]);
 
-                return OfflineCbtBundle::create([
+                $newBundle = OfflineCbtBundle::create([
                     'school_id' => $bundle['school']['id'] ?? null,
                     'license_id' => $bundle['license']['id'] ?? null,
                     'license_key' => $bundle['license']['license_key'] ?? null,
@@ -434,6 +505,20 @@ class OfflineCbtServerController extends Controller
                     'is_active' => true,
                     'payload' => $bundle,
                 ]);
+
+                // Re-link previous local attempts so they attach to the new active bundle and are never lost or orphaned
+                $examIds = collect($bundle['exams'] ?? [])->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
+                if (!empty($examIds)) {
+                    OfflineCbtAttempt::query()
+                        ->whereIn('exam_id', $examIds)
+                        ->update([
+                            'offline_cbt_bundle_id' => $newBundle->id,
+                            'school_id' => $newBundle->school_id,
+                            'license_id' => $newBundle->license_id,
+                        ]);
+                }
+
+                return $newBundle;
             });
 
             $summary = $this->bundleSummary($record);
@@ -466,10 +551,19 @@ class OfflineCbtServerController extends Controller
         $cloudUrl = rtrim($data['cloud_url'] ?: (config('app.url') && !in_array(parse_url(config('app.url'), PHP_URL_HOST), ['localhost', '127.0.0.1']) ? config('app.url') : 'https://gradequestschool.com.ng'), '/');
         $endpoint = $cloudUrl . '/api/cbt/offline/direct-sync/results';
 
-        $attempts = $bundle->attempts()
+        $examIds = collect($bundle->payload['exams'] ?? [])->pluck('id')->filter()->map(fn ($id) => (int) $id)->all();
+
+        $attempts = OfflineCbtAttempt::query()
+            ->where(function ($q) use ($bundle, $examIds) {
+                $q->where('offline_cbt_bundle_id', $bundle->id);
+                if (!empty($examIds)) {
+                    $q->orWhereIn('exam_id', $examIds);
+                }
+            })
             ->where('status', 'submitted')
             ->orderBy('submitted_at')
             ->get()
+            ->unique('offline_attempt_uuid')
             ->map(fn (OfflineCbtAttempt $attempt) => [
                 'offline_attempt_uuid' => $attempt->offline_attempt_uuid,
                 'exam_id' => (int) $attempt->exam_id,
@@ -612,12 +706,15 @@ class OfflineCbtServerController extends Controller
 
     private function examSummary(array $exam, int $studentId, int $bundleId): array
     {
-        $submitted = OfflineCbtAttempt::query()
-            ->where('offline_cbt_bundle_id', $bundleId)
-            ->where('exam_id', (int) ($exam['id'] ?? 0))
+        $examId = (int) ($exam['id'] ?? 0);
+        $cloudSubmittedStudentIds = array_map('intval', $exam['submitted_student_ids'] ?? []);
+        $submittedInCloud = in_array($studentId, $cloudSubmittedStudentIds, true);
+        $submittedLocally = OfflineCbtAttempt::query()
+            ->where('exam_id', $examId)
             ->where('student_id', $studentId)
             ->where('status', 'submitted')
             ->exists();
+        $submitted = $submittedInCloud || $submittedLocally;
 
         return [
             'id' => (int) ($exam['id'] ?? 0),

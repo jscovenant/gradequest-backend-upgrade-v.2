@@ -378,6 +378,17 @@ class CbtOfflineLicenseController extends Controller
         $matchedStudentIds = $this->matchedStudentIdsForExam($exam);
         $eligibleStudentIds = $this->eligibleStudentIdsForExam($exam, $matchedStudentIds);
 
+        // Track students who have already submitted this exam in the cloud
+        $submittedStudentIds = CbtAttempt::query()
+            ->where('exam_id', $exam->id)
+            ->where('school_id', $exam->school_id)
+            ->whereIn('status', ['submitted', 'completed', 'graded'])
+            ->pluck('student_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+
         return [
             'id' => $exam->id,
             'title' => $exam->title,
@@ -404,6 +415,7 @@ class CbtOfflineLicenseController extends Controller
             'academic_session' => $exam->academicSession,
             'schedules' => $exam->schedules,
             'eligible_student_ids' => $eligibleStudentIds,
+            'submitted_student_ids' => $submittedStudentIds,
             'fee_policy_snapshot' => [
                 'matched_students' => count($matchedStudentIds),
                 'eligible_students' => count($eligibleStudentIds),
