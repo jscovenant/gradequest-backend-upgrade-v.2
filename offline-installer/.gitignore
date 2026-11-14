@@ -1,6 +1,7 @@
 runtime/php/*
 runtime/mariadb/*
 runtime/nginx/*
+runtime/redist/*
 runtime/_downloads/*
 dist/*
 !runtime/php/.gitkeep

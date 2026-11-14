@@ -53,9 +53,32 @@ Name: "{autodesktop}\GradeQuest Offline CBT"; Filename: "powershell.exe"; Parame
 Name: "desktopicon"; Description: "Create desktop shortcuts"; GroupDescription: "Additional shortcuts:"
 
 [Run]
+Filename: "{app}\runtime\redist\vc_redist.x64.exe"; Parameters: "/install /quiet /norestart"; Check: NeedsVCRedistX64; StatusMsg: "Installing Microsoft Visual C++ 2015-2022 Runtime..."; Flags: waituntilterminated
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Initialize-GradeQuestOffline.ps1"" -InstallDir ""{app}"""; StatusMsg: "Initializing GradeQuest Offline CBT database..."; Flags: runhidden waituntilterminated
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Start-GradeQuestOffline.ps1"" -InstallDir ""{app}"""; Description: "Start GradeQuest Offline CBT Server"; Flags: postinstall nowait skipifsilent
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Open-OfflineCbt.ps1"""; Description: "Open Offline CBT"; Flags: postinstall nowait skipifsilent
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\Stop-GradeQuestOffline.ps1"" -InstallDir ""{app}"""; Flags: runhidden waituntilterminated
+
+[Code]
+function NeedsVCRedistX64(): Boolean;
+var
+  Installed: Cardinal;
+  MinorVersion: Cardinal;
+begin
+  Result := True;
+  if not (FileExists(ExpandConstant('{sys}\vcruntime140.dll')) and FileExists(ExpandConstant('{sys}\vcruntime140_1.dll')) and FileExists(ExpandConstant('{sys}\msvcp140.dll'))) then
+    Exit;
+  if RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Installed', Installed) then
+  begin
+    if Installed = 1 then
+    begin
+      if RegQueryDWordValue(HKLM64, 'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64', 'Minor', MinorVersion) then
+      begin
+        if MinorVersion >= 40 then
+          Result := False;
+      end;
+    end;
+  end;
+end;

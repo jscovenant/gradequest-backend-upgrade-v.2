@@ -18,7 +18,8 @@ class WhatsAppService
 
     public function isConfigured(): bool
     {
-        return filled(config('services.twilio.sid'))
+        return class_exists(Client::class)
+            && filled(config('services.twilio.sid'))
             && filled(config('services.twilio.auth_token'))
             && filled(config('services.twilio.from'));
     }

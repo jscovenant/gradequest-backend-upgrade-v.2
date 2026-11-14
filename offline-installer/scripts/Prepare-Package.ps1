@@ -63,6 +63,10 @@ foreach ($dir in $BackendDirs) {
         if ($dir -eq "public") {
             $ExcludeDirs = @("uploads", "build", "hot")
         }
+        elseif ($dir -eq "vendor") {
+            # Exclude Twilio SDK from the offline CBT payload (WhatsApp notifications are online-only).
+            $ExcludeDirs = @((Join-Path $SourceDir "twilio"))
+        }
 
         $Arguments = @($SourceDir, (Join-Path $BackendDest $dir)) + $RoboFlags
         if ($ExcludeDirs.Count -gt 0) {
@@ -104,6 +108,48 @@ if ($LASTEXITCODE -gt 7) { throw "Frontend copy failed with robocopy exit code $
 Write-Host "Copying runtimes and scripts..."
 robocopy "$InstallerRoot\runtime" "$OutputRoot\runtime" @RoboFlags /XD _downloads | Out-Host
 if ($LASTEXITCODE -gt 7) { throw "Runtime copy failed with robocopy exit code $LASTEXITCODE" }
+
+Write-Host "Ensuring Microsoft Visual C++ 2015-2022 x64 runtime DLLs are bundled in runtime\php..."
+$VcRuntimeDlls = @(
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "msvcp140_2.dll",
+    "msvcp140_atomic_wait.dll",
+    "msvcp140_codecvt_ids.dll",
+    "concrt140.dll"
+)
+$PhpTargetDir = Join-Path $OutputRoot "runtime\php"
+foreach ($dllName in $VcRuntimeDlls) {
+    $candidates = @(
+        (Join-Path $InstallerRoot "runtime\php\$dllName"),
+        (Join-Path $env:WINDIR "System32\$dllName"),
+        (Join-Path $InstallerRoot "runtime\mariadb\bin\$dllName")
+    ) | Where-Object { Test-Path $_ }
+    if ($candidates.Count -gt 0) {
+        $bestSource = $candidates |
+            Sort-Object { [version]((Get-Item $_).VersionInfo.FileVersionRaw.ToString()) } -Descending |
+            Select-Object -First 1
+        Copy-Item $bestSource (Join-Path $PhpTargetDir $dllName) -Force
+        Copy-Item $bestSource (Join-Path $InstallerRoot "runtime\php\$dllName") -Force
+    }
+}
+Assert-File "$PhpTargetDir\vcruntime140.dll" "Missing vcruntime140.dll in runtime/php."
+Assert-File "$PhpTargetDir\vcruntime140_1.dll" "Missing vcruntime140_1.dll in runtime/php."
+Assert-File "$PhpTargetDir\msvcp140.dll" "Missing msvcp140.dll in runtime/php."
+
+$RedistDir = Join-Path $InstallerRoot "runtime\redist"
+$RedistExe = Join-Path $RedistDir "vc_redist.x64.exe"
+if (!(Test-Path $RedistExe)) {
+    Write-Host "Downloading Microsoft Visual C++ 2015-2022 x64 redistributable..."
+    New-Item -ItemType Directory -Force -Path $RedistDir | Out-Null
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile $RedistExe -UseBasicParsing
+}
+New-Item -ItemType Directory -Force -Path (Join-Path $OutputRoot "runtime\redist") | Out-Null
+Copy-Item $RedistExe (Join-Path $OutputRoot "runtime\redist\vc_redist.x64.exe") -Force
+Assert-File "$OutputRoot\runtime\redist\vc_redist.x64.exe" "Missing runtime/redist/vc_redist.x64.exe."
 
 Copy-Item "$InstallerRoot\config\nginx.conf.template" "$OutputRoot\config\nginx.conf.template" -Force
 Copy-Item "$InstallerRoot\config\nginx.conf.template" "$OutputRoot\runtime\nginx\conf\nginx.conf" -Force
