@@ -165,19 +165,21 @@ class CbtQuestionImportService
         $xpath->registerNamespace('w', 'http://schemas.openxmlformats.org/wordprocessingml/2006/main');
         $xpath->registerNamespace('a', 'http://schemas.openxmlformats.org/drawingml/2006/main');
         $xpath->registerNamespace('r', 'http://schemas.openxmlformats.org/officeDocument/2006/relationships');
+        $xpath->registerNamespace('mc', 'http://schemas.openxmlformats.org/markup-compatibility/2006');
 
         $lines = [];
         foreach ($xpath->query('//w:body/*') as $node) {
             if ($node->localName === 'p') {
-                $line = $this->wordParagraphHtml($xpath, $node, $zip, $relationships, $exam);
+                foreach ($this->wordParagraphLines($xpath, $node, $zip, $relationships, $exam) as $line) {
+                    if ($line !== '') {
+                        $lines[] = $line;
+                    }
+                }
             } elseif ($node->localName === 'tbl') {
                 $line = $this->wordTableHtml($xpath, $node);
-            } else {
-                $line = '';
-            }
-
-            if ($line !== '') {
-                $lines[] = $line;
+                if ($line !== '') {
+                    $lines[] = $line;
+                }
             }
         }
 
@@ -207,26 +209,75 @@ class CbtQuestionImportService
         return $map;
     }
 
-    private function wordParagraphHtml(\DOMXPath $xpath, \DOMNode $paragraph, ZipArchive $zip, array $relationships, CbtExam $exam): string
+    /**
+     * Extract one or more clean lines from a Word paragraph while preserving
+     * intra-paragraph line breaks, superscripts/subscripts, and embedded images.
+     */
+    private function wordParagraphLines(\DOMXPath $xpath, \DOMNode $paragraph, ZipArchive $zip, array $relationships, CbtExam $exam): array
     {
-        $parts = [];
-        foreach ($xpath->query('.//w:t', $paragraph) as $textNode) {
-            $parts[] = $textNode->nodeValue;
-        }
+        $segments = [];
+        $hasHtmlTag = false;
 
-        foreach ($xpath->query('.//a:blip', $paragraph) as $imageNode) {
-            if (! $imageNode instanceof \DOMElement) {
-                continue;
+        foreach ($xpath->query('.//w:r[not(ancestor::mc:Fallback)]', $paragraph) as $run) {
+            $verticalAlign = '';
+            $vaNodes = $xpath->query('./w:rPr/w:vertAlign/@w:val', $run);
+            if ($vaNodes->length > 0) {
+                $verticalAlign = strtolower((string) $vaNodes->item(0)->nodeValue);
             }
 
-            $relationshipId = $imageNode->getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
-            $imageHtml = $this->wordImageHtml($zip, $relationships[$relationshipId] ?? null, $exam);
-            if ($imageHtml !== '') {
-                $parts[] = $imageHtml;
+            $runText = '';
+            foreach ($xpath->query('.//w:t | .//w:tab | .//w:br | .//w:cr', $run) as $child) {
+                if ($child->localName === 't') {
+                    $runText .= $child->nodeValue;
+                } elseif ($child->localName === 'tab') {
+                    $runText .= ' ';
+                } elseif ($child->localName === 'br' || $child->localName === 'cr') {
+                    $runText .= "\n";
+                }
+            }
+
+            if ($runText !== '') {
+                if (($verticalAlign === 'superscript' || $verticalAlign === 'subscript') && trim($runText) !== '') {
+                    $tag = $verticalAlign === 'superscript' ? 'sup' : 'sub';
+                    $hasHtmlTag = true;
+                    $segments[] = ['html' => true, 'value' => '<' . $tag . '>' . e(trim($runText)) . '</' . $tag . '>'];
+                } else {
+                    $segments[] = ['html' => false, 'value' => $runText];
+                }
+            }
+
+            foreach ($xpath->query('.//a:blip', $run) as $imageNode) {
+                if (! $imageNode instanceof \DOMElement) {
+                    continue;
+                }
+
+                $relationshipId = $imageNode->getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'embed');
+                $imageHtml = $this->wordImageHtml($zip, $relationships[$relationshipId] ?? null, $exam);
+                if ($imageHtml !== '') {
+                    $hasHtmlTag = true;
+                    $segments[] = ['html' => true, 'value' => ' ' . $imageHtml . ' '];
+                }
             }
         }
 
-        return trim(preg_replace('/\s+/', ' ', implode(' ', $parts)) ?? '');
+        $joined = '';
+        foreach ($segments as $segment) {
+            if ($segment['html']) {
+                $joined .= $segment['value'];
+            } else {
+                $joined .= $hasHtmlTag ? e($segment['value']) : $segment['value'];
+            }
+        }
+
+        $lines = [];
+        foreach (preg_split('/\r\n|\r|\n/', $joined) ?: [] as $rawLine) {
+            $cleaned = $this->normalizeImportText($rawLine);
+            if ($cleaned !== '') {
+                $lines[] = $cleaned;
+            }
+        }
+
+        return $lines;
     }
 
     private function wordTableHtml(\DOMXPath $xpath, \DOMNode $table): string
@@ -239,7 +290,7 @@ class CbtQuestionImportService
                 foreach ($xpath->query('.//w:t', $cell) as $textNode) {
                     $parts[] = $textNode->nodeValue;
                 }
-                $cells[] = '<td>' . e(trim(implode(' ', $parts))) . '</td>';
+                $cells[] = '<td>' . e($this->normalizeImportText(implode('', $parts))) . '</td>';
             }
             if ($cells !== []) {
                 $rows[] = '<tr>' . implode('', $cells) . '</tr>';
@@ -473,13 +524,18 @@ class CbtQuestionImportService
         };
 
         foreach ($lines as $line) {
+            $line = $this->normalizeImportText((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
             if ($collectingPassage) {
                 if (preg_match('/^END\s+PASSAGE$/i', $line)) {
                     $finishPassage();
                     continue;
                 }
 
-                if (! preg_match('/^\d+[\.\)]\s+/', $line)) {
+                if (! preg_match('/^(\d+)[\.\)](?:\s+|(?=[A-Za-z\(\["\'₦\$£€]))/u', $line)) {
                     $passageLines[] = $line;
                     continue;
                 }
@@ -487,14 +543,14 @@ class CbtQuestionImportService
                 $finishPassage();
             }
 
-            if (preg_match('/^SECTION:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^SECTION\s*:\s*(.+)$/i', $line, $match)) {
                 $finishQuestion();
                 $sectionTitle = trim($match[1]) ?: 'General Questions';
                 $activeGroup = null;
                 continue;
             }
 
-            if (preg_match('/^TYPE:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^TYPE\s*:\s*(.+)$/i', $line, $match)) {
                 $finishQuestion();
                 $candidate = strtolower(trim(str_replace([' ', '-'], '_', $match[1])));
                 if (! in_array($candidate, self::SUPPORTED_TYPES, true)) {
@@ -508,27 +564,27 @@ class CbtQuestionImportService
                 continue;
             }
 
-            if (preg_match('/^MARKS?:\s*([0-9]+(?:\.[0-9]+)?)$/i', $line, $match)) {
+            if (preg_match('/^MARKS?\s*:\s*([0-9]+(?:\.[0-9]+)?)$/i', $line, $match)) {
                 $marks = (float) $match[1];
                 continue;
             }
 
-            if (preg_match('/^DIFFICULTY:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^DIFFICULTY\s*:\s*(.+)$/i', $line, $match)) {
                 $difficulty = trim($match[1]);
                 continue;
             }
 
-            if (preg_match('/^INSTRUCTION:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^INSTRUCTION\s*:\s*(.+)$/i', $line, $match)) {
                 $instructions = trim($match[1]);
                 continue;
             }
 
-            if (preg_match('/^EXPLANATION:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^EXPLANATION\s*:\s*(.+)$/i', $line, $match)) {
                 $explanation = trim($match[1]);
                 continue;
             }
 
-            if (preg_match('/^PASSAGE:\s*(.*)$/i', $line, $match)) {
+            if (preg_match('/^PASSAGE\s*:\s*(.*)$/i', $line, $match)) {
                 $finishQuestion();
                 $type = 'comprehension';
                 $collectingPassage = true;
@@ -539,7 +595,7 @@ class CbtQuestionImportService
                 continue;
             }
 
-            if (preg_match('/^(\d+)[\.\)]\s+(.+)$/', $line, $match)) {
+            if (preg_match('/^(\d+)[\.\)](?:\s+|(?=[A-Za-z\(\["\'₦\$£€]))(.+)$/u', $line, $match)) {
                 $finishQuestion();
                 $currentType = $type === 'comprehension' ? 'single_choice' : $type;
                 $current = [
@@ -560,7 +616,10 @@ class CbtQuestionImportService
                 continue;
             }
 
-            if (preg_match('/^([A-F])[\.\)]\s+(.+)$/i', $line, $match)) {
+            if (
+                preg_match('/^([A-F])[\.\)]\s+(.+)$/i', $line, $match)
+                || preg_match('/^([A-F])[\.\)](?![A-Za-z]\.)([A-Za-z0-9\(\[\{₦\$£€+\-].*)$/u', $line, $match)
+            ) {
                 if (! $current) {
                     $errors[] = 'Option "' . $line . '" appears before a question.';
                     continue;
@@ -572,7 +631,7 @@ class CbtQuestionImportService
                 continue;
             }
 
-            if (preg_match('/^ANSWER:\s*(.+)$/i', $line, $match)) {
+            if (preg_match('/^ANSWER\s*:\s*(.+)$/i', $line, $match)) {
                 if (! $current) {
                     $errors[] = 'ANSWER appears before a question.';
                     continue;
@@ -636,7 +695,7 @@ class CbtQuestionImportService
             }
         }
 
-        if ($question['marks'] <= 0) {
+        if ($question['question_type'] !== 'theory' && $question['marks'] <= 0) {
             $errors[] = $lineRef . ' must have marks greater than zero.';
         }
     }
@@ -696,6 +755,14 @@ class CbtQuestionImportService
     {
         $text = trim(strip_tags($value));
         return $text !== '' || str_contains(strtolower($value), '<img') || str_contains(strtolower($value), '<table');
+    }
+
+    private function normalizeImportText(string $value): string
+    {
+        $clean = preg_replace('/[\x{200B}-\x{200F}\x{2060}\x{FEFF}\x{00AD}]/u', '', $value) ?? $value;
+        $clean = preg_replace('/[\x{00A0}\x{2000}-\x{200A}\x{202F}\x{205F}\x{3000}]/u', ' ', $clean) ?? $clean;
+
+        return trim(preg_replace('/\s+/u', ' ', $clean) ?? '');
     }
 
     private function normalizeHeader(mixed $value): string
